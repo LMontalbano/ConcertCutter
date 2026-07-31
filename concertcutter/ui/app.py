@@ -94,6 +94,8 @@ class App(tk.Tk):
         self._playing_row: str | None = None
         self._play_cell_active: str | None = None
         self._title_editor: ttk.Entry | None = None
+        self._title_commit = None
+        self._title_guard: str | None = None
         self._settings_open = False
         self.history = History(on_change=self._refresh_history_buttons)
 
@@ -349,7 +351,9 @@ class App(tk.Tk):
 
         card = Card(holder, padding=8, fill=theme.FIELD_BG)
         card.pack(fill="both", expand=True)
-        table = ttk.Frame(card.body, style="Field.TFrame")
+        # Retenue pour la désélection : un clic sur la barre de défilement ou
+        # sur l'en-tête doit compter comme un clic dans le tableau.
+        self._table_area = table = ttk.Frame(card.body, style="Field.TFrame")
         table.pack(fill="both", expand=True)
 
         columns = ("play", "index", "start", "end", "duration", "confidence",
@@ -409,6 +413,9 @@ class App(tk.Tk):
         return holder
 
     def _bind_keys(self) -> None:
+        # `add="+"` : la saisie d'un titre pose sa propre liaison sur le même
+        # événement le temps qu'elle dure, et les deux doivent cohabiter.
+        self.bind("<Button-1>", self._on_click_anywhere, add="+")
         self._shortcut("<Delete>", self.delete_boundary)
         self._shortcut("<space>", self.toggle_play)
         self._shortcut("<c>", self.split_here)
@@ -1002,6 +1009,8 @@ class App(tk.Tk):
         # le laisser en place le ferait pointer sur un segment sans rapport.
         if self._title_editor is not None:
             editor, self._title_editor = self._title_editor, None
+            self._title_commit = None
+            self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
         self._playing_row = None
@@ -1087,7 +1096,10 @@ class App(tk.Tk):
         pas de titre, et une suite rattachée (`↳`) appartient au morceau
         commencé plus haut, dont le titre est déjà affiché là-bas.
         """
-        if not self.analysis or self._title_editor is not None:
+        if not self.analysis:
+            return
+        self._commit_title()    # une saisie déjà ouverte se valide, pas l'inverse
+        if self._title_editor is not None:
             return
         position = int(row)
         numbers = self.analysis.track_numbers()
@@ -1110,8 +1122,10 @@ class App(tk.Tk):
         def finish(commit: bool):
             if self._title_editor is None:
                 return "break"      # déjà fermé : le focus perdu suit la validation
+            self._release_title_guard()
             value = editor.get().strip()
             self._title_editor = None
+            self._title_commit = None
             editor.destroy()
             if commit and value != segment.title:
                 self._remember()
@@ -1122,10 +1136,34 @@ class App(tk.Tk):
                     else f"Titre du morceau {number} effacé.", log=True)
             return "break"
 
+        def elsewhere(event):
+            """Un clic ailleurs vaut validation.
+
+            `<FocusOut>` ne suffit pas : la forme d'onde et la vue d'ensemble
+            sont des canevas, qui ne prennent pas le focus clavier. Cliquer
+            dessus laissait l'éditeur ouvert, la saisie en suspens et le titre
+            perdu au premier rafraîchissement du tableau.
+            """
+            if event.widget is not editor:
+                finish(True)
+
+        self._title_commit = finish
+        self._title_guard = self.bind("<Button-1>", elsewhere, add="+")
+
         editor.bind("<Return>", lambda _e: finish(True))
         editor.bind("<KP_Enter>", lambda _e: finish(True))
         editor.bind("<FocusOut>", lambda _e: finish(True))
         editor.bind("<Escape>", lambda _e: finish(False))
+
+    def _commit_title(self) -> None:
+        """Valide la saisie en cours, s'il y en a une."""
+        if self._title_commit is not None:
+            self._title_commit(True)
+
+    def _release_title_guard(self) -> None:
+        if self._title_guard is not None:
+            self.unbind("<Button-1>", self._title_guard)
+            self._title_guard = None
 
     def _on_table_right_click(self, event):
         """Clic droit n'importe où sur la ligne : même menu."""
@@ -1174,6 +1212,19 @@ class App(tk.Tk):
         segment = self.analysis.segments[int(row)]
         self.play_from(segment.start, segment.end, row=row)
 
+    def _on_click_anywhere(self, event) -> None:
+        """Un clic hors du tableau relâche la ligne sélectionnée.
+
+        La sélection ne se défaisait jamais : une ligne restait surlignée en
+        bordeaux longtemps après qu'on soit passé à autre chose, et donnait à
+        croire qu'elle était encore la cible des commandes d'édition — alors
+        que « Supprimer la frontière » agit, elle, sur la frontière choisie
+        dans la forme d'onde.
+        """
+        if not self.tree.selection() or _within(event.widget, self._table_area):
+            return
+        self.tree.selection_remove(*self.tree.selection())
+
     def _on_row_selected(self, _event) -> None:
         selection = self.tree.selection()
         if not selection or not self.analysis:
@@ -1215,6 +1266,16 @@ def _glyph_button(parent, name: str, fallback: str, command, **kwargs) -> ttk.Bu
     if image is None:
         return ttk.Button(parent, text=fallback, width=3, command=command, **kwargs)
     return ttk.Button(parent, image=image, command=command, **kwargs)
+
+
+def _within(widget, ancestor) -> bool:
+    """Vrai si `widget` est `ancestor` ou l'un de ses descendants.
+
+    La comparaison porte sur les chemins Tk, avec le point de séparation :
+    sans lui, « .!frame2 » passerait pour un descendant de « .!frame ».
+    """
+    path, root = str(widget), str(ancestor)
+    return path == root or path.startswith(root + ".")
 
 
 def _percent(confidence: float) -> str:

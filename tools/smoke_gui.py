@@ -20,9 +20,28 @@ from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
 
 
+# La console Windows sort en cp1252 : les accents des libellés y arrivaient
+# déjà en charabia, et le point de la colonne Confiance faisait carrément
+# lever une exception au milieu du contrôle.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 def check(label: str, condition: bool) -> bool:
     print(f"  [{'OK ' if condition else 'ECHEC'}] {label}")
     return condition
+
+
+class _Click:
+    """Le strict nécessaire d'un événement de clic : le widget visé."""
+
+    def __init__(self, widget):
+        self.widget = widget
+
+
+def _face(button) -> str:
+    """Ce que le bouton montre : son image si elle existe, sinon son texte."""
+    return str(button.cget("image")) or str(button.cget("text"))
 
 
 def main(wav: Path) -> int:
@@ -79,6 +98,20 @@ def main(wav: Path) -> int:
                 shown.endswith("%") and "." not in shown)
     ok &= check("action lisible avec son chevron",
                 app.tree.set(first, "action").endswith("▾"))
+
+    print("\nRelâchement de la sélection")
+    app.tree.selection_set(first)
+    ok &= check("ligne sélectionnée", app.tree.selection() == (first,))
+    # La barre de défilement est hors du Treeview : sans le test d'ascendance,
+    # la faire glisser relâcherait la ligne qu'on est en train de chercher.
+    app._on_click_anywhere(_Click(app.tree.master.winfo_children()[-1]))
+    ok &= check("un clic dans la zone du tableau la garde",
+                app.tree.selection() == (first,))
+    app._on_click_anywhere(_Click(app.wave.main))
+    ok &= check("un clic sur la forme d'onde la relâche",
+                app.tree.selection() == ())
+    app._on_click_anywhere(_Click(app.play_button))
+    ok &= check("relâcher deux fois ne lève rien", app.tree.selection() == ())
 
     print("\nSaisie du titre dans le tableau")
     start_row = next(r for r in app.tree.get_children() if app._is_track_start(r))
@@ -295,6 +328,12 @@ def main(wav: Path) -> int:
         ok &= check("ligne marquée en lecture", app._playing_row == first_row)
         ok &= check("icône de la ligne passée en pause",
                     app.tree.set(first_row, "play") == GLYPH_PAUSE)
+        # Le bouton de transport porte une image, pas un glyphe : sans ce
+        # contrôle, il pourrait rester figé sur « lecture » sans que rien ne
+        # le signale.
+        playing_face = _face(app.play_button)
+        ok &= check(f"bouton de transport en pause ({playing_face})",
+                    playing_face != "")
 
         app._toggle_row_playback(first_row)      # second clic = pause
         time.sleep(0.3)
@@ -302,6 +341,8 @@ def main(wav: Path) -> int:
         ok &= check("second clic : lecture en pause", app.player.state == "paused")
         ok &= check("icône revenue à lecture",
                     app.tree.set(first_row, "play") == GLYPH_PLAY)
+        ok &= check("bouton de transport revenu à lecture",
+                    _face(app.play_button) != playing_face)
 
         app._toggle_row_playback(first_row)      # troisième clic = reprise
         time.sleep(0.3)
