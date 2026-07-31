@@ -328,7 +328,7 @@ def main(wav: Path) -> int:
         first_row = app.tree.get_children()[0]
         app._toggle_row_playback(first_row)
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("ligne marquée en lecture", app._playing_row == first_row)
         ok &= check("icône de la ligne passée en pause",
                     app.tree.set(first_row, "play") == GLYPH_PAUSE)
@@ -341,7 +341,7 @@ def main(wav: Path) -> int:
 
         app._toggle_row_playback(first_row)      # second clic = pause
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("second clic : lecture en pause", app.player.state == "paused")
         ok &= check("icône revenue à lecture",
                     app.tree.set(first_row, "play") == GLYPH_PLAY)
@@ -350,13 +350,27 @@ def main(wav: Path) -> int:
 
         app._toggle_row_playback(first_row)      # troisième clic = reprise
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("troisième clic : reprise", app.player.state == "playing")
         ok &= check("icône repassée en pause",
                     app.tree.set(first_row, "play") == GLYPH_PAUSE)
 
+        # Franchissement d'une frontière : l'icône suivait la ligne cliquée et
+        # restait donc en arrière dès que le son passait au segment suivant,
+        # alors que la tête de piste, elle, avançait. Les deux doivent tomber
+        # sur la même ligne.
+        app.play_from(max(0.0, analysis.segments[0].end - 0.4))
+        time.sleep(1.4)
+        app._sync_playing_row()
+        heard = app._row_at(app.player.position)
+        ok &= check(f"le son a franchi la frontière (ligne {heard})", heard != "0")
+        ok &= check("l'icône de lecture a suivi le son",
+                    app._play_cell_active == heard)
+        ok &= check("la tête de piste est sur la même ligne",
+                    app._track_row == heard)
+
         app.stop_playback()
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("arrêt : plus aucune ligne active", app._playing_row is None)
         ok &= check("icônes toutes en lecture",
                     all(app.tree.set(r, "play") == GLYPH_PLAY

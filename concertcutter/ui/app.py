@@ -762,13 +762,13 @@ class App(tk.Tk):
         self._playing_row = row
         self.wave.ensure_visible(start)
         self._refresh_play_button()
-        self._refresh_play_cells()
+        self._sync_playing_row()
 
     def stop_playback(self) -> None:
         self.player.stop()
         self._playing_row = None
         self._refresh_play_button()
-        self._refresh_play_cells()
+        self._sync_playing_row()
 
     def _refresh_play_button(self) -> None:
         playing = self.player.state == PLAYING
@@ -799,7 +799,7 @@ class App(tk.Tk):
             self.player.play(seconds)
             self._playing_row = None
             self._refresh_play_button()
-            self._refresh_play_cells()
+            self._sync_playing_row()
 
     def _sync_slider(self, seconds: float) -> None:
         self.seek.set_position(seconds)
@@ -816,8 +816,7 @@ class App(tk.Tk):
             elif self._playing_row is not None and state not in (PLAYING, PAUSED):
                 self._playing_row = None
             self._refresh_play_button()
-            self._refresh_play_cells()
-            self._refresh_track_head()
+            self._sync_playing_row()
         self.after(120, self._tick)
 
     def _on_close(self) -> None:
@@ -1084,21 +1083,32 @@ class App(tk.Tk):
         self._track_size = wanted
         self._refresh_tracks()
 
-    def _refresh_track_head(self) -> None:
-        """Pose la tête de lecture sur la ligne qui contient l'instant écouté.
+    def _sync_playing_row(self) -> None:
+        """Aligne la colonne de lecture et la tête de piste sur le même instant.
 
-        Elle suit le son plutôt que la ligne cliquée : on peut lancer la lecture
-        depuis la forme d'onde, sans passer par une ligne, et c'est alors la
-        seule chose qui dise où l'on en est dans le tableau.
+        Les deux repères se calculaient séparément : la tête suivait le son,
+        l'icône suivait la ligne qu'on avait cliquée. Dès que la lecture passait
+        d'un segment au suivant, ou qu'elle était lancée depuis la forme d'onde,
+        l'icône restait sur la mauvaise ligne — ou sur aucune. Un seul instant
+        les décide désormais tous les deux, ce qui les empêche de diverger.
         """
         moment = self.player.position if self.player.state == PLAYING else None
-        row = None
-        if moment is not None and self.analysis:
-            for position, segment in enumerate(self.analysis.segments):
-                if segment.start <= moment < segment.end:
-                    row = str(position)
-                    break
+        row = self._row_at(moment)
+        self._refresh_play_cells(row)
+        self._refresh_track_head(row, moment)
 
+    def _row_at(self, moment: float | None) -> str | None:
+        """Ligne dont le segment contient cet instant."""
+        if moment is None or not self.analysis:
+            return None
+        for position, segment in enumerate(self.analysis.segments):
+            if segment.start <= moment < segment.end:
+                row = str(position)
+                return row if self.tree.exists(row) else None
+        return None
+
+    def _refresh_track_head(self, row: str | None, moment: float | None) -> None:
+        """Pose la tête de lecture sur la ligne écoutée."""
         if self._track_row is not None and self._track_row != row:
             self._restore_track(self._track_row)
         if row is None or not self.tree.exists(row):
@@ -1117,15 +1127,14 @@ class App(tk.Tk):
         if self.tree.exists(row) and row in self._tracks:
             self.tree.set(row, "track", self._tracks[row])
 
-    def _refresh_play_cells(self) -> None:
-        """L'icône de la ligne suit l'état réel du lecteur.
+    def _refresh_play_cells(self, active: str | None) -> None:
+        """L'icône de la ligne suit l'instant écouté.
 
         Une seule ligne peut porter le symbole pause, et seulement tant que le
         son sort vraiment : mise en pause, elle repasse en lecture pour montrer
         ce qu'un nouveau clic fera. On ne réécrit les cellules qu'au changement,
         sinon on repeindrait tout le tableau dix fois par seconde.
         """
-        active = self._playing_row if self.player.state == PLAYING else None
         if active == self._play_cell_active:
             return
         for row, glyph in ((self._play_cell_active, GLYPH_PLAY),
