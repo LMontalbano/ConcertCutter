@@ -42,6 +42,7 @@ from ..spectral import SpectralFeatures, extract
 from . import assets, theme
 from .card import Card
 from .collapsible import CHEVRON_OPEN, CHEVRON_SHUT, Section
+from .export_dialog import ask_export
 from .history import History
 from .player import PAUSED, PLAYING, Player
 from .seekbar import SeekBar
@@ -98,6 +99,10 @@ class App(tk.Tk):
         self._title_commit = None
         self._title_guard: str | None = None
         self._settings_open = False
+        # Retenus d'un export à l'autre : on réexporte le plus souvent
+        # au même endroit et sous la même forme.
+        self.export_mode = tk.StringVar(value="Les deux")
+        self.export_dir = ""
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -181,39 +186,10 @@ class App(tk.Tk):
                                         style="Accent.TButton", state="disabled")
         self.render_button.pack(side="right")
 
-        self._build_export_mode(bar).pack(side="right", padx=(10, 18))
-        # Aligné sur la première option et non centré sur la deuxième : c'est
-        # le titre de la pile, pas l'étiquette d'une de ses lignes.
-        ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(
-            side="right", anchor="n")
-
         # Pas de bouton pour charger une tracklist : les titres se saisissent
         # directement dans la colonne Morceau du tableau, ce qui évite d'avoir
         # à préparer un fichier texte à côté. La ligne de commande garde
         # `--tracklist` pour le traitement par lot.
-        return holder
-
-    def _build_export_mode(self, parent) -> ttk.Frame:
-        """Trois boutons radio plutôt qu'une liste déroulante.
-
-        La liste de Tk est une fenêtre système, à angles vifs, qu'on ne sait
-        pas arrondir : ni la préférence de coins de Windows 11 ni la couleur
-        transparente n'y changent quoi que ce soit. Elle tranchait donc avec
-        tout le reste de l'écran.
-
-        Trois choix exclusifs et courts n'ont de toute façon rien à gagner à
-        être cachés derrière une ouverture. Posés à plat, ils se lisent d'un
-        coup d'œil et se changent en un clic au lieu de deux — et la pastille
-        ronde dit d'elle-même qu'un seul peut être retenu.
-        """
-        holder = ttk.Frame(parent, style="Panel.TFrame")
-        self.export_mode = tk.StringVar(value="Les deux")
-        # Empilés : alignés à gauche sur une colonne, les trois intitulés se
-        # comparent d'un seul balayage vertical. À l'horizontale, il fallait
-        # relire chaque pastille pour retrouver laquelle portait le point.
-        for value in ("Album continu", "Pistes séparées", "Les deux"):
-            ttk.Radiobutton(holder, text=value, value=value,
-                            variable=self.export_mode).pack(anchor="w")
         return holder
 
     def _set_progress(self, visible: bool) -> None:
@@ -588,10 +564,13 @@ class App(tk.Tk):
     def start_render(self) -> None:
         if self._busy or not self.analysis:
             return
-        out_dir = filedialog.askdirectory(
-            title="Où placer le dossier du concert ?")
-        if not out_dir:
+        # Forme et destination se choisissent ensemble, au moment d'exporter.
+        chosen = ask_export(self, self.export_mode.get(), self.export_dir)
+        if chosen is None:
             return
+        mode, out_dir = chosen
+        self.export_mode.set(mode)
+        self.export_dir = out_dir
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
