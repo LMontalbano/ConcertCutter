@@ -180,16 +180,34 @@ class App(tk.Tk):
                                         style="Accent.TButton", state="disabled")
         self.render_button.pack(side="right")
 
-        self.export_mode = tk.StringVar(value="Les deux")
-        ttk.Combobox(bar, textvariable=self.export_mode, width=15, state="readonly",
-                     values=("Album continu", "Pistes séparées", "Les deux")).pack(
-            side="right", padx=10)
+        self._build_export_mode(bar).pack(side="right", padx=(10, 18))
         ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(side="right")
 
         # Pas de bouton pour charger une tracklist : les titres se saisissent
         # directement dans la colonne Morceau du tableau, ce qui évite d'avoir
         # à préparer un fichier texte à côté. La ligne de commande garde
         # `--tracklist` pour le traitement par lot.
+        return holder
+
+    def _build_export_mode(self, parent) -> ttk.Frame:
+        """Trois boutons radio plutôt qu'une liste déroulante.
+
+        La liste de Tk est une fenêtre système, à angles vifs, qu'on ne sait
+        pas arrondir : ni la préférence de coins de Windows 11 ni la couleur
+        transparente n'y changent quoi que ce soit. Elle tranchait donc avec
+        tout le reste de l'écran.
+
+        Trois choix exclusifs et courts n'ont de toute façon rien à gagner à
+        être cachés derrière une ouverture. Posés à plat, ils se lisent d'un
+        coup d'œil et se changent en un clic au lieu de deux — et la pastille
+        ronde dit d'elle-même qu'un seul peut être retenu.
+        """
+        holder = ttk.Frame(parent, style="Panel.TFrame")
+        self.export_mode = tk.StringVar(value="Les deux")
+        for value in ("Album continu", "Pistes séparées", "Les deux"):
+            ttk.Radiobutton(holder, text=value, value=value,
+                            variable=self.export_mode).pack(side="left",
+                                                            padx=(0, 14))
         return holder
 
     def _set_progress(self, visible: bool) -> None:
@@ -385,7 +403,6 @@ class App(tk.Tk):
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_row_selected)
         self.tree.bind("<Button-1>", self._on_table_click)
-        self.tree.bind("<Button-3>", self._on_table_right_click)
         self.tree.bind("<Motion>", self._on_table_hover)
         self.tree.bind("<Leave>", lambda _e: self.tree.configure(cursor=""))
 
@@ -925,45 +942,6 @@ class App(tk.Tk):
         current = self.analysis.segments[position].kind
         self.set_segment_kind(position, GAP if current == MUSIC else MUSIC)
 
-    def build_action_menu(self, position: int) -> tk.Menu | None:
-        """Menu des deux sorts possibles, l'actuel coché.
-
-        Une bascule au clic ne s'annonçait pas : rien dans la cellule ne disait
-        qu'elle était cliquable, ni ce qu'un clic allait produire. Un menu
-        montre les deux options et l'état courant avant de décider.
-
-        Séparé de l'affichage pour rester vérifiable : afficher un menu prend la
-        souris et ouvre une boucle d'événements imbriquée, intestable.
-        """
-        if not self.analysis or not (0 <= position < len(self.analysis.segments)):
-            return None
-        self._action_choice = tk.StringVar(value=self.analysis.segments[position].kind)
-        # `activeborderwidth=0` : Tk dessine sinon un cadre en relief autour de
-        # la ligne survolée, par-dessus le fond bordeaux — un liseré gris qui
-        # trahit le menu système. La pastille de choix reprend le bordeaux, au
-        # lieu du noir par défaut.
-        menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_BG, fg=theme.TEXT,
-                       activebackground=theme.BURGUNDY,
-                       activeforeground=theme.TEXT_ON_ACCENT,
-                       activeborderwidth=0, selectcolor=theme.BURGUNDY,
-                       relief="solid", borderwidth=1, font=theme.FONT)
-        for label, kind in (("Garder ce passage", MUSIC),
-                            ("Supprimer ce passage", GAP)):
-            menu.add_radiobutton(
-                label=label, value=kind, variable=self._action_choice,
-                hidemargin=False,
-                command=lambda k=kind: self.set_segment_kind(position, k))
-        return menu
-
-    def open_action_menu(self, position: int, x_root: int, y_root: int) -> None:
-        menu = self.build_action_menu(position)
-        if menu is None:
-            return
-        try:
-            menu.tk_popup(x_root, y_root)
-        finally:
-            menu.grab_release()
-
     # -- historique --------------------------------------------------------
 
     def _remember(self) -> None:
@@ -1080,7 +1058,7 @@ class App(tk.Tk):
             self._toggle_row_playback(row)
             return "break"
         if column == ACTION_COLUMN:
-            self.open_action_menu(int(row), event.x_root, event.y_root)
+            self.toggle_segment(int(row))
             return "break"
         if column == TITLE_COLUMN:
             self.edit_title(row)
@@ -1164,15 +1142,6 @@ class App(tk.Tk):
         if self._title_guard is not None:
             self.unbind("<Button-1>", self._title_guard)
             self._title_guard = None
-
-    def _on_table_right_click(self, event):
-        """Clic droit n'importe où sur la ligne : même menu."""
-        row = self.tree.identify_row(event.y)
-        if not row:
-            return None
-        self.tree.selection_set(row)
-        self.open_action_menu(int(row), event.x_root, event.y_root)
-        return "break"
 
     def _on_table_hover(self, event) -> None:
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
@@ -1284,8 +1253,8 @@ def _percent(confidence: float) -> str:
 
 
 def _action_label(kind: str) -> str:
-    """Le chevron signale que la cellule ouvre un choix, et non qu'elle bascule."""
-    return f"{'Garder' if kind == MUSIC else 'Supprimer'}  ▾"
+    """Sans chevron : la cellule bascule, elle n'ouvre plus rien."""
+    return "Garder" if kind == MUSIC else "Supprimer"
 
 
 def _hms(seconds: float) -> str:

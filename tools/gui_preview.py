@@ -25,8 +25,8 @@ if __name__ == "__main__":
     parser.add_argument("--zoom-at", help="Centrer et zoomer sur cet instant")
     parser.add_argument("--zoom-span", type=float, default=40.0,
                         help="Durée visible après zoom, en secondes")
-    parser.add_argument("--open-action-menu", type=int, metavar="SEGMENT",
-                        help="Ouvre le menu d'action de ce segment, pour capture")
+    parser.add_argument("--toggle-action", type=int, metavar="SEGMENT",
+                        help="Bascule Garder / Supprimer sur ce segment, pour capture")
     args = parser.parse_args()
 
     if args.cache and args.cache.exists():
@@ -68,16 +68,12 @@ if __name__ == "__main__":
     else:
         app.wave.select(8)
 
-    if args.open_action_menu is not None:
-        row = str(args.open_action_menu)
+    if args.toggle_action is not None:
+        # La colonne Action n'ouvre plus de menu : elle bascule au clic.
+        row = str(args.toggle_action)
         app.update()
         app.tree.see(row)
         app.tree.selection_set(row)
-        app.update()
-        box = app.tree.bbox(row, "action")
-        if box:
-            x = app.tree.winfo_rootx() + box[0] + box[2] // 2
-            y = app.tree.winfo_rooty() + box[1] + box[3]
-            app.after(600, lambda: app.open_action_menu(int(row), x, y))
+        app.after(600, lambda: app.toggle_segment(int(row)))
 
     app.mainloop()

@@ -96,8 +96,8 @@ def main(wav: Path) -> int:
     shown = app.tree.set(first, "confidence")
     ok &= check(f"confiance en pourcentage ({shown})",
                 shown.endswith("%") and "." not in shown)
-    ok &= check("action lisible avec son chevron",
-                app.tree.set(first, "action").endswith("▾"))
+    ok &= check("action lisible sans promesse de menu",
+                app.tree.set(first, "action") in ("Garder", "Supprimer"))
 
     print("\nRelâchement de la sélection")
     app.tree.selection_set(first)
@@ -154,28 +154,29 @@ def main(wav: Path) -> int:
     app._title_editor.event_generate("<Escape>")
     app.update()
 
-    print("\nChoix de l'action par menu")
+    print("\nChoix de l'action par clic sur la cellule")
     music_pos = next(i for i, s in enumerate(analysis.segments) if s.kind == "music")
-    menu = app.build_action_menu(music_pos)
-    ok &= check("menu à deux choix", menu is not None and menu.index("end") == 1)
-    if menu is not None:
-        ok &= check("libellés explicites",
-                    "Garder" in menu.entrycget(0, "label")
-                    and "Supprimer" in menu.entrycget(1, "label"))
-        ok &= check("état courant coché", app._action_choice.get() == "music")
-    ok &= check("segment hors bornes : pas de menu",
-                app.build_action_menu(9999) is None)
+    # Un clic sur la colonne Action bascule directement : plus de menu a ouvrir
+    # pour un choix qui n'a que deux issues.
+    box = app.tree.bbox(str(music_pos), "action")
+    ok &= check("cellule Action visible", bool(box))
+    if box:
+        app.tree.event_generate("<Button-1>", x=box[0] + box[2] // 2,
+                                y=box[1] + box[3] // 2)
+        app.update()
+        ok &= check("le clic a bascule le segment",
+                    analysis.segments[music_pos].kind == "gap")
+        ok &= check("libelle du tableau mis a jour",
+                    app.tree.set(str(music_pos), "action") == "Supprimer")
+        ok &= check("la bascule est annulable", app.history.can_undo)
 
-    app.set_segment_kind(music_pos, "music")     # déjà dans cet état
-    ok &= check("choisir l'état courant ne fait rien",
-                not app.history.can_undo or analysis.segments[music_pos].kind == "music")
-    depth_before = app.history.can_undo
-    app.set_segment_kind(music_pos, "gap")
-    ok &= check("choisir l'autre état applique",
-                analysis.segments[music_pos].kind == "gap")
-    ok &= check("libellé du tableau mis à jour",
-                app.tree.set(str(music_pos), "action").startswith("Supprimer"))
     app.set_segment_kind(music_pos, "music")
+    ok &= check("retour a l'etat initial",
+                analysis.segments[music_pos].kind == "music")
+    depth_before = app.history.can_undo
+    app.set_segment_kind(music_pos, "music")     # deja dans cet etat
+    ok &= check("reappliquer l'etat courant ne fait rien",
+                app.history.can_undo == depth_before)
 
     print("\nBascule d'un blanc : doit rester réversible")
     # Un blanc *encadré de musique* : c'est le seul cas où la bascule doit

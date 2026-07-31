@@ -163,9 +163,29 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.configure("TSpinbox", fieldbackground=FIELD_BG, foreground=TEXT,
                     bordercolor=BORDER_STRONG, arrowcolor=TEXT, padding=4)
     style.configure("TCheckbutton", background=PANEL_BG, foreground=TEXT)
-    style.configure("TRadiobutton", background=PANEL_BG, foreground=TEXT)
-    style.map("TRadiobutton", background=[("active", PANEL_BG)])
     style.map("TCheckbutton", background=[("active", PANEL_BG)])
+
+    # Bouton radio : clam laisse styler la pastille, mais pas sa forme — elle
+    # reste ronde, ce qui tombe bien, c'est ce qui distingue un choix exclusif
+    # d'une case à cocher. Le point retenu prend le bordeaux des actions ; au
+    # repos la pastille est blanche, cerclée comme les champs de saisie.
+    style.configure("TRadiobutton", background=PANEL_BG, foreground=TEXT_MUTED,
+                    font=FONT, padding=(0, 4), indicatorsize=11,
+                    indicatormargin=(0, 0, 7, 0),
+                    indicatorbackground=FIELD_BG, indicatorforeground=BURGUNDY,
+                    upperbordercolor=BORDER_STRONG, lowerbordercolor=BORDER_STRONG,
+                    focuscolor=PANEL_BG)
+    style.map(
+        "TRadiobutton",
+        background=[("active", PANEL_BG)],
+        # Le libellé du choix retenu passe à l'encre pleine : la pastille seule
+        # se repère mal quand les trois intitulés sont côte à côte.
+        foreground=[("selected", TEXT), ("disabled", BORDER_STRONG)],
+        indicatorbackground=[("selected", FIELD_BG), ("active", FIELD_BG),
+                             ("disabled", APP_BG)],
+        upperbordercolor=[("selected", BURGUNDY), ("active", TEXT_MUTED)],
+        lowerbordercolor=[("selected", BURGUNDY), ("active", TEXT_MUTED)],
+    )
 
     style.configure("Horizontal.TProgressbar", background=BURGUNDY,
                     troughcolor=APP_BG, bordercolor=BORDER, lightcolor=BURGUNDY,
