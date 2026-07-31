@@ -30,13 +30,13 @@ sont contre la forme d'onde sur laquelle elles agissent.
 | Se déplacer dans le concert | Clic n'importe où sur la barre de progression |
 | Zoomer | Molette sur la forme d'onde |
 | Naviguer | Maj+glisser, ou cliquer dans la vue d'ensemble |
-| Écouter une coupe | Cliquer la frontière — la lecture démarre 5 s avant |
-| Déplacer une frontière | La saisir et la glisser |
+| Écouter une coupe | Cliquer la frontière sans la bouger — lecture 5 s avant |
+| Déplacer une frontière | La saisir et la glisser (n'enclenche pas la lecture) |
 | Supprimer une frontière | La sélectionner, puis Suppr |
 | Scinder un morceau | Cliquer dans le tracé, puis « Couper ici » (C) |
 | Garder / Supprimer un passage | Cliquer la colonne Action, ou clic droit sur la ligne |
+| Nommer un morceau | Cliquer son nom dans la colonne Morceau et saisir |
 | Annuler / Rétablir | Ctrl+Z / Ctrl+Y, ou les boutons ↶ ↷ |
-| Chercher les enchaînements | Bouton dédié — repères jaunes en pointillé |
 
 Toutes les éditions sont annulables : bascule, déplacement de frontière,
 suppression, découpe. L'historique retient les cinquante derniers états et
@@ -109,6 +109,15 @@ Et à côté du fichier source :
 - `concert.segments.json` — les segments détectés
 - `concert.labels.txt` — repères Audacity
 
+**Les titres se saisissent dans le tableau** : cliquer sur le nom d'un morceau
+dans la colonne Morceau ouvre un champ, Entrée valide, Échap annule. Sans titre,
+les fichiers sortent en `Piste 01`, `Piste 02`… Le titre est attaché au segment
+qui ouvre le morceau, pas à un numéro de piste : une numérotation se décale dès
+qu'on ajoute ou retire une frontière, et les titres suivraient le mauvais
+morceau. Le renommage est annulable comme les autres éditions.
+
+En ligne de commande, `--tracklist` reste disponible pour le traitement par lot.
+
 **Si tu connais le nombre de morceaux, donne-le.** C'est la seule information
 qui vienne de l'extérieur du signal, donc la plus fiable du problème :
 
@@ -172,9 +181,14 @@ python -m concertcutter verify concert.segments.json -d verification --at 27:14,
 
 ## Morceaux enchaînés sans blanc
 
-Contrôle **additionnel**. La détection par niveau reste le moteur ; celle-ci
-cherche seulement les endroits où la musique change franchement sans que le
-volume ne bouge — le seul cas que le niveau ne peut structurellement pas voir.
+Contrôle **additionnel, en ligne de commande seulement**. Le bouton a été retiré
+de l'interface : sur du matériel réel il ne produisait que des faux positifs,
+pour un cas de figure rare. La fonction reste utile quand le compte de morceaux
+est inférieur à celui attendu.
+
+La détection par niveau reste le moteur ; celle-ci cherche seulement les
+endroits où la musique change franchement sans que le volume ne bouge — le seul
+cas que le niveau ne peut structurellement pas voir.
 
 ```bash
 python -m concertcutter segues concert.segments.json --cache feats.npz
@@ -194,6 +208,46 @@ rappel : en masquant volontairement cette frontière, l'outil la retrouve à
 Donc : très bonne localisation, classement médiocre. C'est une **liste d'écoute
 classée, pas un détecteur**. Elle sert surtout quand le nombre de morceaux
 trouvés est inférieur à celui attendu.
+
+## Structure de l'export
+
+On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
+propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
+n'y a que de l'audio ; tout le reste va dans `infos/`.
+
+```
+<emplacement choisi>/
+└── Concert Antidote 14.07.2026/
+    ├── concert_clean.wav
+    ├── 01 - Ouverture.wav
+    ├── 02 - Le Long Chemin.wav
+    └── infos/
+        ├── concert_clean.cue
+        ├── reperes.txt
+        └── segments.json
+```
+
+La cue sheet est rangée avec les fichiers techniques mais désigne son audio par
+`../concert_clean.wav` : les lecteurs résolvent ce chemin depuis l'emplacement
+de la cue, donc elle reste fonctionnelle.
+
+## Protection des exports
+
+Réexporter dans un dossier déjà utilisé ne détruit plus rien en silence.
+
+Le problème était double. Les fichiers de même nom étaient écrasés sans un mot,
+et — plus insidieux — ceux dont le nom ne coïncidait pas restaient en place :
+un second export de 5 morceaux dans un dossier qui en contenait 6 laissait
+**11 fichiers**, un mélange de deux versions qui paraissait complet.
+
+L'export refuse désormais d'écrire par-dessus un export existant. L'interface
+propose alors trois issues : écrire dans un dossier libre
+(`Concert Antidote 14.07.2026 (2)`), remplacer l'export précédent, ou annuler.
+En ligne de commande, il faut `--overwrite`.
+
+Le remplacement s'appuie sur un manifeste `infos/.concertcutter-export.json`
+écrit à chaque export : seuls les fichiers qu'il liste sont effacés. Un fichier
+que l'utilisateur aurait déposé dans le dossier n'est jamais touché.
 
 ## Réglages
 

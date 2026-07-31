@@ -23,6 +23,12 @@ class Segment:
     confidence: float = 0.0
     # Diagnostics conservés pour préparer la V1 (choix du classifieur).
     stats: dict = field(default_factory=dict)
+    # Titre saisi par l'utilisateur, porté par le segment qui ouvre le morceau.
+    # Attaché au segment plutôt qu'à un numéro de piste : une numérotation se
+    # décale dès qu'on ajoute ou retire une frontière, et les titres suivraient
+    # le mauvais morceau. Champ optionnel, donc les JSON antérieurs restent
+    # lisibles.
+    title: str = ""
 
     @property
     def duration(self) -> float:
@@ -56,7 +62,8 @@ class Analysis:
                 continue
             if current is None:
                 current = Segment(segment.start, segment.end, MUSIC,
-                                  segment.confidence, dict(segment.stats))
+                                  segment.confidence, dict(segment.stats),
+                                  segment.title)
                 tracks.append(current)
             else:
                 current.end = segment.end
@@ -86,7 +93,7 @@ class Analysis:
 
     def snapshot(self) -> list[Segment]:
         """Copie indépendante des segments, pour l'historique d'annulation."""
-        return [Segment(s.start, s.end, s.kind, s.confidence, dict(s.stats))
+        return [Segment(s.start, s.end, s.kind, s.confidence, dict(s.stats), s.title)
                 for s in self.segments]
 
     def normalize(self) -> None:

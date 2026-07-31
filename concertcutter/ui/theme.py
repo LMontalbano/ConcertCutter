@@ -46,7 +46,6 @@ BOUNDARY = "#5C5142"
 SELECTED = "#B03A3A"
 CURSOR = "#12395F"        # tête de lecture : très sombre pour trancher partout
 CURSOR_HALO = "#EAF2FA"   # liseré clair, sans lequel le trait se perd
-CANDIDATE = "#D9A038"
 GRID = "#DCD3C4"
 
 FONT = ("Segoe UI", 9)

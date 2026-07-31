@@ -16,7 +16,10 @@ from .detect import DetectParams, analyze as analyze_energy
 from .detect_hmm import HmmParams, analyze as analyze_hmm
 from .excerpts import export_at, export_boundaries, parse_time
 from .labels import format_summary, write_audacity_labels
-from .render import RenderParams, load_tracklist, render as run_render
+from .render import (
+    ExportConflict, RenderParams, concert_dir, load_tracklist,
+    render as run_render, unique_dir,
+)
 from .rhythm import extract as extract_rhythm
 from .segment import Analysis
 from .segue import SegueParams, apply_segues, find, score_known_boundaries
@@ -142,7 +145,8 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
     defaults = RenderParams()
     group = parser.add_argument_group("rendu")
     group.add_argument("-d", "--out-dir", type=Path, default=Path("sortie"),
-                       help="Dossier de sortie")
+                       help="Emplacement de sortie ; le concert y reçoit son "
+                            "propre dossier, nommé d'après le fichier source")
     group.add_argument("--tracklist", type=Path,
                        help="Fichier texte, un titre par ligne")
     group.add_argument("--fade-ms", type=float, default=defaults.fade_ms,
@@ -151,6 +155,9 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
                        metavar="S", help="Amorce conservée avant chaque morceau")
     group.add_argument("--pad-end", type=float, default=defaults.pad_end_s,
                        metavar="S", help="Queue d'applaudissements conservée après")
+    group.add_argument("--overwrite", action="store_true",
+                       help="Remplacer un export déjà présent dans le dossier "
+                            "(sans ce drapeau, l'export s'arrête pour ne rien détruire)")
 
 
 def _load_features(args) -> SpectralFeatures | None:
@@ -228,18 +235,34 @@ def _do_render(analysis: Analysis, args) -> None:
     def progress(done: int, total: int, name: str) -> None:
         print(f"  [{done}/{total}] {name}", flush=True)
 
-    print(f"\nRendu de {len(analysis.tracks)} pistes...")
-    result = run_render(
-        analysis,
-        args.out_dir,
-        titles,
-        RenderParams(
-            fade_ms=args.fade_ms,
-            pad_start_s=args.pad_start,
-            pad_end_s=args.pad_end,
-        ),
-        on_progress=progress,
-    )
+    # `-d` désigne l'emplacement ; le concert reçoit son propre dossier dedans.
+    target = concert_dir(args.out_dir, analysis)
+    print(f"\nRendu de {len(analysis.tracks)} pistes vers {target}...")
+    try:
+        result = run_render(
+            analysis,
+            target,
+            titles,
+            RenderParams(
+                fade_ms=args.fade_ms,
+                pad_start_s=args.pad_start,
+                pad_end_s=args.pad_end,
+            ),
+            on_progress=progress,
+            replace=args.overwrite,
+        )
+    except ExportConflict as conflict:
+        print(f"\nErreur : {conflict}", file=sys.stderr)
+        if conflict.overwritten:
+            print(f"  {len(conflict.overwritten)} fichier(s) seraient écrasés, "
+                  f"dont {conflict.overwritten[0]}", file=sys.stderr)
+        if conflict.leftovers:
+            print(f"  {len(conflict.leftovers)} fichier(s) d'un export précédent "
+                  "resteraient mélangés aux nouveaux", file=sys.stderr)
+        print(f"\nSoit un autre emplacement, soit --overwrite pour remplacer "
+              f"l'export précédent.\nL'interface graphique propose aussi "
+              f"« {unique_dir(target).name} ».", file=sys.stderr)
+        raise SystemExit(1)
     print(f"\nFichier complet : {result['full']}")
     print(f"Cue sheet       : {result['cue']}")
     print(f"Pistes ({len(result['tracks'])}) dans : {result['out_dir']}")

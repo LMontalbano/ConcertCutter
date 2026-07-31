@@ -26,6 +26,7 @@ from ..audio import probe, read_span
 from . import theme
 
 HANDLE_PX = 7           # tolérance de saisie d'une frontière
+DRAG_PX = 3             # au-delà, on considère qu'il s'agit d'un déplacement
 OVERVIEW_HEIGHT = 46
 RULER_HEIGHT = 20
 DETAIL_MAX_S = 90.0     # au-delà, l'enveloppe grossière suffit
@@ -50,7 +51,6 @@ class WaveformView(ttk.Frame):
         self._segments: list = []
         self._selected: int | None = None
         self._cursor: float | None = None
-        self._candidates: list[float] = []
         self._source: str | None = None
         self._samplerate = 44100
         self._detail: tuple[tuple, np.ndarray] | None = None
@@ -61,9 +61,13 @@ class WaveformView(ttk.Frame):
         self._drag_mode: str | None = None
         self._pan_anchor = 0.0
 
+        self._press_x = 0
+        self._boundary_moved = False
+
         self._on_select = on_select
         self.on_boundary_press: Callable[[], None] | None = None
         self.on_boundary_moved: Callable[[int, float], None] | None = None
+        self.on_boundary_clicked: Callable[[int], None] | None = None
         self.on_seek: Callable[[float], None] | None = None
         self.on_view_changed: Callable[[], None] | None = None
 
@@ -118,15 +122,6 @@ class WaveformView(ttk.Frame):
 
     def set_cursor(self, seconds: float | None) -> None:
         self._cursor = seconds
-        self.redraw()
-
-    def set_candidates(self, times: list[float]) -> None:
-        """Enchaînements proposés : repères en pointillé, jamais des frontières.
-
-        Ils restent volontairement distincts : ce sont des suggestions à
-        écouter, que l'utilisateur transforme en coupe s'il les valide.
-        """
-        self._candidates = list(times)
         self.redraw()
 
     @property
@@ -207,10 +202,8 @@ class WaveformView(ttk.Frame):
         index = self._nearest_boundary(event.x)
         if index is not None:
             self._drag_mode = "boundary"
-            # Prévenir avant de bouger : le glissé modifie les segments en
-            # direct, donc un instantané pris plus tard serait déjà altéré.
-            if self.on_boundary_press:
-                self.on_boundary_press()
+            self._press_x = event.x
+            self._boundary_moved = False
             self.select(index)
             return
         self._drag_mode = None
@@ -219,14 +212,30 @@ class WaveformView(ttk.Frame):
             self.on_seek(self._seconds(event.x))
 
     def _on_drag(self, event) -> None:
-        if self._drag_mode == "boundary" and self._selected is not None:
-            self._preview_move(self._seconds(event.x))
+        if self._drag_mode != "boundary" or self._selected is None:
+            return
+        # Sous le seuil, c'est le tremblement d'un clic, pas une intention de
+        # déplacer : sans cette marge, viser une frontière la bougeait déjà.
+        if not self._boundary_moved and abs(event.x - self._press_x) < DRAG_PX:
+            return
+        if not self._boundary_moved:
+            self._boundary_moved = True
+            # Prévenir avant la première modification : le glissé altère les
+            # segments en direct, un instantané plus tardif serait déjà faussé.
+            if self.on_boundary_press:
+                self.on_boundary_press()
+        self._preview_move(self._seconds(event.x))
 
     def _on_release(self, event) -> None:
-        if (self._drag_mode == "boundary" and self._selected is not None
-                and self.on_boundary_moved):
-            self.on_boundary_moved(self._selected, self._seconds(event.x))
+        if self._drag_mode == "boundary" and self._selected is not None:
+            if self._boundary_moved:
+                if self.on_boundary_moved:
+                    self.on_boundary_moved(self._selected, self._seconds(event.x))
+            elif self.on_boundary_clicked:
+                # Simple clic : c'est une demande d'écoute, pas une édition.
+                self.on_boundary_clicked(self._selected)
         self._drag_mode = None
+        self._boundary_moved = False
 
     def _on_pan_start(self, event) -> None:
         self._drag_mode = "pan"
@@ -283,7 +292,6 @@ class WaveformView(ttk.Frame):
 
         self._draw_bands(width, height)
         self._draw_wave(width, height)
-        self._draw_candidates(height)
         self._draw_boundaries(height)
         self._draw_cursor(height)
         self._draw_ruler(width, height)
@@ -367,13 +375,6 @@ class WaveformView(ttk.Frame):
             if segment.start <= seconds < segment.end:
                 return segment.kind
         return "music"
-
-    def _draw_candidates(self, height: int) -> None:
-        for moment in self._candidates:
-            x = self._x(moment)
-            if -5 <= x <= self.main.winfo_width() + 5:
-                self.main.create_line(x, 0, x, height, fill=theme.CANDIDATE,
-                                      width=2, dash=(6, 4))
 
     def _draw_boundaries(self, height: int) -> None:
         for index, moment in enumerate(self._boundaries()):

@@ -32,10 +32,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
-from ..labels import write_audacity_labels
-from ..render import RenderParams, load_tracklist, render
+from ..render import (
+    DATA_DIR, ExportConflict, RenderParams, check_output, concert_dir, render,
+    unique_dir,
+)
 from ..segment import GAP, MUSIC, Analysis, Segment
-from ..segue import SegueParams, find as find_segues
 from ..spectral import SpectralFeatures, extract
 from . import theme
 from .history import History
@@ -46,6 +47,7 @@ from .waveform import WaveformView
 PREVIEW_LEAD_S = 5.0
 SPLIT_GAP_S = 2.0
 PLAY_COLUMN = "#1"
+TITLE_COLUMN = "#2"
 ACTION_COLUMN = "#7"
 
 # Segoe UI ne fournit pas U+23F8 : il s'affichait en carré. Deux rectangles
@@ -66,13 +68,13 @@ class App(tk.Tk):
         self.source: Path | None = None
         self.analysis: Analysis | None = None
         self.features: SpectralFeatures | None = None
-        self.titles: list[str] | None = None
         self.duration = 0.0
         self.player = Player()
         self._events: queue.Queue = queue.Queue()
         self._busy = False
         self._playing_row: str | None = None
         self._play_cell_active: str | None = None
+        self._title_editor: ttk.Entry | None = None
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -137,9 +139,9 @@ class App(tk.Tk):
         self.expected = tk.StringVar(value="")
         ttk.Entry(bar, textvariable=self.expected, width=5).pack(side="left")
 
-        self.segue_button = ttk.Button(bar, text="Chercher les enchaînements",
-                                       command=self.start_segues, state="disabled")
-        self.segue_button.pack(side="left", padx=16)
+        # Pas de bouton « Chercher les enchaînements » : sur du matériel réel il
+        # ne produisait que des faux positifs, pour un cas de figure rare. La
+        # fonction reste disponible en ligne de commande (`concertcutter segues`).
 
         self.render_button = ttk.Button(bar, text="✂  Exporter…",
                                         command=self.start_render,
@@ -152,11 +154,10 @@ class App(tk.Tk):
             side="right", padx=8)
         ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(side="right")
 
-        self.titles_label = ttk.Label(bar, text="Aucune tracklist",
-                                      style="PanelMuted.TLabel")
-        self.titles_label.pack(side="right", padx=(0, 16))
-        ttk.Button(bar, text="Tracklist…", command=self.load_titles).pack(
-            side="right", padx=6)
+        # Pas de bouton pour charger une tracklist : les titres se saisissent
+        # directement dans la colonne Morceau du tableau, ce qui évite d'avoir
+        # à préparer un fichier texte à côté. La ligne de commande garde
+        # `--tracklist` pour le traitement par lot.
         return holder
 
     def _build_waveform(self) -> ttk.Frame:
@@ -166,6 +167,7 @@ class App(tk.Tk):
         self.wave.main.configure(height=210)
         self.wave.on_boundary_press = self._on_boundary_press
         self.wave.on_boundary_moved = self._on_boundary_moved
+        self.wave.on_boundary_clicked = self._on_boundary_clicked
         self.wave.on_seek = self._on_wave_click
         return holder
 
@@ -191,8 +193,6 @@ class App(tk.Tk):
                                         width=8)
         self.duration_label.pack(side="left", padx=(4, 14))
 
-        ttk.Button(bar, text="Tout", width=6, command=self.wave.reset_view).pack(
-            side="right", padx=2)
         ttk.Button(bar, text="+", width=3, command=lambda: self.wave.zoom(0.5)).pack(
             side="right", padx=2)
         ttk.Button(bar, text="−", width=3, command=lambda: self.wave.zoom(2.0)).pack(
@@ -264,7 +264,7 @@ class App(tk.Tk):
         self.tree = ttk.Treeview(table, columns=columns, show="headings", height=10)
         for column, label, width, anchor, stretch in (
             ("play", "", 38, "center", False),
-            ("index", "Morceau", 150, "w", True),
+            ("index", "Morceau  ✎", 150, "w", True),
             ("start", "Début", 88, "center", True),
             ("end", "Fin", 88, "center", True),
             ("duration", "Durée", 84, "center", True),
@@ -297,13 +297,25 @@ class App(tk.Tk):
         return holder
 
     def _bind_keys(self) -> None:
-        self.bind("<Delete>", lambda _e: self.delete_boundary())
-        self.bind("<space>", lambda _e: self.toggle_play())
-        self.bind("<c>", lambda _e: self.split_here())
-        self.bind("<Escape>", lambda _e: self.stop_playback())
-        self.bind("<Control-z>", lambda _e: self.undo())
-        self.bind("<Control-y>", lambda _e: self.redo())
-        self.bind("<Control-Shift-Z>", lambda _e: self.redo())
+        self._shortcut("<Delete>", self.delete_boundary)
+        self._shortcut("<space>", self.toggle_play)
+        self._shortcut("<c>", self.split_here)
+        self._shortcut("<Escape>", self.stop_playback)
+        self._shortcut("<Control-z>", self.undo)
+        self._shortcut("<Control-y>", self.redo)
+        self._shortcut("<Control-Shift-Z>", self.redo)
+
+    def _shortcut(self, sequence: str, action) -> None:
+        """Raccourci global, neutralisé pendant une saisie.
+
+        Les liaisons posées sur la fenêtre se déclenchent aussi quand le focus
+        est dans un champ : sans ce garde-fou, taper « c » dans un réglage ou
+        dans un titre coupait le morceau, et une espace lançait la lecture.
+        """
+        self.bind(sequence, lambda _event: None if self._typing() else action())
+
+    def _typing(self) -> bool:
+        return isinstance(self.focus_get(), (ttk.Entry, tk.Entry, ttk.Combobox))
 
     # -- journal -----------------------------------------------------------
 
@@ -347,11 +359,9 @@ class App(tk.Tk):
         ])
         self.analyze_button.configure(state="normal")
         self.render_button.configure(state="disabled")
-        self.segue_button.configure(state="disabled")
 
         self.wave.set_source(str(self.source))
         self.wave.set_segments([])
-        self.wave.set_candidates([])
         self.wave.set_envelope(np.zeros(0), 4.0, info.duration)
         self.wave.set_placeholder("Chargement de la forme d'onde…")
         self._refresh_table()
@@ -394,20 +404,6 @@ class App(tk.Tk):
             ttk.Label(self.chips, text=value, style="Chip.TLabel").pack(
                 side="left", padx=3)
 
-    def load_titles(self) -> None:
-        chosen = filedialog.askopenfilename(
-            title="Tracklist", filetypes=[("Texte", "*.txt"), ("Tous", "*.*")]
-        )
-        if not chosen:
-            return
-        self.titles = load_tracklist(chosen)
-        self.titles_label.configure(text=f"{len(self.titles)} titres")
-        if self.analysis and len(self.titles) != len(self.analysis.tracks):
-            self._set_status(
-                f"Attention : {len(self.titles)} titres pour "
-                f"{len(self.analysis.tracks)} morceaux détectés.", log=True)
-        self._refresh_table()
-
     # -- analyse -----------------------------------------------------------
 
     def start_analysis(self) -> None:
@@ -439,56 +435,15 @@ class App(tk.Tk):
         except Exception:
             self._events.put(("error", traceback.format_exc()))
 
-    # -- enchaînements -----------------------------------------------------
-
-    def start_segues(self) -> None:
-        if self._busy or not (self.analysis and self.features):
-            return
-        if not self.features.has_chroma:
-            messagebox.showinfo("Descripteurs incomplets",
-                                "Relancer l'analyse pour calculer le chroma.")
-            return
-        self._set_busy(True, "Recherche d'enchaînements…")
-        self.progress.configure(mode="indeterminate")
-        self.progress.start(12)
-        threading.Thread(target=self._run_segues, daemon=True).start()
-
-    def _run_segues(self) -> None:
-        try:
-            candidates, _ = find_segues(self.analysis, self.features, None, SegueParams())
-            self._events.put(("segues", candidates))
-        except Exception:
-            self._events.put(("error", traceback.format_exc()))
-
-    def _on_segues_done(self, candidates) -> None:
-        self.progress.stop()
-        self.progress.configure(mode="determinate", value=0)
-        self._set_busy(False)
-        self.wave.set_candidates([c.time for c in candidates])
-        if not candidates:
-            self._set_status("Aucun enchaînement suspect détecté.", log=True)
-            return
-        times = ", ".join(_hms(c.time) for c in candidates)
-        self._set_status(
-            f"{len(candidates)} enchaînement(s) possible(s) en pointillé jaune : "
-            f"{times}. Écouter avant de couper — la liste contient des faux positifs.",
-            log=True)
-
     # -- rendu -------------------------------------------------------------
 
     def start_render(self) -> None:
         if self._busy or not self.analysis:
             return
-        out_dir = filedialog.askdirectory(title="Dossier de sortie")
+        out_dir = filedialog.askdirectory(
+            title="Où placer le dossier du concert ?")
         if not out_dir:
             return
-        if self.titles and len(self.titles) != len(self.analysis.tracks):
-            if not messagebox.askyesno(
-                "Tracklist incohérente",
-                f"{len(self.titles)} titres pour {len(self.analysis.tracks)} morceaux "
-                "détectés. Continuer quand même ?",
-            ):
-                return
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
@@ -502,22 +457,77 @@ class App(tk.Tk):
                                  "Les réglages de montage doivent être numériques.")
             return
 
+        # Les titres viennent des segments eux-mêmes ; ceux restés vides
+        # retombent sur « Piste 01 », « Piste 02 »… côté rendu.
+        titles = [track.title for track in self.analysis.tracks]
+
+        # Le concert reçoit son propre dossier dans l'emplacement choisi : on
+        # désigne un emplacement une fois, sans préparer un dossier vierge à
+        # chaque export.
+        target = self._resolve_target(
+            concert_dir(out_dir, self.analysis), titles, params)
+        if target is None:
+            return
+        out_dir, replace = target
+
         self._set_busy(True, "Export en cours…")
         self.progress.configure(mode="determinate", value=0,
                                 maximum=len(self.analysis.tracks))
         threading.Thread(target=self._run_render,
-                         args=(self.analysis, out_dir, self.titles, params),
+                         args=(self.analysis, str(out_dir), titles, params, replace),
                          daemon=True).start()
 
-    def _run_render(self, analysis: Analysis, out_dir: str, titles, params) -> None:
+    def _resolve_target(self, out_dir: Path, titles, params):
+        """Vérifie le dossier avant d'écrire. Retourne (dossier, remplacer) ou None.
+
+        Le contrôle se fait à blanc, sans rien écrire : un export précédent ne
+        doit pas être détruit pendant qu'on demande à l'utilisateur ce qu'il
+        veut en faire.
+        """
+        try:
+            check_output(self.analysis, out_dir, titles, params)
+        except ExportConflict as conflict:
+            return self._ask_conflict(out_dir, conflict)
+        except (ValueError, OSError):
+            pass  # les vrais problèmes remonteront au rendu, avec leur message
+        return out_dir, False
+
+    def _ask_conflict(self, out_dir: Path, conflict: ExportConflict):
+        """Trois issues : nouveau dossier, remplacement, ou abandon."""
+        proposed = unique_dir(out_dir)
+        detail = []
+        if conflict.overwritten:
+            detail.append(f"{len(conflict.overwritten)} fichier(s) seraient écrasés")
+        if conflict.leftovers:
+            detail.append(
+                f"{len(conflict.leftovers)} fichier(s) d'un export précédent "
+                "resteraient mélangés aux nouveaux")
+
+        answer = messagebox.askyesnocancel(
+            "Ce dossier contient déjà un export",
+            f"{out_dir}\n\n" + "\n".join(f"• {line}" for line in detail) +
+            f"\n\nOui — écrire dans un nouveau dossier :\n     {proposed.name}"
+            f"\nNon — remplacer l'export précédent"
+            f"\nAnnuler — ne rien faire",
+        )
+        if answer is None:
+            self._set_status("Export annulé.")
+            return None
+        if answer:
+            self._set_status(f"Export vers {proposed.name}.", log=True)
+            return proposed, False
+        self._set_status("Remplacement de l'export précédent.", log=True)
+        return out_dir, True
+
+    def _run_render(self, analysis: Analysis, out_dir: str, titles, params,
+                    replace: bool) -> None:
         try:
             result = render(
                 analysis, out_dir, titles, params,
                 on_progress=lambda done, total, name: self._events.put(
                     ("progress", (done, total, name))),
+                replace=replace,
             )
-            write_audacity_labels(analysis, Path(out_dir) / "reperes.txt")
-            analysis.to_json(Path(out_dir) / "segments.json")
             self._events.put(("rendered", result))
         except Exception:
             self._events.put(("error", traceback.format_exc()))
@@ -536,8 +546,6 @@ class App(tk.Tk):
                     done, total, name = payload
                     self.progress.configure(value=done, maximum=total)
                     self._set_status(f"Export {done}/{total} — {name}")
-                elif kind == "segues":
-                    self._on_segues_done(payload)
                 elif kind == "rendered":
                     self._on_render_done(payload)
                 elif kind == "error":
@@ -557,13 +565,11 @@ class App(tk.Tk):
         self.wave.set_source(str(self.source) if self.source else None)
         self.wave.set_envelope(features.rms_db, features.fps, analysis.duration)
         self.wave.set_segments(analysis.segments)
-        self.wave.set_candidates([])
         self.history.clear()  # une nouvelle analyse rend l'historique caduc
         self.seek.set_duration(analysis.duration)
         self.duration_label.configure(text=_hms(analysis.duration))
         self._refresh_table()
         self.render_button.configure(state="normal")
-        self.segue_button.configure(state="normal")
 
         separation = analysis.params.get("separation_db", 0.0)
         self._set_status(f"{len(analysis.tracks)} morceaux détectés — "
@@ -576,7 +582,9 @@ class App(tk.Tk):
         self._set_status(f"Export terminé : {result['out_dir']}", log=True)
         messagebox.showinfo(
             "Export terminé",
-            f"{len(result['tracks'])} piste(s) écrite(s) dans :\n{result['out_dir']}")
+            f"{len(result['tracks'])} piste(s) écrite(s) dans :\n{result['out_dir']}"
+            f"\n\nLes repères, la cue sheet et la segmentation sont dans le "
+            f"sous-dossier « {DATA_DIR} ».")
 
     def _on_error(self, detail: str) -> None:
         self.progress.stop()
@@ -664,11 +672,20 @@ class App(tk.Tk):
     # -- édition -----------------------------------------------------------
 
     def _on_boundary_selected(self, index: int | None) -> None:
+        """Sélection seule : on n'écoute pas.
+
+        La lecture démarrait ici, donc saisir une frontière pour la déplacer
+        lançait le son au moment même où on ajustait la coupe. L'écoute se
+        déclenche désormais sur un clic franc, sans déplacement.
+        """
         self.delete_button.configure(state="normal" if index is not None else "disabled")
-        if index is not None and self.analysis:
-            boundary = self.analysis.segments[index + 1].start
-            self.play_from(max(0.0, boundary - PREVIEW_LEAD_S))
-            self._set_status(f"Écoute de la coupe à {_hms(boundary)}.")
+
+    def _on_boundary_clicked(self, index: int) -> None:
+        if not self.analysis:
+            return
+        boundary = self.analysis.segments[index + 1].start
+        self.play_from(max(0.0, boundary - PREVIEW_LEAD_S))
+        self._set_status(f"Écoute de la coupe à {_hms(boundary)}.")
 
     def _on_boundary_press(self) -> None:
         """La vue prévient avant de commencer un glissé : on mémorise ici.
@@ -852,6 +869,11 @@ class App(tk.Tk):
     # -- tableau -----------------------------------------------------------
 
     def _refresh_table(self) -> None:
+        # Un éditeur ouvert flotte au-dessus d'une ligne qui va disparaître :
+        # le laisser en place le ferait pointer sur un segment sans rapport.
+        if self._title_editor is not None:
+            editor, self._title_editor = self._title_editor, None
+            editor.destroy()
         self.tree.delete(*self.tree.get_children())
         self._playing_row = None
         self._play_cell_active = None
@@ -871,9 +893,8 @@ class App(tk.Tk):
                 # pistes distinctes.
                 label = "  ↳"
             else:
-                label = f"{number}"
-                if self.titles and number <= len(self.titles):
-                    label = f"{number}. {self.titles[number - 1]}"
+                title = segment.title.strip()
+                label = f"{number}. {title}" if title else f"{number}."
             self.tree.insert(
                 "", "end", iid=str(position),
                 values=(GLYPH_PLAY, label, _hms(segment.start), _hms(segment.end),
@@ -909,7 +930,7 @@ class App(tk.Tk):
         self._play_cell_active = active
 
     def _on_table_click(self, event):
-        """Clic sur la colonne de lecture ou sur la colonne Action."""
+        """Clic sur la colonne de lecture, le titre, ou l'action."""
         if self.tree.identify_region(event.x, event.y) != "cell":
             return None
         row = self.tree.identify_row(event.y)
@@ -923,7 +944,59 @@ class App(tk.Tk):
         if column == ACTION_COLUMN:
             self.open_action_menu(int(row), event.x_root, event.y_root)
             return "break"
+        if column == TITLE_COLUMN:
+            self.edit_title(row)
+            return "break"
         return None
+
+    # -- titres ------------------------------------------------------------
+
+    def edit_title(self, row: str) -> None:
+        """Saisie du titre directement dans la cellule.
+
+        Seul le segment qui ouvre un morceau est éditable : les blancs n'ont
+        pas de titre, et une suite rattachée (`↳`) appartient au morceau
+        commencé plus haut, dont le titre est déjà affiché là-bas.
+        """
+        if not self.analysis or self._title_editor is not None:
+            return
+        position = int(row)
+        numbers = self.analysis.track_numbers()
+        number = numbers[position]
+        if number is None or (position and numbers[position - 1] == number):
+            return
+
+        box = self.tree.bbox(row, "index")
+        if not box:
+            return
+
+        segment = self.analysis.segments[position]
+        editor = ttk.Entry(self.tree)
+        editor.insert(0, segment.title)
+        editor.place(x=box[0], y=box[1], width=box[2], height=box[3])
+        editor.focus_set()
+        editor.select_range(0, "end")
+        self._title_editor = editor
+
+        def finish(commit: bool):
+            if self._title_editor is None:
+                return "break"      # déjà fermé : le focus perdu suit la validation
+            value = editor.get().strip()
+            self._title_editor = None
+            editor.destroy()
+            if commit and value != segment.title:
+                self._remember()
+                segment.title = value
+                self._refresh_table()
+                self._set_status(
+                    f"Morceau {number} nommé « {value} »." if value
+                    else f"Titre du morceau {number} effacé.", log=True)
+            return "break"
+
+        editor.bind("<Return>", lambda _e: finish(True))
+        editor.bind("<KP_Enter>", lambda _e: finish(True))
+        editor.bind("<FocusOut>", lambda _e: finish(True))
+        editor.bind("<Escape>", lambda _e: finish(False))
 
     def _on_table_right_click(self, event):
         """Clic droit n'importe où sur la ligne : même menu."""
@@ -936,11 +1009,26 @@ class App(tk.Tk):
 
     def _on_table_hover(self, event) -> None:
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
-        interactive = (
-            self.tree.identify_region(event.x, event.y) == "cell"
-            and self.tree.identify_column(event.x) in (PLAY_COLUMN, ACTION_COLUMN)
-        )
-        self.tree.configure(cursor="hand2" if interactive else "")
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            self.tree.configure(cursor="")
+            return
+        column = self.tree.identify_column(event.x)
+        if column in (PLAY_COLUMN, ACTION_COLUMN):
+            self.tree.configure(cursor="hand2")
+        elif column == TITLE_COLUMN and self._is_track_start(self.tree.identify_row(event.y)):
+            self.tree.configure(cursor="xterm")
+        else:
+            self.tree.configure(cursor="")
+
+    def _is_track_start(self, row: str) -> bool:
+        """Vrai si la ligne ouvre un morceau, donc porte un titre modifiable."""
+        if not (self.analysis and row):
+            return False
+        position = int(row)
+        numbers = self.analysis.track_numbers()
+        if not (0 <= position < len(numbers)) or numbers[position] is None:
+            return False
+        return not (position and numbers[position - 1] == numbers[position])
 
     def _toggle_row_playback(self, row: str) -> None:
         """Joue le segment de la ligne, ou le met en pause s'il tourne déjà."""
@@ -973,7 +1061,6 @@ class App(tk.Tk):
         state = "disabled" if busy else "normal"
         self.analyze_button.configure(state=state if self.source else "disabled")
         self.render_button.configure(state=state if self.analysis else "disabled")
-        self.segue_button.configure(state=state if self.analysis else "disabled")
         if message:
             self._set_status(message, log=True)
 

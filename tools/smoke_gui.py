@@ -80,6 +80,47 @@ def main(wav: Path) -> int:
     ok &= check("action lisible avec son chevron",
                 app.tree.set(first, "action").endswith("▾"))
 
+    print("\nSaisie du titre dans le tableau")
+    start_row = next(r for r in app.tree.get_children() if app._is_track_start(r))
+    app.edit_title(start_row)
+    app.update()
+    ok &= check("éditeur ouvert sur un début de morceau", app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "Le Long Chemin")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+        ok &= check("éditeur refermé", app._title_editor is None)
+        ok &= check("titre stocké sur le segment",
+                    analysis.segments[int(start_row)].title == "Le Long Chemin")
+        ok &= check("titre visible dans le tableau",
+                    "Le Long Chemin" in app.tree.set(start_row, "index"))
+        ok &= check("titre repris par le morceau",
+                    any(t.title == "Le Long Chemin" for t in analysis.tracks))
+        app.undo()
+        app.update()
+        ok &= check("renommage annulable",
+                    analysis.segments[int(start_row)].title == "")
+        app.redo()
+        app.update()
+
+    gap_row = next(r for r in app.tree.get_children() if not app._is_track_start(r))
+    app.edit_title(gap_row)
+    ok &= check("blanc non éditable", app._title_editor is None)
+
+    print("\nRaccourcis neutralisés pendant une saisie")
+    app.edit_title(start_row)
+    app.update()
+    app._title_editor.focus_force()
+    app.update()
+    ok &= check("saisie détectée", app._typing())
+    segments_before = len(analysis.segments)
+    app.event_generate("<c>")       # ne doit pas déclencher « Couper ici »
+    app.update()
+    ok &= check("« c » n'a pas coupé", len(analysis.segments) == segments_before)
+    app._title_editor.event_generate("<Escape>")
+    app.update()
+
     print("\nChoix de l'action par menu")
     music_pos = next(i for i, s in enumerate(analysis.segments) if s.kind == "music")
     menu = app.build_action_menu(music_pos)
@@ -201,30 +242,45 @@ def main(wav: Path) -> int:
         i for i in range(len(analysis.segments) - 1)
         if analysis.segments[i].duration > 10 and analysis.segments[i + 1].duration > 10
     )
+    app.player.load(wav)
+    app.stop_playback()
     app.wave.select(boundary)
-    moment = analysis.segments[boundary + 1].start
-    app.wave._preview_move(moment + 3.0)
-    app._on_boundary_moved(boundary, moment + 3.0)
     app.update()
-    ok &= check("frontière déplacée",
-                abs(analysis.segments[boundary + 1].start - (moment + 3.0)) < 1e-6)
+    ok &= check("sélectionner une frontière ne lance pas la lecture",
+                app.player.state != "playing")
+
+    moment = analysis.segments[boundary + 1].start
+    # Le geste est rejoué en pixels : sur la vue entière, un pixel vaut plus
+    # d'une seconde. On zoome pour que l'aller-retour temps/pixel soit fidèle.
+    app.wave.zoom(60.0 / analysis.duration, moment)
+    app.wave.center_on(moment)
+    app.update()
+
+    _simulate_drag(app.wave, boundary, moment, moment + 3.0)
+    app.update()
+    ok &= check("glisser une frontière ne lance pas la lecture",
+                app.player.state != "playing")
+    moved = analysis.segments[boundary + 1].start
+    ok &= check(f"frontière déplacée ({moved - moment:+.2f} s)",
+                abs(moved - (moment + 3.0)) < 0.3)
     ok &= check("segments contigus après déplacement", _contiguous(analysis.segments))
     app.undo()
     app.update()
     ok &= check("déplacement annulable",
                 abs(analysis.segments[boundary + 1].start - moment) < 1e-6)
+    app.wave.reset_view()
 
-    print("\nRecherche d'enchaînements")
-    app._run_segues()
-    kind, payload = app._events.get(timeout=120)
-    ok &= check("recherche terminée sans erreur", kind == "segues")
-    if kind == "segues":
-        app._on_segues_done(payload)
-        app.update()
-        ok &= check(f"{len(payload)} candidat(s), repères posés",
-                    len(app.wave._candidates) == len(payload))
-        ok &= check("segments inchangés par la recherche",
-                    _contiguous(analysis.segments))
+    print("\nClic franc sur une frontière : écoute")
+    if app.player.available:
+        app.stop_playback()
+        before_position = analysis.segments[boundary + 1].start
+        _simulate_click(app.wave, boundary, before_position)
+        time.sleep(0.3)
+        ok &= check("un clic sans déplacement lance l'écoute",
+                    app.player.state == "playing")
+        ok &= check("et ne déplace pas la frontière",
+                    abs(analysis.segments[boundary + 1].start - before_position) < 1e-6)
+        app.stop_playback()
 
     print("\nLecteur")
     ok &= check("MCI disponible", app.player.available)
@@ -304,6 +360,17 @@ def main(wav: Path) -> int:
     ok &= check("état sous le bouton",
                 app.status.winfo_rooty() > app.analyze_button.winfo_rooty())
 
+    print("\nDossier d'export")
+    import shutil
+    from concertcutter.render import RenderParams
+    target = Path("test/_smoke_export")
+    shutil.rmtree(target, ignore_errors=True)
+    titles = [t.title for t in analysis.tracks]
+    resolved = app._resolve_target(target, titles, RenderParams())
+    ok &= check("dossier vierge accepté sans question",
+                resolved == (target, False))
+    shutil.rmtree(target, ignore_errors=True)
+
     print("\nGarde-fous")
     app.wave.select(None)
     app.delete_boundary()  # ne doit rien faire ni lever
@@ -315,6 +382,34 @@ def main(wav: Path) -> int:
     app.destroy()
     print("\n" + ("TOUT PASSE" if ok else "DES TESTS ECHOUENT"))
     return 0 if ok else 1
+
+
+class _Event:
+    """Événement Tk minimal, pour rejouer un geste souris sans souris."""
+
+    def __init__(self, x: int) -> None:
+        self.x = x
+        self.y = 10
+        self.x_root = x
+        self.y_root = 10
+
+
+def _simulate_drag(wave, boundary: int, start_s: float, end_s: float) -> None:
+    """Presse sur une frontière, la déplace franchement, relâche."""
+    wave._on_press(_Event(int(wave._x(start_s))))
+    wave._selected = boundary
+    wave._drag_mode = "boundary"
+    wave._on_drag(_Event(int(wave._x(end_s))))
+    wave._on_release(_Event(int(wave._x(end_s))))
+
+
+def _simulate_click(wave, boundary: int, at_s: float) -> None:
+    """Presse et relâche au même endroit : un clic, pas un glissé."""
+    x = int(wave._x(at_s))
+    wave._on_press(_Event(x))
+    wave._selected = boundary
+    wave._drag_mode = "boundary"
+    wave._on_release(_Event(x))
 
 
 def _canvas_has_text(canvas, needle: str) -> bool:
