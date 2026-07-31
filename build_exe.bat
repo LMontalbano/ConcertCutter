@@ -12,6 +12,14 @@ rem               heures a analyser, c'est negligeable.
 rem --windowed  : pas de fenetre noire derriere l'interface.
 rem --collect-all soundfile : libsndfile_x64.dll vit dans un sous-dossier de
 rem               donnees du paquet, que la detection automatique rate.
+rem --add-data  : les images de l'interface (fonds de boutons, icones, logo).
+rem               Ce sont des donnees, pas des modules : sans cette ligne
+rem               l'executable demarre mais sans icone ni boutons arrondis.
+rem --icon      : icone de l'executable lui-meme, dans l'explorateur.
+rem
+rem Ces reglages vivent ici et non dans ConcertCutter.spec : --noconfirm
+rem reecrit le .spec a chaque construction, et il est de toute facon ignore
+rem par git. Tout ce qu'on y ecrirait a la main serait perdu.
 
 cd /d "%~dp0"
 
@@ -33,6 +41,8 @@ python -m PyInstaller ^
     --windowed ^
     --name ConcertCutter ^
     --collect-all soundfile ^
+    --add-data "concertcutter/ui/assets;concertcutter/ui/assets" ^
+    --icon concertcutter/ui/assets/icon.ico ^
     --exclude-module matplotlib ^
     --exclude-module scipy ^
     --exclude-module PIL ^

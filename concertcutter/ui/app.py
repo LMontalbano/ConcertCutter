@@ -39,7 +39,9 @@ from ..render import (
 )
 from ..segment import GAP, MUSIC, Analysis, Segment
 from ..spectral import SpectralFeatures, extract
-from . import theme
+from . import assets, theme
+from .card import Card
+from .collapsible import CHEVRON_OPEN, CHEVRON_SHUT, Section
 from .history import History
 from .player import PAUSED, PLAYING, Player
 from .seekbar import SeekBar
@@ -50,6 +52,17 @@ SPLIT_GAP_S = 2.0
 PLAY_COLUMN = "#1"
 TITLE_COLUMN = "#2"
 ACTION_COLUMN = "#7"
+
+# Largeur commune aux deux boutons de tête, en caractères : « Parcourir… » et
+# « ✂ Exporter… » se superposent au bord droit de la fenêtre, et deux largeurs
+# différentes s'y voyaient immédiatement.
+HEAD_BUTTON_W = 13
+
+# Le titre s'arrête là, et une colonne muette absorbe le reste : le tableau
+# occupe toute la largeur, mais ses colonnes restent groupées assez près pour
+# qu'une ligne se lise d'un seul coup d'œil. Les étirer toutes éloignait le
+# numéro du morceau de son horaire de deux mille pixels.
+TITLE_COLUMN_W = 420
 
 # Segoe UI ne fournit pas U+23F8 : il s'affichait en carré. Deux rectangles
 # verticaux donnent le même sens avec un glyphe présent dans la police.
@@ -65,6 +78,11 @@ class App(tk.Tk):
         self.minsize(1080, 720)
 
         theme.apply(self)
+        # Gardées sur l'instance : Tk ne retient pas ses PhotoImage, et une
+        # image ramassée par le GC laisse la fenêtre sans icône.
+        self._icons = assets.window_icons()
+        if self._icons:
+            self.iconphoto(True, *self._icons)
 
         self.source: Path | None = None
         self.analysis: Analysis | None = None
@@ -76,6 +94,9 @@ class App(tk.Tk):
         self._playing_row: str | None = None
         self._play_cell_active: str | None = None
         self._title_editor: ttk.Entry | None = None
+        self._title_commit = None
+        self._title_guard: str | None = None
+        self._settings_open = False
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -91,30 +112,33 @@ class App(tk.Tk):
         # de réglages. Les poids donnent ici le partage voulu entre la forme
         # d'onde et le tableau, les barres gardant leur hauteur naturelle.
         self.columnconfigure(0, weight=1)
-        for row, weight in enumerate((0, 0, 3, 0, 2, 0)):
+        for row, weight in enumerate((0, 0, 0, 3, 0, 2, 0)):
             self.rowconfigure(row, weight=weight)
 
         self._build_header().grid(row=0, column=0, sticky="ew")
         self._build_toolbar().grid(row=1, column=0, sticky="ew")
-        self._build_waveform().grid(row=2, column=0, sticky="nsew")
-        self._build_transport().grid(row=3, column=0, sticky="ew")
-        self._build_middle().grid(row=4, column=0, sticky="nsew")
-        self._build_log().grid(row=5, column=0, sticky="ew")
+        self._build_settings().grid(row=2, column=0, sticky="ew")
+        self._build_waveform().grid(row=3, column=0, sticky="nsew")
+        self._build_transport().grid(row=4, column=0, sticky="ew")
+        self._build_table().grid(row=5, column=0, sticky="nsew")
+        self._build_log().grid(row=6, column=0, sticky="ew")
+        self.settings_holder.grid_remove()   # replié au démarrage
+        self._refresh_settings_button()
         self._bind_keys()
 
     def _build_header(self) -> ttk.Frame:
-        header = ttk.Frame(self, style="Panel.TFrame", padding=(14, 10))
+        header = ttk.Frame(self, style="Panel.TFrame", padding=(18, 14))
         self.file_label = ttk.Label(header, text="Aucun fichier",
                                     style="FileName.TLabel")
         self.file_label.pack(side="left")
         ttk.Button(header, text="Parcourir…", command=self.open_file,
-                   style="Accent.TButton").pack(side="right")
+                   width=HEAD_BUTTON_W, style="Accent.TButton").pack(side="right")
         self.chips = ttk.Frame(header, style="Panel.TFrame")
-        self.chips.pack(side="right", padx=12)
+        self.chips.pack(side="right", padx=14)
         return header
 
     def _build_toolbar(self) -> ttk.Frame:
-        holder = ttk.Frame(self, style="Panel.TFrame", padding=(14, 0, 14, 10))
+        holder = ttk.Frame(self, style="Panel.TFrame", padding=(18, 0, 18, 12))
         holder.columnconfigure(0, weight=1)
 
         bar = ttk.Frame(holder, style="Panel.TFrame")
@@ -124,35 +148,42 @@ class App(tk.Tk):
         # reléguer en pied de fenêtre obligeait à traverser l'écran des yeux
         # pour savoir ce que l'analyse avait trouvé.
         report = ttk.Frame(holder, style="Panel.TFrame")
-        report.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        report.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         self.status = ttk.Label(report, text="Prêt.", style="PanelMuted.TLabel")
         self.status.pack(side="left")
+        # La barre n'apparaît que pendant un traitement : un couloir vide en
+        # permanence se lit comme une jauge bloquée à zéro.
         self.progress = ttk.Progressbar(report, mode="determinate", length=260)
-        self.progress.pack(side="right")
 
-        self.analyze_button = ttk.Button(bar, text="▶  Analyser",
-                                         command=self.start_analysis,
-                                         style="Go.TButton", state="disabled")
+        self.analyze_button = ttk.Button(bar, command=self.start_analysis,
+                                         style="Go.TButton", state="disabled",
+                                         compound="left")
+        _label_icon(self.analyze_button, "play_light", "Analyser", GLYPH_PLAY)
         self.analyze_button.pack(side="left")
 
         ttk.Label(bar, text="Morceaux attendus", style="PanelMuted.TLabel").pack(
-            side="left", padx=(16, 6))
+            side="left", padx=(18, 8))
         self.expected = tk.StringVar(value="")
         ttk.Entry(bar, textvariable=self.expected, width=5).pack(side="left")
+
+        self.settings_button = ttk.Button(bar, text="Réglages", style="Ghost.TButton",
+                                          compound="left", command=self._toggle_settings)
+        self.settings_button.pack(side="left", padx=(18, 0))
 
         # Pas de bouton « Chercher les enchaînements » : sur du matériel réel il
         # ne produisait que des faux positifs, pour un cas de figure rare. La
         # fonction reste disponible en ligne de commande (`concertcutter segues`).
 
-        self.render_button = ttk.Button(bar, text="✂  Exporter…",
+        self.render_button = ttk.Button(bar, text="Exporter…",
                                         command=self.start_render,
+                                        width=HEAD_BUTTON_W,
                                         style="Accent.TButton", state="disabled")
         self.render_button.pack(side="right")
 
         self.export_mode = tk.StringVar(value="Les deux")
         ttk.Combobox(bar, textvariable=self.export_mode, width=15, state="readonly",
                      values=("Album continu", "Pistes séparées", "Les deux")).pack(
-            side="right", padx=8)
+            side="right", padx=10)
         ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(side="right")
 
         # Pas de bouton pour charger une tracklist : les titres se saisissent
@@ -161,9 +192,19 @@ class App(tk.Tk):
         # `--tracklist` pour le traitement par lot.
         return holder
 
+    def _set_progress(self, visible: bool) -> None:
+        if visible:
+            self.progress.pack(side="right")
+        else:
+            self.progress.stop()
+            self.progress.pack_forget()
+
     def _build_waveform(self) -> ttk.Frame:
-        holder = ttk.Frame(self, padding=(14, 8, 14, 0))
-        self.wave = WaveformView(holder, on_select=self._on_boundary_selected)
+        holder = ttk.Frame(self, padding=(18, 10, 18, 0))
+        card = Card(holder, padding=10)
+        card.pack(fill="both", expand=True)
+        self.wave = WaveformView(card.body, on_select=self._on_boundary_selected,
+                                 framed=False)
         self.wave.pack(fill="both", expand=True)
         self.wave.main.configure(height=210)
         self.wave.on_boundary_press = self._on_boundary_press
@@ -173,104 +214,168 @@ class App(tk.Tk):
         return holder
 
     def _build_transport(self) -> ttk.Frame:
-        bar = ttk.Frame(self, padding=(14, 8))
+        """Écoute à gauche, édition à droite, séparées par des filets.
+
+        Six commandes sans rapport se suivaient sur une seule ligne : sur un
+        grand écran, elles s'éparpillaient sur deux mille pixels sans que rien
+        ne dise lesquelles allaient ensemble. Les filets verticaux marquent les
+        trois groupes — annuler, découper, zoomer.
+        """
+        bar = ttk.Frame(self, padding=(18, 10))
+        # En grille, et la barre de lecture seule extensible : en `pack`, dès
+        # que la fenêtre manquait de largeur, Tk rognait le dernier widget posé
+        # et « Annuler » se réduisait à un trait de trois pixels. C'est la barre
+        # de lecture qui doit céder, jamais les boutons.
+        bar.columnconfigure(2, weight=1, minsize=160)
 
         # Pas de bouton d'arrêt : il fonctionne, mais son effet est visuellement
         # identique à la pause — le son cesse, la position se fige. Deux boutons
         # pour un même résultat perçu ne font qu'encombrer.
-        self.play_button = ttk.Button(bar, text=GLYPH_PLAY, width=4,
-                                      style="Go.TButton",
-                                      command=self.toggle_play, state="disabled")
-        self.play_button.pack(side="left")
+        self.play_button = _glyph_button(bar, "play_light", GLYPH_PLAY,
+                                         self.toggle_play, style="Icon.Go.TButton",
+                                         state="disabled")
+        self.play_button.grid(row=0, column=0)
 
         self.position_label = ttk.Label(bar, text="00:00", style="Muted.TLabel",
                                         width=8, anchor="e")
-        self.position_label.pack(side="left", padx=(12, 4))
+        self.position_label.grid(row=0, column=1, padx=(14, 6))
 
         self.seek = SeekBar(bar, on_seek=self._on_seek_bar, on_scrub=self._on_scrub)
-        self.seek.pack(side="left", fill="x", expand=True, padx=6)
+        self.seek.grid(row=0, column=2, sticky="ew", padx=6)
 
         self.duration_label = ttk.Label(bar, text="00:00", style="Muted.TLabel",
                                         width=8)
-        self.duration_label.pack(side="left", padx=(4, 14))
+        self.duration_label.grid(row=0, column=3, padx=(6, 18))
 
-        ttk.Button(bar, text="+", width=3, command=lambda: self.wave.zoom(0.5)).pack(
-            side="right", padx=2)
-        ttk.Button(bar, text="−", width=3, command=lambda: self.wave.zoom(2.0)).pack(
-            side="right", padx=2)
-        ttk.Label(bar, text="Zoom", style="Muted.TLabel").pack(side="right", padx=(10, 4))
+        tools = ttk.Frame(bar)
+        tools.grid(row=0, column=4, sticky="e")
 
-        ttk.Button(bar, text="Couper ici (C)", command=self.split_here).pack(
-            side="right", padx=(14, 0))
-        self.delete_button = ttk.Button(bar, text="Supprimer la frontière (Suppr)",
+        # En toutes lettres plutôt qu'en flèches : Segoe UI dessine U+21B6 et
+        # U+21B7 comme deux arcs sans pointe, rigoureusement identiques à
+        # l'écran. Deux boutons qu'on ne peut pas distinguer ne valent rien,
+        # et le reste de la barre est déjà en texte.
+        self.undo_button = ttk.Button(tools, text="Annuler", command=self.undo,
+                                      state="disabled")
+        self.undo_button.pack(side="left")
+        self.redo_button = ttk.Button(tools, text="Rétablir", command=self.redo,
+                                      state="disabled")
+        self.redo_button.pack(side="left", padx=(8, 0))
+        self._rule(tools)
+
+        self.delete_button = ttk.Button(tools, text="Supprimer la frontière (Suppr)",
                                         command=self.delete_boundary, state="disabled")
-        self.delete_button.pack(side="right", padx=6)
+        self.delete_button.pack(side="left")
+        ttk.Button(tools, text="Couper ici (C)", command=self.split_here).pack(
+            side="left", padx=(8, 0))
+        self._rule(tools)
 
-        self.redo_button = ttk.Button(bar, text="↷", width=3, command=self.redo,
-                                      state="disabled")
-        self.redo_button.pack(side="right", padx=(6, 0))
-        self.undo_button = ttk.Button(bar, text="↶", width=3, command=self.undo,
-                                      state="disabled")
-        self.undo_button.pack(side="right", padx=(14, 0))
+        ttk.Label(tools, text="Zoom", style="Muted.TLabel").pack(side="left", padx=(0, 8))
+        _glyph_button(tools, "minus", "−", lambda: self.wave.zoom(2.0),
+                      style="Icon.TButton").pack(side="left", padx=2)
+        _glyph_button(tools, "plus", "+", lambda: self.wave.zoom(0.5),
+                      style="Icon.TButton").pack(side="left", padx=2)
         return bar
 
-    def _build_middle(self) -> ttk.Frame:
-        middle = ttk.Frame(self, padding=(14, 0))
-        self._build_settings(middle)
-        self._build_table(middle)
-        return middle
+    @staticmethod
+    def _rule(parent) -> None:
+        ttk.Separator(parent, orient="vertical").pack(side="left", fill="y", padx=16)
 
-    def _build_settings(self, parent) -> None:
-        column = ttk.Frame(parent, width=236)
-        column.pack(side="left", fill="y", padx=(0, 12))
-        column.pack_propagate(False)
+    def _build_settings(self) -> ttk.Frame:
+        """Bandeau horizontal, replié par défaut.
 
-        detection = ttk.Labelframe(column, text="  Détection  ", padding=10)
-        detection.pack(fill="x")
-        self.min_gap = self._field(detection, "Blanc minimum (s)", "6", 0)
-        self.min_song = self._field(detection, "Morceau minimum (s)", "75", 1)
+        Ces cinq valeurs se règlent une fois puis ne bougent plus de la
+        session. En colonne verticale permanente, elles prenaient un quart de
+        la largeur et laissaient sous elles une hauteur de vide ; à
+        l'horizontale sous la barre d'outils, elles tiennent sur une ligne et
+        se rangent d'un clic.
+        """
+        holder = ttk.Frame(self, style="Panel.TFrame", padding=(18, 0, 18, 14))
+        self.settings_holder = holder
 
-        editing = ttk.Labelframe(column, text="  Montage  ", padding=10)
-        editing.pack(fill="x", pady=(10, 0))
-        self.pad_start = self._field(editing, "Amorce avant (s)", "0.5", 0)
-        self.pad_end = self._field(editing, "Queue après (s)", "0.6", 1)
-        self.fade_ms = self._field(editing, "Fondus (ms)", "40", 2)
+        detection = ttk.Frame(holder, style="Panel.TFrame")
+        detection.pack(side="left")
+        ttk.Label(detection, text="Détection", style="Legend.TLabel").pack(
+            side="left", padx=(0, 14))
+        self.min_gap = self._field(detection, "Blanc minimum (s)", "6")
+        self.min_song = self._field(detection, "Morceau minimum (s)", "75")
 
-    def _field(self, parent, label: str, default: str, row: int) -> tk.StringVar:
-        ttk.Label(parent, text=label, style="Panel.TLabel").grid(
-            row=row, column=0, sticky="w", pady=3)
+        ttk.Separator(holder, orient="vertical").pack(side="left", fill="y", padx=18)
+
+        editing = ttk.Frame(holder, style="Panel.TFrame")
+        editing.pack(side="left")
+        ttk.Label(editing, text="Montage", style="Legend.TLabel").pack(
+            side="left", padx=(0, 14))
+        self.pad_start = self._field(editing, "Amorce avant (s)", "0.5")
+        self.pad_end = self._field(editing, "Queue après (s)", "0.6")
+        self.fade_ms = self._field(editing, "Fondus (ms)", "40")
+        return holder
+
+    def _field(self, parent, label: str, default: str) -> tk.StringVar:
+        cell = ttk.Frame(parent, style="Panel.TFrame")
+        cell.pack(side="left", padx=(0, 18))
+        ttk.Label(cell, text=label, style="PanelMuted.TLabel").pack(
+            side="left", padx=(0, 7))
         variable = tk.StringVar(value=default)
-        ttk.Entry(parent, textvariable=variable, width=7).grid(
-            row=row, column=1, sticky="e", padx=(8, 0))
-        parent.columnconfigure(0, weight=1)
+        ttk.Entry(cell, textvariable=variable, width=6).pack(side="left")
         return variable
 
-    def _build_table(self, parent) -> None:
-        holder = ttk.Frame(parent)
-        holder.pack(side="left", fill="both", expand=True)
+    def _toggle_settings(self) -> None:
+        self._settings_open = not self._settings_open
+        if self._settings_open:
+            self.settings_holder.grid()
+        else:
+            self.settings_holder.grid_remove()
+        self._refresh_settings_button()
+
+    def _refresh_settings_button(self) -> None:
+        """Le chevron porte l'état : plié vers la droite, ouvert vers le bas."""
+        name = "chevron_down" if self._settings_open else "chevron_right"
+        image = assets.icon(f"{name}_muted")
+        if image is not None:
+            self.settings_button.configure(image=image, text="  Réglages")
+        else:
+            glyph = CHEVRON_OPEN if self._settings_open else CHEVRON_SHUT
+            self.settings_button.configure(text=f"{glyph}  Réglages")
+
+    def _build_table(self) -> ttk.Frame:
+        holder = ttk.Frame(self, padding=(18, 0))
 
         head = ttk.Frame(holder)
-        head.pack(fill="x", pady=(0, 6))
+        head.pack(fill="x", pady=(0, 8))
         ttk.Label(head, text="Segments détectés", style="Title.TLabel").pack(side="left")
         self.count_label = ttk.Label(head, text="", style="Muted.TLabel")
         self.count_label.pack(side="right")
 
         self.summary = ttk.Label(holder, text="", style="Muted.TLabel")
-        self.summary.pack(side="bottom", fill="x", pady=(6, 0))
+        self.summary.pack(side="bottom", fill="x", pady=(8, 0))
 
-        table = ttk.Frame(holder)
+        card = Card(holder, padding=8, fill=theme.FIELD_BG)
+        card.pack(fill="both", expand=True)
+        # Retenue pour la désélection : un clic sur la barre de défilement ou
+        # sur l'en-tête doit compter comme un clic dans le tableau.
+        self._table_area = table = ttk.Frame(card.body, style="Field.TFrame")
         table.pack(fill="both", expand=True)
 
-        columns = ("play", "index", "start", "end", "duration", "confidence", "action")
-        self.tree = ttk.Treeview(table, columns=columns, show="headings", height=10)
+        columns = ("play", "index", "start", "end", "duration", "confidence",
+                   "action", "filler")
+        # Six lignes demandées, pas dix : la hauteur réclamée par le tableau est
+        # un plancher que la grille ne peut pas descendre, et à trente-deux
+        # pixels la ligne, dix lignes mangeaient la forme d'onde en 880 de haut.
+        # Le poids de la rangée lui rend la place dès que la fenêtre l'a.
+        self.tree = ttk.Treeview(table, columns=columns, show="headings", height=6)
+        # `filler` est la seule colonne extensible : elle prend toute la largeur
+        # excédentaire, sans en-tête ni contenu. Le tableau remplit donc la
+        # fenêtre — la teinte de la ligne court jusqu'au bord — pendant que les
+        # colonnes utiles gardent une largeur où elles se lisent ensemble.
         for column, label, width, anchor, stretch in (
-            ("play", "", 38, "center", False),
-            ("index", "Morceau  ✎", 150, "w", True),
-            ("start", "Début", 88, "center", True),
-            ("end", "Fin", 88, "center", True),
-            ("duration", "Durée", 84, "center", True),
-            ("confidence", "Confiance", 84, "center", True),
-            ("action", "Action", 132, "center", True),
+            ("play", "", 44, "center", False),
+            ("index", "Morceau", TITLE_COLUMN_W, "w", False),
+            ("start", "Début", 92, "center", False),
+            ("end", "Fin", 92, "center", False),
+            ("duration", "Durée", 92, "center", False),
+            ("confidence", "Confiance", 100, "center", False),
+            ("action", "Action", 150, "center", False),
+            ("filler", "", 0, "w", True),
         ):
             self.tree.heading(column, text=label, anchor=anchor)
             self.tree.column(column, width=width, minwidth=width, anchor=anchor,
@@ -287,17 +392,30 @@ class App(tk.Tk):
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scroll.set)
+        return holder
 
     def _build_log(self) -> ttk.Frame:
-        holder = ttk.Frame(self, padding=(14, 8, 14, 12))
-        self.log = tk.Text(holder, height=4, bg=theme.FIELD_BG, fg=theme.TEXT_MUTED,
-                           font=theme.FONT_MONO, relief="flat", wrap="none",
-                           highlightthickness=1, highlightbackground=theme.BORDER)
+        """Journal replié par défaut.
+
+        Il ne sert qu'après coup, quand quelque chose s'est mal passé ; le
+        déroulé courant se lit déjà dans la ligne d'état, sous les boutons. La
+        pastille de la section prévient qu'il s'y est écrit quelque chose.
+        """
+        holder = ttk.Frame(self, padding=(18, 8, 18, 14))
+        self.log_section = Section(holder, "Journal", expanded=False)
+        self.log_section.pack(fill="x")
+        self.log = tk.Text(self.log_section.body, height=6, bg=theme.FIELD_BG,
+                           fg=theme.TEXT_MUTED, font=theme.FONT_MONO, relief="flat",
+                           wrap="none", highlightthickness=1,
+                           highlightbackground=theme.BORDER)
         self.log.pack(fill="x")
         self.log.configure(state="disabled")
         return holder
 
     def _bind_keys(self) -> None:
+        # `add="+"` : la saisie d'un titre pose sa propre liaison sur le même
+        # événement le temps qu'elle dure, et les deux doivent cohabiter.
+        self.bind("<Button-1>", self._on_click_anywhere, add="+")
         self._shortcut("<Delete>", self.delete_boundary)
         self._shortcut("<space>", self.toggle_play)
         self._shortcut("<c>", self.split_here)
@@ -325,6 +443,7 @@ class App(tk.Tk):
         self.log.insert("end", f"[{time.strftime('%H:%M:%S')}] {message}\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+        self.log_section.flag()
 
     def _set_status(self, text: str, log: bool = False) -> None:
         self.status.configure(text=text)
@@ -381,6 +500,7 @@ class App(tk.Tk):
 
         # L'onde s'affiche avant toute analyse : voir l'allure du concert
         # oriente déjà les réglages, et un rectangle vide n'apprend rien.
+        self._set_progress(True)
         self.progress.configure(mode="indeterminate")
         self.progress.start(12)
         self._set_status("Chargement en cours…", log=True)
@@ -397,8 +517,7 @@ class App(tk.Tk):
     def _on_preview_ready(self, source: Path, levels, fps: float) -> None:
         if source != self.source:  # un autre fichier a été ouvert entre-temps
             return
-        self.progress.stop()
-        self.progress.configure(mode="determinate", value=0)
+        self._set_progress(False)
         self.wave.set_envelope(levels, fps, self.duration)
         self._set_status("Prêt. Écoute possible ; analyser pour découper.", log=True)
 
@@ -425,6 +544,7 @@ class App(tk.Tk):
             return
 
         self._set_busy(True, "Analyse en cours…")
+        self._set_progress(True)
         self.progress.configure(mode="indeterminate")
         self.progress.start(12)
         threading.Thread(target=self._run_analysis, args=(self.source, params),
@@ -476,6 +596,7 @@ class App(tk.Tk):
         out_dir, replace = target
 
         self._set_busy(True, "Export en cours…")
+        self._set_progress(True)
         self.progress.configure(mode="determinate", value=0,
                                 maximum=len(self.analysis.tracks))
         threading.Thread(target=self._run_render,
@@ -563,8 +684,7 @@ class App(tk.Tk):
         self.analysis = analysis
         self.features = features
         self.duration = analysis.duration
-        self.progress.stop()
-        self.progress.configure(mode="determinate", value=0)
+        self._set_progress(False)
         self._set_busy(False)
 
         self.wave.set_source(str(self.source) if self.source else None)
@@ -583,6 +703,7 @@ class App(tk.Tk):
             self._write_log(f"[!] {warning}")
 
     def _on_render_done(self, result: dict) -> None:
+        self._set_progress(False)
         self._set_busy(False)
         self._set_status(f"Export terminé : {result['out_dir']}", log=True)
         messagebox.showinfo(
@@ -592,7 +713,7 @@ class App(tk.Tk):
             f"sous-dossier « {DATA_DIR} ».")
 
     def _on_error(self, detail: str) -> None:
-        self.progress.stop()
+        self._set_progress(False)
         self._set_busy(False)
         last = detail.strip().splitlines()[-1]
         self._set_status("Erreur.", log=True)
@@ -626,8 +747,12 @@ class App(tk.Tk):
         self._refresh_play_cells()
 
     def _refresh_play_button(self) -> None:
-        self.play_button.configure(
-            text=GLYPH_PAUSE if self.player.state == PLAYING else GLYPH_PLAY)
+        playing = self.player.state == PLAYING
+        image = assets.icon("pause_light" if playing else "play_light")
+        if image is not None:
+            self.play_button.configure(image=image)
+        else:
+            self.play_button.configure(text=GLYPH_PAUSE if playing else GLYPH_PLAY)
 
     def _on_scrub(self, seconds: float) -> None:
         """Pendant le glissé : on ne bouge que l'affichage."""
@@ -813,14 +938,20 @@ class App(tk.Tk):
         if not self.analysis or not (0 <= position < len(self.analysis.segments)):
             return None
         self._action_choice = tk.StringVar(value=self.analysis.segments[position].kind)
+        # `activeborderwidth=0` : Tk dessine sinon un cadre en relief autour de
+        # la ligne survolée, par-dessus le fond bordeaux — un liseré gris qui
+        # trahit le menu système. La pastille de choix reprend le bordeaux, au
+        # lieu du noir par défaut.
         menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_BG, fg=theme.TEXT,
                        activebackground=theme.BURGUNDY,
                        activeforeground=theme.TEXT_ON_ACCENT,
+                       activeborderwidth=0, selectcolor=theme.BURGUNDY,
                        relief="solid", borderwidth=1, font=theme.FONT)
         for label, kind in (("Garder ce passage", MUSIC),
                             ("Supprimer ce passage", GAP)):
             menu.add_radiobutton(
                 label=label, value=kind, variable=self._action_choice,
+                hidemargin=False,
                 command=lambda k=kind: self.set_segment_kind(position, k))
         return menu
 
@@ -878,6 +1009,8 @@ class App(tk.Tk):
         # le laisser en place le ferait pointer sur un segment sans rapport.
         if self._title_editor is not None:
             editor, self._title_editor = self._title_editor, None
+            self._title_commit = None
+            self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
         self._playing_row = None
@@ -963,7 +1096,10 @@ class App(tk.Tk):
         pas de titre, et une suite rattachée (`↳`) appartient au morceau
         commencé plus haut, dont le titre est déjà affiché là-bas.
         """
-        if not self.analysis or self._title_editor is not None:
+        if not self.analysis:
+            return
+        self._commit_title()    # une saisie déjà ouverte se valide, pas l'inverse
+        if self._title_editor is not None:
             return
         position = int(row)
         numbers = self.analysis.track_numbers()
@@ -986,8 +1122,10 @@ class App(tk.Tk):
         def finish(commit: bool):
             if self._title_editor is None:
                 return "break"      # déjà fermé : le focus perdu suit la validation
+            self._release_title_guard()
             value = editor.get().strip()
             self._title_editor = None
+            self._title_commit = None
             editor.destroy()
             if commit and value != segment.title:
                 self._remember()
@@ -998,10 +1136,34 @@ class App(tk.Tk):
                     else f"Titre du morceau {number} effacé.", log=True)
             return "break"
 
+        def elsewhere(event):
+            """Un clic ailleurs vaut validation.
+
+            `<FocusOut>` ne suffit pas : la forme d'onde et la vue d'ensemble
+            sont des canevas, qui ne prennent pas le focus clavier. Cliquer
+            dessus laissait l'éditeur ouvert, la saisie en suspens et le titre
+            perdu au premier rafraîchissement du tableau.
+            """
+            if event.widget is not editor:
+                finish(True)
+
+        self._title_commit = finish
+        self._title_guard = self.bind("<Button-1>", elsewhere, add="+")
+
         editor.bind("<Return>", lambda _e: finish(True))
         editor.bind("<KP_Enter>", lambda _e: finish(True))
         editor.bind("<FocusOut>", lambda _e: finish(True))
         editor.bind("<Escape>", lambda _e: finish(False))
+
+    def _commit_title(self) -> None:
+        """Valide la saisie en cours, s'il y en a une."""
+        if self._title_commit is not None:
+            self._title_commit(True)
+
+    def _release_title_guard(self) -> None:
+        if self._title_guard is not None:
+            self.unbind("<Button-1>", self._title_guard)
+            self._title_guard = None
 
     def _on_table_right_click(self, event):
         """Clic droit n'importe où sur la ligne : même menu."""
@@ -1050,6 +1212,19 @@ class App(tk.Tk):
         segment = self.analysis.segments[int(row)]
         self.play_from(segment.start, segment.end, row=row)
 
+    def _on_click_anywhere(self, event) -> None:
+        """Un clic hors du tableau relâche la ligne sélectionnée.
+
+        La sélection ne se défaisait jamais : une ligne restait surlignée en
+        bordeaux longtemps après qu'on soit passé à autre chose, et donnait à
+        croire qu'elle était encore la cible des commandes d'édition — alors
+        que « Supprimer la frontière » agit, elle, sur la frontière choisie
+        dans la forme d'onde.
+        """
+        if not self.tree.selection() or _within(event.widget, self._table_area):
+            return
+        self.tree.selection_remove(*self.tree.selection())
+
     def _on_row_selected(self, _event) -> None:
         selection = self.tree.selection()
         if not selection or not self.analysis:
@@ -1068,6 +1243,39 @@ class App(tk.Tk):
         self.render_button.configure(state=state if self.analysis else "disabled")
         if message:
             self._set_status(message, log=True)
+
+
+def _label_icon(widget, name: str, label: str, fallback: str) -> None:
+    """Pose une icône à gauche d'un libellé, ou son glyphe de repli."""
+    image = assets.icon(name)
+    if image is not None:
+        widget.configure(image=image, text=f"  {label}")
+    else:
+        widget.configure(text=f"{fallback}  {label}")
+
+
+def _glyph_button(parent, name: str, fallback: str, command, **kwargs) -> ttk.Button:
+    """Bouton portant une icône, ou son glyphe de repli si elle manque.
+
+    Les icônes sont dessinées sur une grille commune, à graisse constante ; les
+    glyphes Unicode qu'elles remplacent venaient de familles différentes et se
+    retrouvaient à l'écran avec des poids et des tailles qui n'allaient pas
+    ensemble. Le repli garde l'application utilisable sans ses images.
+    """
+    image = assets.icon(name)
+    if image is None:
+        return ttk.Button(parent, text=fallback, width=3, command=command, **kwargs)
+    return ttk.Button(parent, image=image, command=command, **kwargs)
+
+
+def _within(widget, ancestor) -> bool:
+    """Vrai si `widget` est `ancestor` ou l'un de ses descendants.
+
+    La comparaison porte sur les chemins Tk, avec le point de séparation :
+    sans lui, « .!frame2 » passerait pour un descendant de « .!frame ».
+    """
+    path, root = str(widget), str(ancestor)
+    return path == root or path.startswith(root + ".")
 
 
 def _percent(confidence: float) -> str:

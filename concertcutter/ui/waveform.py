@@ -34,16 +34,28 @@ MIN_VIEW_S = 4.0
 
 
 class WaveformView(ttk.Frame):
-    def __init__(self, master, on_select: Callable[[int | None], None], **kwargs):
-        super().__init__(master, **kwargs)
+    def __init__(self, master, on_select: Callable[[int | None], None],
+                 framed: bool = True, **kwargs):
+        super().__init__(master, style="Card.TFrame", **kwargs)
 
-        self.main = tk.Canvas(self, bg=theme.PANEL_BG, highlightthickness=1,
+        # `framed=False` quand la vue est posée dans un cartouche arrondi :
+        # le liseré d'un pixel des canevas redessinerait sinon des angles
+        # droits à l'intérieur des coins arrondis.
+        edge = 1 if framed else 0
+        self.main = tk.Canvas(self, bg=theme.PANEL_BG, highlightthickness=edge,
                               highlightbackground=theme.BORDER)
-        self.main.pack(fill="both", expand=True)
-        self.overview = tk.Canvas(self, bg=theme.APP_BG, height=OVERVIEW_HEIGHT,
-                                  highlightthickness=1,
+        self.overview = tk.Canvas(self, bg=theme.OVERVIEW_BG,
+                                  height=OVERVIEW_HEIGHT,
+                                  highlightthickness=edge,
                                   highlightbackground=theme.BORDER)
-        self.overview.pack(fill="x", pady=(4, 0))
+
+        # La vue d'ensemble se réserve sa bande avant que la vue principale ne
+        # prenne le reste. Empilée après, `pack` servait d'abord la vue
+        # principale et la faisait disparaître entièrement dès que la fenêtre
+        # manquait de hauteur — or c'est la seule vue qui montre le concert en
+        # entier, donc la seule qui situe l'écoute quand on est zoomé.
+        self.overview.pack(side="bottom", fill="x", pady=(4, 0))
+        self.main.pack(side="top", fill="both", expand=True)
 
         self._envelope = np.zeros(0)
         self._fps = 4.0
@@ -285,7 +297,7 @@ class WaveformView(ttk.Frame):
         if len(self._envelope) == 0:
             self.main.create_text(
                 width // 2, height // 2, text=self._placeholder,
-                fill=theme.TEXT_MUTED, font=("Segoe UI", 11),
+                fill=theme.TEXT_MUTED, font=theme.FONT_TITLE,
             )
             self.overview.delete("all")
             return
@@ -410,7 +422,7 @@ class WaveformView(ttk.Frame):
 
     def _draw_ruler(self, width: int, height: int) -> None:
         self.main.create_rectangle(0, height, width, height + RULER_HEIGHT,
-                                   fill=theme.APP_BG, outline="")
+                                   fill=theme.OVERVIEW_BG, outline="")
         step = _tick_step(self._view_duration)
         first = int(self._view_start / step) * step
         moment = first
@@ -420,7 +432,7 @@ class WaveformView(ttk.Frame):
                 self.main.create_line(x, height, x, height + 5, fill=theme.TEXT_MUTED)
                 self.main.create_text(x + 2, height + 12, text=_hms(moment),
                                       anchor="w", fill=theme.TEXT_MUTED,
-                                      font=("Segoe UI", 7))
+                                      font=theme.FONT_TINY)
             moment += step
 
     def _draw_hint(self) -> None:
@@ -429,7 +441,7 @@ class WaveformView(ttk.Frame):
             return
         self.main.create_text(
             self.main.winfo_width() - 8, 8, text=self._hint, anchor="ne",
-            fill=theme.TEXT_MUTED, font=("Segoe UI", 8), tags="hint",
+            fill=theme.TEXT_MUTED, font=theme.FONT_SMALL, tags="hint",
         )
 
     def _draw_overview(self) -> None:
