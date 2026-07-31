@@ -186,17 +186,6 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.configure("Icon.Go.TButton", padding=(8, 4))
     style.configure("Ghost.TButton", padding=(10, 5))
 
-    # Hors de l'arrondi, l'image est transparente — et ce qui transparaît est le
-    # fond de fenêtre du widget, que ttk peint avec le `background` du style.
-    # Laissé au vert du bouton, il redessinait un carré plein derrière l'arrondi
-    # et annulait tout l'effet. Chaque style reçoit donc la couleur de la
-    # surface où il est effectivement posé.
-    for name in ("Accent.TButton", "Go.TButton", "Ghost.TButton",
-                 "TEntry", "TCombobox"):
-        style.configure(name, background=PANEL_BG)       # bandeau du haut
-    for name in ("TButton", "Icon.TButton", "Icon.Go.TButton"):
-        style.configure(name, background=APP_BG)         # barre de transport
-
     # La flèche de la liste déroulante gardait le cadre carré de « clam » au
     # bord du champ arrondi. Elle se fond maintenant dans le champ, et seule
     # sa pointe reste visible.
@@ -227,7 +216,40 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.map("Treeview", background=[("selected", BURGUNDY)],
               foreground=[("selected", TEXT_ON_ACCENT)])
 
+    _seat(style)
     return style
+
+
+# Surface d'accueil de chaque widget habillé : le bandeau crème clair du haut,
+# ou le fond général pour la barre de transport et le tableau.
+SEATING = {
+    PANEL_BG: ("Accent.TButton", "Go.TButton", "Ghost.TButton",
+               "TEntry", "TCombobox"),
+    APP_BG: ("TButton", "Icon.TButton", "Icon.Go.TButton"),
+}
+
+# États sur lesquels ttk repeint le fond de fenêtre d'un widget.
+SEAT_STATES = ("disabled", "pressed", "active", "focus", "readonly", "selected")
+
+
+def _seat(style: ttk.Style) -> None:
+    """Fixe le fond de fenêtre des widgets habillés, dans tous leurs états.
+
+    Hors de l'arrondi, l'image d'un bouton est transparente, et ce qui
+    transparaît est le fond de la fenêtre du widget — que ttk peint avec le
+    `background` du style. Le fixer sur le seul état par défaut ne suffit pas :
+    `style.map` le repeint au survol et à l'enfoncement avec la couleur du
+    bouton, qui ressortait alors en carré plein derrière l'arrondi. C'était
+    tout l'effet perdu au moment précis où l'on regarde le bouton.
+
+    Appelé en dernier, une fois toutes les autres règles posées : `map`
+    remplace la table d'un état au lieu de s'y ajouter, et n'importe quel
+    appel ultérieur annulerait celui-ci.
+    """
+    for surface, names in SEATING.items():
+        for name in names:
+            style.configure(name, background=surface)
+            style.map(name, background=[(state, surface) for state in SEAT_STATES])
 
 
 def _button(style: ttk.Style, name: str, bg: str, fg: str, border: str,
