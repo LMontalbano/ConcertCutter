@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
@@ -50,9 +50,16 @@ from .waveform import WaveformView
 
 PREVIEW_LEAD_S = 5.0
 SPLIT_GAP_S = 2.0
-PLAY_COLUMN = "#1"
-TITLE_COLUMN = "#2"
+TITLE_COLUMN = "#1"
+PLAY_COLUMN = "#7"
 ACTION_COLUMN = "#0"
+
+# Silhouette du segment, en blocs de hauteur croissante. La colonne qui la
+# porte s'étirait auparavant sans rien montrer : sur un grand écran, un tiers
+# du tableau restait vide. Un Treeview ne sait afficher que du texte dans ses
+# colonnes de valeurs — le dessin passe donc par des caractères.
+TRACK_CHARS = "▁▂▃▄▅▆▇█"
+TRACK_HEAD = "│"     # tête de lecture
 
 # Largeur commune aux deux boutons de tête, en caractères : « Parcourir… » et
 # « ✂ Exporter… » se superposent au bord droit de la fenêtre, et deux largeurs
@@ -94,6 +101,10 @@ class App(tk.Tk):
         self._busy = False
         self._playing_row: str | None = None
         self._play_cell_active: str | None = None
+        self._tracks: dict[str, str] = {}
+        self._track_row: str | None = None
+        self._track_char_px = 0
+        self._track_size = 0
         self._title_editor: ttk.Entry | None = None
         self._title_commit = None
         self._title_guard: str | None = None
@@ -355,8 +366,8 @@ class App(tk.Tk):
         self._table_area = table = ttk.Frame(card.body, style="Field.TFrame")
         table.pack(fill="both", expand=True)
 
-        columns = ("play", "index", "start", "end", "duration", "confidence",
-                   "filler")
+        columns = ("index", "start", "end", "duration", "confidence",
+                   "track", "play")
         # Six lignes demandées, pas dix : la hauteur réclamée par le tableau est
         # un plancher que la grille ne peut pas descendre, et à trente-deux
         # pixels la ligne, dix lignes mangeaient la forme d'onde en 880 de haut.
@@ -370,22 +381,27 @@ class App(tk.Tk):
         self.tree.heading("#0", text="Garder", anchor="center")
         self.tree.column("#0", width=74, minwidth=74, anchor="center",
                          stretch=False)
-        # `filler` est la seule colonne extensible : elle prend toute la largeur
-        # excédentaire, sans en-tête ni contenu. Le tableau remplit donc la
-        # fenêtre — la teinte de la ligne court jusqu'au bord — pendant que les
-        # colonnes utiles gardent une largeur où elles se lisent ensemble.
+        # `track` est la seule colonne extensible : elle prend toute la largeur
+        # excédentaire. Le tableau remplit donc la fenêtre, et cette largeur
+        # sert enfin à quelque chose — la silhouette du segment s'y étale au
+        # lieu d'un vide. Le bouton de lecture ferme la ligne, à droite.
         for column, label, width, anchor, stretch in (
-            ("play", "", 44, "center", False),
             ("index", "Morceau", TITLE_COLUMN_W, "w", False),
             ("start", "Début", 92, "center", False),
             ("end", "Fin", 92, "center", False),
             ("duration", "Durée", 92, "center", False),
             ("confidence", "Confiance", 100, "center", False),
-            ("filler", "", 0, "w", True),
+            ("track", "Piste", 260, "w", True),
+            ("play", "", 44, "center", False),
         ):
             self.tree.heading(column, text=label, anchor=anchor)
             self.tree.column(column, width=width, minwidth=width, anchor=anchor,
                              stretch=stretch)
+        # Largeur d'un bloc dans la police du tableau : c'est elle qui dit
+        # combien il en tient dans la colonne.
+        self._track_char_px = tkfont.Font(font=theme.FONT).measure(TRACK_CHARS[0])
+        self.tree.bind("<Configure>", self._on_table_resized, add="+")
+
         self.tree.tag_configure("music", background="#E4EDD9", foreground=theme.TEXT)
         self.tree.tag_configure("gap", background="#F6E3E4", foreground=theme.TEXT)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -801,6 +817,7 @@ class App(tk.Tk):
                 self._playing_row = None
             self._refresh_play_button()
             self._refresh_play_cells()
+            self._refresh_track_head()
         self.after(120, self._tick)
 
     def _on_close(self) -> None:
@@ -982,6 +999,8 @@ class App(tk.Tk):
             self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
+        self._tracks.clear()
+        self._track_row = None
         self._playing_row = None
         self._play_cell_active = None
         if not self.analysis:
@@ -1002,10 +1021,13 @@ class App(tk.Tk):
             else:
                 title = segment.title.strip()
                 label = f"{number}. {title}" if title else f"{number}."
+            track = self._segment_track(segment)
+            self._tracks[str(position)] = track
             self.tree.insert(
                 "", "end", iid=str(position), image=_check_image(segment.kind),
-                values=(GLYPH_PLAY, label, _hms(segment.start), _hms(segment.end),
-                        _hms(segment.duration), _percent(segment.confidence)),
+                values=(label, _hms(segment.start), _hms(segment.end),
+                        _hms(segment.duration), _percent(segment.confidence),
+                        track, GLYPH_PLAY),
                 tags=(segment.kind,))
 
         kept = sum(s.duration for s in self.analysis.tracks)
@@ -1017,6 +1039,83 @@ class App(tk.Tk):
             text=f"Conservé : {_hms(kept)}     Supprimé : {_hms(dropped)}     "
                  f"Source : {_hms(self.analysis.duration)}     "
                  f"({100 * kept / max(self.analysis.duration, 1e-9):.1f} % conservé)")
+
+    def _segment_track(self, segment) -> str:
+        """Silhouette du segment, tirée de l'enveloppe déjà calculée.
+
+        Rien à relire sur le disque : `features` porte le niveau image par
+        image, le même que celui sur lequel la détection a tranché. La ligne du
+        tableau montre donc exactement ce que la forme d'onde montre plus haut.
+        """
+        if self.features is None:
+            return ""
+        fps = self.features.fps
+        levels = np.clip((np.asarray(self.features.rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        first = max(0, int(segment.start * fps))
+        last = min(levels.size, int(segment.end * fps))
+        return _sparkline(levels[first:last], self._track_columns())
+
+    def _track_columns(self) -> int:
+        """Nombre de blocs qui tiennent dans la colonne, à sa largeur du moment.
+
+        Un compte figé laissait le vide qu'on cherchait justement à combler :
+        la colonne s'étire avec la fenêtre, la silhouette doit suivre.
+        """
+        if self._track_char_px <= 0:
+            return 30
+        width = int(self.tree.column("track", "width")) - 16
+        return max(8, min(400, width // self._track_char_px))
+
+    def _refresh_tracks(self) -> None:
+        """Redessine les silhouettes après un changement de largeur."""
+        if not self.analysis:
+            return
+        for row in self.tree.get_children():
+            segment = self.analysis.segments[int(row)]
+            track = self._segment_track(segment)
+            self._tracks[row] = track
+            self.tree.set(row, "track", track)
+        self._track_row = None
+
+    def _on_table_resized(self, _event=None) -> None:
+        wanted = self._track_columns()
+        if wanted == self._track_size:
+            return
+        self._track_size = wanted
+        self._refresh_tracks()
+
+    def _refresh_track_head(self) -> None:
+        """Pose la tête de lecture sur la ligne qui contient l'instant écouté.
+
+        Elle suit le son plutôt que la ligne cliquée : on peut lancer la lecture
+        depuis la forme d'onde, sans passer par une ligne, et c'est alors la
+        seule chose qui dise où l'on en est dans le tableau.
+        """
+        moment = self.player.position if self.player.state == PLAYING else None
+        row = None
+        if moment is not None and self.analysis:
+            for position, segment in enumerate(self.analysis.segments):
+                if segment.start <= moment < segment.end:
+                    row = str(position)
+                    break
+
+        if self._track_row is not None and self._track_row != row:
+            self._restore_track(self._track_row)
+        if row is None or not self.tree.exists(row):
+            self._track_row = None
+            return
+
+        segment = self.analysis.segments[int(row)]
+        track = self._tracks.get(row, "")
+        span = max(segment.duration, 1e-9)
+        index = int((moment - segment.start) / span * len(track)) if track else 0
+        index = max(0, min(len(track) - 1, index))
+        self.tree.set(row, "track", track[:index] + TRACK_HEAD + track[index + 1:])
+        self._track_row = row
+
+    def _restore_track(self, row: str) -> None:
+        if self.tree.exists(row) and row in self._tracks:
+            self.tree.set(row, "track", self._tracks[row])
 
     def _refresh_play_cells(self) -> None:
         """L'icône de la ligne suit l'état réel du lecteur.
@@ -1246,6 +1345,26 @@ def _within(widget, ancestor) -> bool:
 def _percent(confidence: float) -> str:
     """Confiance en pourcentage : « 0.70 » ne parle pas, « 70 % » si."""
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
+
+
+def _sparkline(levels, width: int) -> str:
+    """Niveaux ramenés à `width` blocs de hauteur croissante.
+
+    Moyenne et non crête : sur quatre minutes réduites à quelques dizaines de
+    caractères, les crêtes d'un morceau touchent presque toutes le haut de
+    l'échelle et la silhouette sort plate. La moyenne laisse voir les creux,
+    qui sont ce qu'on cherche à repérer d'un coup d'œil.
+    """
+    if levels.size == 0 or width <= 0:
+        return ""
+    edges = np.linspace(0, levels.size, width + 1).astype(int)
+    edges[1:] = np.maximum(edges[1:], edges[:-1] + 1)
+    starts = np.clip(edges[:-1], 0, levels.size - 1)
+    sums = np.add.reduceat(levels, starts)
+    counts = np.maximum(np.diff(np.append(starts, levels.size)), 1)
+    steps = np.clip((sums / counts * len(TRACK_CHARS)).astype(int),
+                    0, len(TRACK_CHARS) - 1)
+    return "".join(TRACK_CHARS[step] for step in steps)
 
 
 def _check_image(kind: str):
