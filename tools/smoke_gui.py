@@ -369,12 +369,47 @@ def main(wav: Path) -> int:
         ok &= check("la tête de piste est sur la même ligne",
                     app._track_row == heard)
 
+        # Tête posée depuis la forme d'onde, sans passer par une ligne : le
+        # bouton de la ligne écoutée doit suspendre, pas relancer au début.
+        segment = analysis.segments[music_position]
+        app.play_from(segment.start + 4.0)
+        time.sleep(0.7)
+        listened = app._row_at(app.player.position)
+        ok &= check(f"segment écouté repéré (ligne {listened})",
+                    listened == str(music_position))
+        app._toggle_row_playback(str(music_position))
+        time.sleep(0.3)
+        ok &= check("le bouton de la ligne écoutée suspend",
+                    app.player.state == "paused")
+        ok &= check("la lecture n'est pas repartie du début du segment",
+                    app.player.position > segment.start + 2.0)
+        app._toggle_row_playback(str(music_position))
+        time.sleep(0.3)
+        ok &= check("un second appui reprend", app.player.state == "playing")
+
         app.stop_playback()
         app._sync_playing_row()
         ok &= check("arrêt : plus aucune ligne active", app._playing_row is None)
         ok &= check("icônes toutes en lecture",
                     all(app.tree.set(r, "play") == GLYPH_PLAY
                         for r in app.tree.get_children()))
+
+    print("\nLargeur des mini pistes")
+    # Aucun appel direct au recalcul : c'est la chaine reelle qu'on teste —
+    # <Configure>, puis la reprise differee une fois la disposition retombee.
+    # Appele a la main, le controle passerait meme avec l'ancien code, qui
+    # lisait une largeur pas encore mise a jour.
+    app.geometry("1100x800")
+    app.update(); app.update()
+    etroit = len(app._tracks[app.tree.get_children()[0]])
+    app.geometry("1900x800")
+    app.update(); app.update()
+    large = len(app._tracks[app.tree.get_children()[0]])
+    ok &= check(f"la piste s'allonge avec la fenetre ({etroit} -> {large})",
+                large > etroit)
+    reste = int(app.tree.column("track", "width")) - large * app._track_char_px
+    ok &= check(f"la piste remplit la colonne (reste {reste} px)",
+                reste < 3 * app._track_char_px)
 
     print("\nBarre de progression")
     app.seek.set_duration(analysis.duration)

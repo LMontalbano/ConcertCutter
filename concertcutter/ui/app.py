@@ -105,6 +105,7 @@ class App(tk.Tk):
         self._track_row: str | None = None
         self._track_char_px = 0
         self._track_size = 0
+        self._track_pending = False
         self._title_editor: ttk.Entry | None = None
         self._title_commit = None
         self._title_guard: str | None = None
@@ -1077,6 +1078,23 @@ class App(tk.Tk):
         self._track_row = None
 
     def _on_table_resized(self, _event=None) -> None:
+        """Recalcule les pistes, une fois la disposition retombée.
+
+        La largeur d'une colonne étirée n'est à jour qu'après la passe de
+        disposition de ttk. Lue dans le `<Configure>` lui-même, elle vaut encore
+        l'ancienne : en passant en plein écran, la piste gardait sa longueur
+        d'avant et laissait un vide devant la colonne de lecture.
+
+        Le drapeau réduit la rafale d'événements d'un redimensionnement à un
+        seul recalcul.
+        """
+        if self._track_pending:
+            return
+        self._track_pending = True
+        self.after_idle(self._apply_track_width)
+
+    def _apply_track_width(self) -> None:
+        self._track_pending = False
         wanted = self._track_columns()
         if wanted == self._track_size:
             return
@@ -1271,16 +1289,26 @@ class App(tk.Tk):
         return not (position and numbers[position - 1] == numbers[position])
 
     def _toggle_row_playback(self, row: str) -> None:
-        """Joue le segment de la ligne, ou le met en pause s'il tourne déjà."""
+        """Joue le segment de la ligne, ou le met en pause si c'est lui qu'on entend.
+
+        La comparaison porte sur ce qui sort vraiment, et non sur la ligne dont
+        on a cliqué le bouton la dernière fois : déplacer la tête de lecture
+        dans la forme d'onde ne passe par aucune ligne, et le bouton du segment
+        écouté relançait alors sa lecture depuis le début au lieu de la
+        suspendre.
+        """
         if not self.analysis:
             return
-        if row == self._playing_row and self.player.state == PLAYING:
-            self.player.pause()
+        heard = (self._row_at(self.player.position)
+                 if self.player.state in (PLAYING, PAUSED) else None)
+        if row == heard:
+            if self.player.state == PLAYING:
+                self.player.pause()
+            else:
+                self.player.resume()
+            self._playing_row = row
             self._refresh_play_button()
-            return
-        if row == self._playing_row and self.player.state == PAUSED:
-            self.player.resume()
-            self._refresh_play_button()
+            self._sync_playing_row()
             return
         segment = self.analysis.segments[int(row)]
         self.play_from(segment.start, segment.end, row=row)
