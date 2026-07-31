@@ -166,7 +166,12 @@ def main(wav: Path) -> int:
         app.update()
         ok &= check("le clic a bascule le segment",
                     analysis.segments[music_pos].kind == "gap")
-        ok &= check("libelle du tableau mis a jour",
+        # Le pointeur reste sur la cellule : elle annonce le coup suivant.
+        ok &= check("la cellule annonce la bascule inverse",
+                    app.tree.set(str(music_pos), "action").endswith("Garder")
+                    and app.tree.set(str(music_pos), "action") != "Garder")
+        app.show_action_hint(None)
+        ok &= check("hors survol, le libelle redit l'etat",
                     app.tree.set(str(music_pos), "action") == "Supprimer")
         ok &= check("la bascule est annulable", app.history.can_undo)
 

@@ -92,6 +92,7 @@ class App(tk.Tk):
         self._events: queue.Queue = queue.Queue()
         self._busy = False
         self._playing_row: str | None = None
+        self._hot_action: str | None = None
         self._play_cell_active: str | None = None
         self._title_editor: ttk.Entry | None = None
         self._title_commit = None
@@ -181,7 +182,10 @@ class App(tk.Tk):
         self.render_button.pack(side="right")
 
         self._build_export_mode(bar).pack(side="right", padx=(10, 18))
-        ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(side="right")
+        # Aligné sur la première option et non centré sur la deuxième : c'est
+        # le titre de la pile, pas l'étiquette d'une de ses lignes.
+        ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(
+            side="right", anchor="n")
 
         # Pas de bouton pour charger une tracklist : les titres se saisissent
         # directement dans la colonne Morceau du tableau, ce qui évite d'avoir
@@ -204,10 +208,12 @@ class App(tk.Tk):
         """
         holder = ttk.Frame(parent, style="Panel.TFrame")
         self.export_mode = tk.StringVar(value="Les deux")
+        # Empilés : alignés à gauche sur une colonne, les trois intitulés se
+        # comparent d'un seul balayage vertical. À l'horizontale, il fallait
+        # relire chaque pastille pour retrouver laquelle portait le point.
         for value in ("Album continu", "Pistes séparées", "Les deux"):
             ttk.Radiobutton(holder, text=value, value=value,
-                            variable=self.export_mode).pack(side="left",
-                                                            padx=(0, 14))
+                            variable=self.export_mode).pack(anchor="w")
         return holder
 
     def _set_progress(self, visible: bool) -> None:
@@ -404,7 +410,7 @@ class App(tk.Tk):
         self.tree.bind("<<TreeviewSelect>>", self._on_row_selected)
         self.tree.bind("<Button-1>", self._on_table_click)
         self.tree.bind("<Motion>", self._on_table_hover)
-        self.tree.bind("<Leave>", lambda _e: self.tree.configure(cursor=""))
+        self.tree.bind("<Leave>", self._on_table_leave)
 
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.pack(side="right", fill="y")
@@ -991,6 +997,7 @@ class App(tk.Tk):
             self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
+        self._hot_action = None
         self._playing_row = None
         self._play_cell_active = None
         if not self.analysis:
@@ -1059,6 +1066,9 @@ class App(tk.Tk):
             return "break"
         if column == ACTION_COLUMN:
             self.toggle_segment(int(row))
+            # Le pointeur n'a pas bougé : sans ça, la cellule resterait muette
+            # jusqu'au prochain déplacement de souris.
+            self.show_action_hint(row)
             return "break"
         if column == TITLE_COLUMN:
             self.edit_title(row)
@@ -1147,14 +1157,55 @@ class App(tk.Tk):
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
         if self.tree.identify_region(event.x, event.y) != "cell":
             self.tree.configure(cursor="")
+            self.show_action_hint(None)
             return
         column = self.tree.identify_column(event.x)
+        row = self.tree.identify_row(event.y)
+        self.show_action_hint(row if column == ACTION_COLUMN else None)
         if column in (PLAY_COLUMN, ACTION_COLUMN):
             self.tree.configure(cursor="hand2")
-        elif column == TITLE_COLUMN and self._is_track_start(self.tree.identify_row(event.y)):
+        elif column == TITLE_COLUMN and self._is_track_start(row):
             self.tree.configure(cursor="xterm")
         else:
             self.tree.configure(cursor="")
+
+    def show_action_hint(self, row: str | None) -> None:
+        """Sous la souris, la cellule annonce ce qu'un clic en ferait.
+
+        Le curseur main ne se voit qu'une fois le pointeur déjà posé, et rien
+        d'autre ne disait que la colonne répondait au clic — le chevron qui le
+        laissait entendre est parti avec le menu. Une cellule de `Treeview` ne
+        peut pas être soulignée ni colorée à part des autres : son texte est la
+        seule chose qu'on puisse changer pour elle seule.
+
+        Annoncer la destination plutôt que l'état vaut mieux qu'un simple
+        surlignage : on sait avant de cliquer si l'on va garder ou supprimer,
+        sans avoir à se souvenir de ce que la bascule inverse.
+        """
+        if row == self._hot_action:
+            return
+        self._restore_action_cell()
+        if not (row and self.analysis and self.tree.exists(row)):
+            return
+        position = int(row)
+        if not 0 <= position < len(self.analysis.segments):
+            return
+        current = self.analysis.segments[position].kind
+        self.tree.set(row, "action", _action_hint(GAP if current == MUSIC else MUSIC))
+        self._hot_action = row
+
+    def _restore_action_cell(self) -> None:
+        """Rend à la cellule survolée le libellé de son état réel."""
+        row, self._hot_action = self._hot_action, None
+        if row and self.analysis and self.tree.exists(row):
+            position = int(row)
+            if 0 <= position < len(self.analysis.segments):
+                self.tree.set(row, "action",
+                              _action_label(self.analysis.segments[position].kind))
+
+    def _on_table_leave(self, _event) -> None:
+        self.tree.configure(cursor="")
+        self.show_action_hint(None)
 
     def _is_track_start(self, row: str) -> bool:
         """Vrai si la ligne ouvre un morceau, donc porte un titre modifiable."""
@@ -1250,6 +1301,11 @@ def _within(widget, ancestor) -> bool:
 def _percent(confidence: float) -> str:
     """Confiance en pourcentage : « 0.70 » ne parle pas, « 70 % » si."""
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
+
+
+def _action_hint(kind: str) -> str:
+    """Ce que deviendra le segment si l'on clique."""
+    return f"→  {_action_label(kind)}"
 
 
 def _action_label(kind: str) -> str:
