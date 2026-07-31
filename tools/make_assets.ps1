@@ -182,4 +182,95 @@ foreach ($name in $shapes.Keys) {
   Write-Icon "ic_${name}_muted" '#7A6E60' $shapes[$name]   # secondaire
 }
 
+# -- logo de l'application ---------------------------------------------------
+#
+# Derive du JPG source range a cote. Sans cette partie, la source serait un
+# fichier decoratif au milieu de fichiers generes, et personne ne saurait
+# comment les icones en ont ete tirees.
+
+$LOGO_SIZES = 16, 24, 32, 48, 64, 128, 256
+
+function Get-ContentBox($src) {
+  # Boite englobante mesuree sur une reduction : scanner l'original pixel par
+  # pixel en PowerShell prendrait des minutes pour la meme reponse.
+  $n = 128
+  $small = New-Object System.Drawing.Bitmap $n, $n
+  $g = [System.Drawing.Graphics]::FromImage($small)
+  $g.DrawImage($src, 0, 0, $n, $n); $g.Dispose()
+  $bg = $small.GetPixel(2, 2)
+  $minX = $n; $minY = $n; $maxX = 0; $maxY = 0
+  for ($y = 0; $y -lt $n; $y++) {
+    for ($x = 0; $x -lt $n; $x++) {
+      $p = $small.GetPixel($x, $y)
+      $d = [math]::Abs($p.R - $bg.R) + [math]::Abs($p.G - $bg.G) + [math]::Abs($p.B - $bg.B)
+      if ($d -gt 40) {
+        if ($x -lt $minX) { $minX = $x }; if ($x -gt $maxX) { $maxX = $x }
+        if ($y -lt $minY) { $minY = $y }; if ($y -gt $maxY) { $maxY = $y }
+      }
+    }
+  }
+  $small.Dispose()
+  $f = $src.Width / $n
+  return @{
+    cx = (($minX + $maxX + 1) / 2) * $f; cy = (($minY + $maxY + 1) / 2) * $f
+    w  = ($maxX - $minX + 1) * $f;       h  = ($maxY - $minY + 1) * $f
+  }
+}
+
+function Write-Ico([string]$path, [int[]]$sizes) {
+  # Depuis Vista, une entree d'icone peut porter directement des octets PNG :
+  # inutile d'encoder le format DIB historique, que GDI+ ne sait de toute
+  # facon pas ecrire.
+  $blobs = foreach ($s in $sizes) {
+    , [System.IO.File]::ReadAllBytes((Join-Path $OutDir "icon_$s.png"))
+  }
+  $ms = New-Object System.IO.MemoryStream
+  $bw = New-Object System.IO.BinaryWriter $ms
+  $bw.Write([uint16]0); $bw.Write([uint16]1); $bw.Write([uint16]$sizes.Count)
+  $offset = 6 + 16 * $sizes.Count
+  for ($i = 0; $i -lt $sizes.Count; $i++) {
+    $side = if ($sizes[$i] -eq 256) { 0 } else { $sizes[$i] }   # 0 signifie 256
+    $bw.Write([byte]$side); $bw.Write([byte]$side)
+    $bw.Write([byte]0); $bw.Write([byte]0)
+    $bw.Write([uint16]1); $bw.Write([uint16]32)
+    $bw.Write([uint32]$blobs[$i].Length); $bw.Write([uint32]$offset)
+    $offset += $blobs[$i].Length
+  }
+  foreach ($b in $blobs) { $bw.Write($b) }
+  $bw.Flush()
+  [System.IO.File]::WriteAllBytes($path, $ms.ToArray())
+  $bw.Dispose(); $ms.Dispose()
+}
+
+$logoSource = Join-Path $OutDir 'ConcertCutter_icone.jpg'
+if (Test-Path $logoSource) {
+  $src = [System.Drawing.Image]::FromFile($logoSource)
+  $box = Get-ContentBox $src
+  foreach ($size in $LOGO_SIZES) {
+    # La marge depend de la taille visee. En grand, 16 % evitent que l'icone
+    # paraisse plus grosse que ses voisines ; en 16 ou 24 px, la meme marge
+    # mange un tiers des pixels et le dessin part en bouillie.
+    $margin = if ($size -le 24) { 1.04 } elseif ($size -le 48) { 1.16 } else { 1.32 }
+    $side = [math]::Max($box.w, $box.h) * $margin
+    $x0 = [math]::Max(0, [int]($box.cx - $side / 2))
+    $y0 = [math]::Max(0, [int]($box.cy - $side / 2))
+    $side = [int][math]::Min($side, [math]::Min($src.Width - $x0, $src.Height - $y0))
+
+    $dst = New-Object System.Drawing.Bitmap $size, $size
+    $g = [System.Drawing.Graphics]::FromImage($dst)
+    $g.InterpolationMode = 'HighQualityBicubic'
+    $g.SmoothingMode = 'HighQuality'
+    $g.PixelOffsetMode = 'HighQuality'
+    $rect = New-Object System.Drawing.Rectangle 0, 0, $size, $size
+    $g.DrawImage($src, $rect, $x0, $y0, $side, $side, [System.Drawing.GraphicsUnit]::Pixel)
+    $g.Dispose()
+    $dst.Save((Join-Path $OutDir "icon_$size.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+    $dst.Dispose()
+  }
+  $src.Dispose()
+  Write-Ico (Join-Path $OutDir 'icon.ico') $LOGO_SIZES
+} else {
+  Write-Output "logo source absent, icones inchangees"
+}
+
 Write-Output "images ecrites dans $OutDir"
