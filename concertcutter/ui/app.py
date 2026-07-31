@@ -93,7 +93,6 @@ class App(tk.Tk):
         self._events: queue.Queue = queue.Queue()
         self._busy = False
         self._playing_row: str | None = None
-        self._hot_action: str | None = None
         self._play_cell_active: str | None = None
         self._title_editor: ttk.Entry | None = None
         self._title_commit = None
@@ -374,7 +373,7 @@ class App(tk.Tk):
             ("end", "Fin", 92, "center", False),
             ("duration", "Durée", 92, "center", False),
             ("confidence", "Confiance", 100, "center", False),
-            ("action", "Action", 150, "center", False),
+            ("action", "Garder", 80, "center", False),
             ("filler", "", 0, "w", True),
         ):
             self.tree.heading(column, text=label, anchor=anchor)
@@ -976,7 +975,6 @@ class App(tk.Tk):
             self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
-        self._hot_action = None
         self._playing_row = None
         self._play_cell_active = None
         if not self.analysis:
@@ -1045,9 +1043,6 @@ class App(tk.Tk):
             return "break"
         if column == ACTION_COLUMN:
             self.toggle_segment(int(row))
-            # Le pointeur n'a pas bougé : sans ça, la cellule resterait muette
-            # jusqu'au prochain déplacement de souris.
-            self.show_action_hint(row)
             return "break"
         if column == TITLE_COLUMN:
             self.edit_title(row)
@@ -1136,11 +1131,9 @@ class App(tk.Tk):
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
         if self.tree.identify_region(event.x, event.y) != "cell":
             self.tree.configure(cursor="")
-            self.show_action_hint(None)
             return
         column = self.tree.identify_column(event.x)
         row = self.tree.identify_row(event.y)
-        self.show_action_hint(row if column == ACTION_COLUMN else None)
         if column in (PLAY_COLUMN, ACTION_COLUMN):
             self.tree.configure(cursor="hand2")
         elif column == TITLE_COLUMN and self._is_track_start(row):
@@ -1148,43 +1141,9 @@ class App(tk.Tk):
         else:
             self.tree.configure(cursor="")
 
-    def show_action_hint(self, row: str | None) -> None:
-        """Sous la souris, la cellule annonce ce qu'un clic en ferait.
-
-        Le curseur main ne se voit qu'une fois le pointeur déjà posé, et rien
-        d'autre ne disait que la colonne répondait au clic — le chevron qui le
-        laissait entendre est parti avec le menu. Une cellule de `Treeview` ne
-        peut pas être soulignée ni colorée à part des autres : son texte est la
-        seule chose qu'on puisse changer pour elle seule.
-
-        Annoncer la destination plutôt que l'état vaut mieux qu'un simple
-        surlignage : on sait avant de cliquer si l'on va garder ou supprimer,
-        sans avoir à se souvenir de ce que la bascule inverse.
-        """
-        if row == self._hot_action:
-            return
-        self._restore_action_cell()
-        if not (row and self.analysis and self.tree.exists(row)):
-            return
-        position = int(row)
-        if not 0 <= position < len(self.analysis.segments):
-            return
-        current = self.analysis.segments[position].kind
-        self.tree.set(row, "action", _action_hint(GAP if current == MUSIC else MUSIC))
-        self._hot_action = row
-
-    def _restore_action_cell(self) -> None:
-        """Rend à la cellule survolée le libellé de son état réel."""
-        row, self._hot_action = self._hot_action, None
-        if row and self.analysis and self.tree.exists(row):
-            position = int(row)
-            if 0 <= position < len(self.analysis.segments):
-                self.tree.set(row, "action",
-                              _action_label(self.analysis.segments[position].kind))
 
     def _on_table_leave(self, _event) -> None:
         self.tree.configure(cursor="")
-        self.show_action_hint(None)
 
     def _is_track_start(self, row: str) -> bool:
         """Vrai si la ligne ouvre un morceau, donc porte un titre modifiable."""
@@ -1282,14 +1241,20 @@ def _percent(confidence: float) -> str:
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
 
 
-def _action_hint(kind: str) -> str:
-    """Ce que deviendra le segment si l'on clique."""
-    return f"→  {_action_label(kind)}"
-
-
 def _action_label(kind: str) -> str:
-    """Sans chevron : la cellule bascule, elle n'ouvre plus rien."""
-    return "Garder" if kind == MUSIC else "Supprimer"
+    """La case seule : cochée pour ce qu'on garde, vide pour ce qu'on jette.
+
+    Une case dit deux choses à la fois — l'état du segment, et qu'on peut le
+    changer. C'est ce qui manquait au libellé nu : rien n'y annonçait que la
+    cellule répondait au clic, et le curseur main ne se voit qu'une fois le
+    pointeur déjà posé. Le mot est passé en en-tête de colonne, où il ne se
+    répète plus à chaque ligne.
+
+    Une cellule de `Treeview` ne peut être ni soulignée ni colorée à part des
+    autres : son texte est la seule chose qu'on puisse changer pour elle seule,
+    d'où un glyphe plutôt qu'un vrai widget.
+    """
+    return "☑" if kind == MUSIC else "☐"
 
 
 def _hms(seconds: float) -> str:

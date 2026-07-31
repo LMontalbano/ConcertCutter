@@ -97,8 +97,8 @@ def main(wav: Path) -> int:
     shown = app.tree.set(first, "confidence")
     ok &= check(f"confiance en pourcentage ({shown})",
                 shown.endswith("%") and "." not in shown)
-    ok &= check("action lisible sans promesse de menu",
-                app.tree.set(first, "action") in ("Garder", "Supprimer"))
+    ok &= check("action portee par une case a cocher",
+                app.tree.set(first, "action").startswith(("☑", "☐")))
 
     print("\nRelâchement de la sélection")
     app.tree.selection_set(first)
@@ -167,13 +167,8 @@ def main(wav: Path) -> int:
         app.update()
         ok &= check("le clic a bascule le segment",
                     analysis.segments[music_pos].kind == "gap")
-        # Le pointeur reste sur la cellule : elle annonce le coup suivant.
-        ok &= check("la cellule annonce la bascule inverse",
-                    app.tree.set(str(music_pos), "action").endswith("Garder")
-                    and app.tree.set(str(music_pos), "action") != "Garder")
-        app.show_action_hint(None)
-        ok &= check("hors survol, le libelle redit l'etat",
-                    app.tree.set(str(music_pos), "action") == "Supprimer")
+        ok &= check("la case s'est decochee",
+                    app.tree.set(str(music_pos), "action").startswith("☐"))
         ok &= check("la bascule est annulable", app.history.can_undo)
 
     app.set_segment_kind(music_pos, "music")
