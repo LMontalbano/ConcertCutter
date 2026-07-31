@@ -176,6 +176,36 @@ $shapes = @{
                       $g.DrawLine($p, 6.5, 4, 10.5, 8); $g.DrawLine($p, 6.5, 12, 10.5, 8); $p.Dispose() }
 }
 
+# Cases a cocher du tableau. Dessinees plutot que prises dans une police : un
+# glyphe Unicode reste un caractere, avec la graisse et les proportions de la
+# police, et ne ressemble jamais tout a fait a une case. Celles-ci ont l'angle
+# arrondi et le bordeaux du reste de l'ecran.
+function Write-Check([string]$name, [bool]$checked, [string]$border) {
+  $c = New-Canvas $ICON $ICON
+  $bmp, $g = $c[0], $c[1]
+  $box = New-RoundedPath 2.5 2.5 11 11 3
+  if ($checked) {
+    $fill = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#7A3B3B'))
+    $g.FillPath($fill, $box); $fill.Dispose()
+  } else {
+    $fill = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml('#FFFFFF'))
+    $g.FillPath($fill, $box); $fill.Dispose()
+  }
+  $pen = New-Object System.Drawing.Pen ([System.Drawing.ColorTranslator]::FromHtml($border)), 1.3
+  $g.DrawPath($pen, $box); $pen.Dispose()
+  if ($checked) {
+    $tick = Get-Pen '#FBF7F0' 1.9
+    $g.DrawLine($tick, 5, 8.2, 7, 10.3)
+    $g.DrawLine($tick, 7, 10.3, 10.6, 5.6)
+    $tick.Dispose()
+  }
+  $box.Dispose(); $g.Dispose()
+  Save-Png $bmp "$name.png"
+}
+
+Write-Check 'ic_check_on'   $true  '#7A3B3B'
+Write-Check 'ic_check_off'  $false '#B0A48D'
+
 foreach ($name in $shapes.Keys) {
   Write-Icon "ic_$name" '#3E352C' $shapes[$name]           # encre, sur fond clair
   Write-Icon "ic_${name}_light" '#FBF7F0' $shapes[$name]   # sur bouton colore

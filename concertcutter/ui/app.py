@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
@@ -42,6 +42,7 @@ from ..spectral import SpectralFeatures, extract
 from . import assets, theme
 from .card import Card
 from .collapsible import CHEVRON_OPEN, CHEVRON_SHUT, Section
+from .export_dialog import ask_export
 from .history import History
 from .player import PAUSED, PLAYING, Player
 from .seekbar import SeekBar
@@ -49,9 +50,16 @@ from .waveform import WaveformView
 
 PREVIEW_LEAD_S = 5.0
 SPLIT_GAP_S = 2.0
-PLAY_COLUMN = "#1"
-TITLE_COLUMN = "#2"
-ACTION_COLUMN = "#7"
+TITLE_COLUMN = "#1"
+PLAY_COLUMN = "#7"
+ACTION_COLUMN = "#0"
+
+# Silhouette du segment, en blocs de hauteur croissante. La colonne qui la
+# porte s'étirait auparavant sans rien montrer : sur un grand écran, un tiers
+# du tableau restait vide. Un Treeview ne sait afficher que du texte dans ses
+# colonnes de valeurs — le dessin passe donc par des caractères.
+TRACK_CHARS = "▁▂▃▄▅▆▇█"
+TRACK_HEAD = "│"     # tête de lecture
 
 # Largeur commune aux deux boutons de tête, en caractères : « Parcourir… » et
 # « ✂ Exporter… » se superposent au bord droit de la fenêtre, et deux largeurs
@@ -93,10 +101,19 @@ class App(tk.Tk):
         self._busy = False
         self._playing_row: str | None = None
         self._play_cell_active: str | None = None
+        self._tracks: dict[str, str] = {}
+        self._track_row: str | None = None
+        self._track_char_px = 0
+        self._track_size = 0
+        self._track_pending = False
         self._title_editor: ttk.Entry | None = None
         self._title_commit = None
         self._title_guard: str | None = None
         self._settings_open = False
+        # Retenus d'un export à l'autre : on réexporte le plus souvent
+        # au même endroit et sous la même forme.
+        self.export_mode = tk.StringVar(value="Les deux")
+        self.export_dir = ""
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -179,12 +196,6 @@ class App(tk.Tk):
                                         width=HEAD_BUTTON_W,
                                         style="Accent.TButton", state="disabled")
         self.render_button.pack(side="right")
-
-        self.export_mode = tk.StringVar(value="Les deux")
-        ttk.Combobox(bar, textvariable=self.export_mode, width=15, state="readonly",
-                     values=("Album continu", "Pistes séparées", "Les deux")).pack(
-            side="right", padx=10)
-        ttk.Label(bar, text="Sortie WAV :", style="PanelMuted.TLabel").pack(side="right")
 
         # Pas de bouton pour charger une tracklist : les titres se saisissent
         # directement dans la colonne Morceau du tableau, ce qui évite d'avoir
@@ -356,38 +367,49 @@ class App(tk.Tk):
         self._table_area = table = ttk.Frame(card.body, style="Field.TFrame")
         table.pack(fill="both", expand=True)
 
-        columns = ("play", "index", "start", "end", "duration", "confidence",
-                   "action", "filler")
+        columns = ("index", "start", "end", "duration", "confidence",
+                   "track", "play")
         # Six lignes demandées, pas dix : la hauteur réclamée par le tableau est
         # un plancher que la grille ne peut pas descendre, et à trente-deux
         # pixels la ligne, dix lignes mangeaient la forme d'onde en 880 de haut.
         # Le poids de la rangée lui rend la place dès que la fenêtre l'a.
-        self.tree = ttk.Treeview(table, columns=columns, show="headings", height=6)
-        # `filler` est la seule colonne extensible : elle prend toute la largeur
-        # excédentaire, sans en-tête ni contenu. Le tableau remplit donc la
-        # fenêtre — la teinte de la ligne court jusqu'au bord — pendant que les
-        # colonnes utiles gardent une largeur où elles se lisent ensemble.
+        # « tree headings » et non « headings » : seule la colonne d'arbre sait
+        # porter une image, et c'est ce qui permet d'y mettre une vraie case à
+        # cocher plutôt qu'un caractère qui lui ressemble. Elle est toujours la
+        # plus à gauche — d'où la case en tête de ligne et non en queue.
+        self.tree = ttk.Treeview(table, columns=columns, show="tree headings",
+                                 height=6)
+        self.tree.heading("#0", text="Garder", anchor="center")
+        self.tree.column("#0", width=74, minwidth=74, anchor="center",
+                         stretch=False)
+        # `track` est la seule colonne extensible : elle prend toute la largeur
+        # excédentaire. Le tableau remplit donc la fenêtre, et cette largeur
+        # sert enfin à quelque chose — la silhouette du segment s'y étale au
+        # lieu d'un vide. Le bouton de lecture ferme la ligne, à droite.
         for column, label, width, anchor, stretch in (
-            ("play", "", 44, "center", False),
             ("index", "Morceau", TITLE_COLUMN_W, "w", False),
             ("start", "Début", 92, "center", False),
             ("end", "Fin", 92, "center", False),
             ("duration", "Durée", 92, "center", False),
             ("confidence", "Confiance", 100, "center", False),
-            ("action", "Action", 150, "center", False),
-            ("filler", "", 0, "w", True),
+            ("track", "Piste", 260, "w", True),
+            ("play", "", 44, "center", False),
         ):
             self.tree.heading(column, text=label, anchor=anchor)
             self.tree.column(column, width=width, minwidth=width, anchor=anchor,
                              stretch=stretch)
+        # Largeur d'un bloc dans la police du tableau : c'est elle qui dit
+        # combien il en tient dans la colonne.
+        self._track_char_px = tkfont.Font(font=theme.FONT).measure(TRACK_CHARS[0])
+        self.tree.bind("<Configure>", self._on_table_resized, add="+")
+
         self.tree.tag_configure("music", background="#E4EDD9", foreground=theme.TEXT)
         self.tree.tag_configure("gap", background="#F6E3E4", foreground=theme.TEXT)
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_row_selected)
         self.tree.bind("<Button-1>", self._on_table_click)
-        self.tree.bind("<Button-3>", self._on_table_right_click)
         self.tree.bind("<Motion>", self._on_table_hover)
-        self.tree.bind("<Leave>", lambda _e: self.tree.configure(cursor=""))
+        self.tree.bind("<Leave>", self._on_table_leave)
 
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.pack(side="right", fill="y")
@@ -565,10 +587,13 @@ class App(tk.Tk):
     def start_render(self) -> None:
         if self._busy or not self.analysis:
             return
-        out_dir = filedialog.askdirectory(
-            title="Où placer le dossier du concert ?")
-        if not out_dir:
+        # Forme et destination se choisissent ensemble, au moment d'exporter.
+        chosen = ask_export(self, self.export_mode.get(), self.export_dir)
+        if chosen is None:
             return
+        mode, out_dir = chosen
+        self.export_mode.set(mode)
+        self.export_dir = out_dir
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
@@ -738,13 +763,13 @@ class App(tk.Tk):
         self._playing_row = row
         self.wave.ensure_visible(start)
         self._refresh_play_button()
-        self._refresh_play_cells()
+        self._sync_playing_row()
 
     def stop_playback(self) -> None:
         self.player.stop()
         self._playing_row = None
         self._refresh_play_button()
-        self._refresh_play_cells()
+        self._sync_playing_row()
 
     def _refresh_play_button(self) -> None:
         playing = self.player.state == PLAYING
@@ -775,7 +800,7 @@ class App(tk.Tk):
             self.player.play(seconds)
             self._playing_row = None
             self._refresh_play_button()
-            self._refresh_play_cells()
+            self._sync_playing_row()
 
     def _sync_slider(self, seconds: float) -> None:
         self.seek.set_position(seconds)
@@ -792,7 +817,7 @@ class App(tk.Tk):
             elif self._playing_row is not None and state not in (PLAYING, PAUSED):
                 self._playing_row = None
             self._refresh_play_button()
-            self._refresh_play_cells()
+            self._sync_playing_row()
         self.after(120, self._tick)
 
     def _on_close(self) -> None:
@@ -925,45 +950,6 @@ class App(tk.Tk):
         current = self.analysis.segments[position].kind
         self.set_segment_kind(position, GAP if current == MUSIC else MUSIC)
 
-    def build_action_menu(self, position: int) -> tk.Menu | None:
-        """Menu des deux sorts possibles, l'actuel coché.
-
-        Une bascule au clic ne s'annonçait pas : rien dans la cellule ne disait
-        qu'elle était cliquable, ni ce qu'un clic allait produire. Un menu
-        montre les deux options et l'état courant avant de décider.
-
-        Séparé de l'affichage pour rester vérifiable : afficher un menu prend la
-        souris et ouvre une boucle d'événements imbriquée, intestable.
-        """
-        if not self.analysis or not (0 <= position < len(self.analysis.segments)):
-            return None
-        self._action_choice = tk.StringVar(value=self.analysis.segments[position].kind)
-        # `activeborderwidth=0` : Tk dessine sinon un cadre en relief autour de
-        # la ligne survolée, par-dessus le fond bordeaux — un liseré gris qui
-        # trahit le menu système. La pastille de choix reprend le bordeaux, au
-        # lieu du noir par défaut.
-        menu = tk.Menu(self, tearoff=0, bg=theme.PANEL_BG, fg=theme.TEXT,
-                       activebackground=theme.BURGUNDY,
-                       activeforeground=theme.TEXT_ON_ACCENT,
-                       activeborderwidth=0, selectcolor=theme.BURGUNDY,
-                       relief="solid", borderwidth=1, font=theme.FONT)
-        for label, kind in (("Garder ce passage", MUSIC),
-                            ("Supprimer ce passage", GAP)):
-            menu.add_radiobutton(
-                label=label, value=kind, variable=self._action_choice,
-                hidemargin=False,
-                command=lambda k=kind: self.set_segment_kind(position, k))
-        return menu
-
-    def open_action_menu(self, position: int, x_root: int, y_root: int) -> None:
-        menu = self.build_action_menu(position)
-        if menu is None:
-            return
-        try:
-            menu.tk_popup(x_root, y_root)
-        finally:
-            menu.grab_release()
-
     # -- historique --------------------------------------------------------
 
     def _remember(self) -> None:
@@ -1013,6 +999,8 @@ class App(tk.Tk):
             self._release_title_guard()
             editor.destroy()
         self.tree.delete(*self.tree.get_children())
+        self._tracks.clear()
+        self._track_row = None
         self._playing_row = None
         self._play_cell_active = None
         if not self.analysis:
@@ -1033,11 +1021,13 @@ class App(tk.Tk):
             else:
                 title = segment.title.strip()
                 label = f"{number}. {title}" if title else f"{number}."
+            track = self._segment_track(segment)
+            self._tracks[str(position)] = track
             self.tree.insert(
-                "", "end", iid=str(position),
-                values=(GLYPH_PLAY, label, _hms(segment.start), _hms(segment.end),
+                "", "end", iid=str(position), image=_check_image(segment.kind),
+                values=(label, _hms(segment.start), _hms(segment.end),
                         _hms(segment.duration), _percent(segment.confidence),
-                        _action_label(segment.kind)),
+                        track, GLYPH_PLAY),
                 tags=(segment.kind,))
 
         kept = sum(s.duration for s in self.analysis.tracks)
@@ -1050,15 +1040,119 @@ class App(tk.Tk):
                  f"Source : {_hms(self.analysis.duration)}     "
                  f"({100 * kept / max(self.analysis.duration, 1e-9):.1f} % conservé)")
 
-    def _refresh_play_cells(self) -> None:
-        """L'icône de la ligne suit l'état réel du lecteur.
+    def _segment_track(self, segment) -> str:
+        """Silhouette du segment, tirée de l'enveloppe déjà calculée.
+
+        Rien à relire sur le disque : `features` porte le niveau image par
+        image, le même que celui sur lequel la détection a tranché. La ligne du
+        tableau montre donc exactement ce que la forme d'onde montre plus haut.
+        """
+        if self.features is None:
+            return ""
+        fps = self.features.fps
+        levels = np.clip((np.asarray(self.features.rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        first = max(0, int(segment.start * fps))
+        last = min(levels.size, int(segment.end * fps))
+        return _sparkline(levels[first:last], self._track_columns())
+
+    def _track_columns(self) -> int:
+        """Nombre de blocs qui tiennent dans la colonne, à sa largeur du moment.
+
+        Un compte figé laissait le vide qu'on cherchait justement à combler :
+        la colonne s'étire avec la fenêtre, la silhouette doit suivre.
+        """
+        if self._track_char_px <= 0:
+            return 30
+        width = int(self.tree.column("track", "width")) - 16
+        return max(8, min(400, width // self._track_char_px))
+
+    def _refresh_tracks(self) -> None:
+        """Redessine les silhouettes après un changement de largeur."""
+        if not self.analysis:
+            return
+        for row in self.tree.get_children():
+            segment = self.analysis.segments[int(row)]
+            track = self._segment_track(segment)
+            self._tracks[row] = track
+            self.tree.set(row, "track", track)
+        self._track_row = None
+
+    def _on_table_resized(self, _event=None) -> None:
+        """Recalcule les pistes, une fois la disposition retombée.
+
+        La largeur d'une colonne étirée n'est à jour qu'après la passe de
+        disposition de ttk. Lue dans le `<Configure>` lui-même, elle vaut encore
+        l'ancienne : en passant en plein écran, la piste gardait sa longueur
+        d'avant et laissait un vide devant la colonne de lecture.
+
+        Le drapeau réduit la rafale d'événements d'un redimensionnement à un
+        seul recalcul.
+        """
+        if self._track_pending:
+            return
+        self._track_pending = True
+        self.after_idle(self._apply_track_width)
+
+    def _apply_track_width(self) -> None:
+        self._track_pending = False
+        wanted = self._track_columns()
+        if wanted == self._track_size:
+            return
+        self._track_size = wanted
+        self._refresh_tracks()
+
+    def _sync_playing_row(self) -> None:
+        """Aligne la colonne de lecture et la tête de piste sur le même instant.
+
+        Les deux repères se calculaient séparément : la tête suivait le son,
+        l'icône suivait la ligne qu'on avait cliquée. Dès que la lecture passait
+        d'un segment au suivant, ou qu'elle était lancée depuis la forme d'onde,
+        l'icône restait sur la mauvaise ligne — ou sur aucune. Un seul instant
+        les décide désormais tous les deux, ce qui les empêche de diverger.
+        """
+        moment = self.player.position if self.player.state == PLAYING else None
+        row = self._row_at(moment)
+        self._refresh_play_cells(row)
+        self._refresh_track_head(row, moment)
+
+    def _row_at(self, moment: float | None) -> str | None:
+        """Ligne dont le segment contient cet instant."""
+        if moment is None or not self.analysis:
+            return None
+        for position, segment in enumerate(self.analysis.segments):
+            if segment.start <= moment < segment.end:
+                row = str(position)
+                return row if self.tree.exists(row) else None
+        return None
+
+    def _refresh_track_head(self, row: str | None, moment: float | None) -> None:
+        """Pose la tête de lecture sur la ligne écoutée."""
+        if self._track_row is not None and self._track_row != row:
+            self._restore_track(self._track_row)
+        if row is None or not self.tree.exists(row):
+            self._track_row = None
+            return
+
+        segment = self.analysis.segments[int(row)]
+        track = self._tracks.get(row, "")
+        span = max(segment.duration, 1e-9)
+        index = int((moment - segment.start) / span * len(track)) if track else 0
+        index = max(0, min(len(track) - 1, index))
+        self.tree.set(row, "track", track[:index] + TRACK_HEAD + track[index + 1:])
+        self._track_row = row
+
+    def _restore_track(self, row: str) -> None:
+        if self.tree.exists(row) and row in self._tracks:
+            self.tree.set(row, "track", self._tracks[row])
+
+    def _refresh_play_cells(self, active: str | None) -> None:
+        """L'icône de la ligne suit l'instant écouté.
 
         Une seule ligne peut porter le symbole pause, et seulement tant que le
         son sort vraiment : mise en pause, elle repasse en lecture pour montrer
         ce qu'un nouveau clic fera. On ne réécrit les cellules qu'au changement,
         sinon on repeindrait tout le tableau dix fois par seconde.
         """
-        active = self._playing_row if self.player.state == PLAYING else None
         if active == self._play_cell_active:
             return
         for row, glyph in ((self._play_cell_active, GLYPH_PLAY),
@@ -1069,7 +1163,8 @@ class App(tk.Tk):
 
     def _on_table_click(self, event):
         """Clic sur la colonne de lecture, le titre, ou l'action."""
-        if self.tree.identify_region(event.x, event.y) != "cell":
+        # La colonne d'arbre se signale par la région « tree », pas « cell ».
+        if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
             return None
         row = self.tree.identify_row(event.y)
         if not row:
@@ -1080,7 +1175,7 @@ class App(tk.Tk):
             self._toggle_row_playback(row)
             return "break"
         if column == ACTION_COLUMN:
-            self.open_action_menu(int(row), event.x_root, event.y_root)
+            self.toggle_segment(int(row))
             return "break"
         if column == TITLE_COLUMN:
             self.edit_title(row)
@@ -1165,27 +1260,23 @@ class App(tk.Tk):
             self.unbind("<Button-1>", self._title_guard)
             self._title_guard = None
 
-    def _on_table_right_click(self, event):
-        """Clic droit n'importe où sur la ligne : même menu."""
-        row = self.tree.identify_row(event.y)
-        if not row:
-            return None
-        self.tree.selection_set(row)
-        self.open_action_menu(int(row), event.x_root, event.y_root)
-        return "break"
-
     def _on_table_hover(self, event) -> None:
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
-        if self.tree.identify_region(event.x, event.y) != "cell":
+        if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
             self.tree.configure(cursor="")
             return
         column = self.tree.identify_column(event.x)
+        row = self.tree.identify_row(event.y)
         if column in (PLAY_COLUMN, ACTION_COLUMN):
             self.tree.configure(cursor="hand2")
-        elif column == TITLE_COLUMN and self._is_track_start(self.tree.identify_row(event.y)):
+        elif column == TITLE_COLUMN and self._is_track_start(row):
             self.tree.configure(cursor="xterm")
         else:
             self.tree.configure(cursor="")
+
+
+    def _on_table_leave(self, _event) -> None:
+        self.tree.configure(cursor="")
 
     def _is_track_start(self, row: str) -> bool:
         """Vrai si la ligne ouvre un morceau, donc porte un titre modifiable."""
@@ -1198,16 +1289,26 @@ class App(tk.Tk):
         return not (position and numbers[position - 1] == numbers[position])
 
     def _toggle_row_playback(self, row: str) -> None:
-        """Joue le segment de la ligne, ou le met en pause s'il tourne déjà."""
+        """Joue le segment de la ligne, ou le met en pause si c'est lui qu'on entend.
+
+        La comparaison porte sur ce qui sort vraiment, et non sur la ligne dont
+        on a cliqué le bouton la dernière fois : déplacer la tête de lecture
+        dans la forme d'onde ne passe par aucune ligne, et le bouton du segment
+        écouté relançait alors sa lecture depuis le début au lieu de la
+        suspendre.
+        """
         if not self.analysis:
             return
-        if row == self._playing_row and self.player.state == PLAYING:
-            self.player.pause()
+        heard = (self._row_at(self.player.position)
+                 if self.player.state in (PLAYING, PAUSED) else None)
+        if row == heard:
+            if self.player.state == PLAYING:
+                self.player.pause()
+            else:
+                self.player.resume()
+            self._playing_row = row
             self._refresh_play_button()
-            return
-        if row == self._playing_row and self.player.state == PAUSED:
-            self.player.resume()
-            self._refresh_play_button()
+            self._sync_playing_row()
             return
         segment = self.analysis.segments[int(row)]
         self.play_from(segment.start, segment.end, row=row)
@@ -1283,9 +1384,39 @@ def _percent(confidence: float) -> str:
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
 
 
-def _action_label(kind: str) -> str:
-    """Le chevron signale que la cellule ouvre un choix, et non qu'elle bascule."""
-    return f"{'Garder' if kind == MUSIC else 'Supprimer'}  ▾"
+def _sparkline(levels, width: int) -> str:
+    """Niveaux ramenés à `width` blocs de hauteur croissante.
+
+    Moyenne et non crête : sur quatre minutes réduites à quelques dizaines de
+    caractères, les crêtes d'un morceau touchent presque toutes le haut de
+    l'échelle et la silhouette sort plate. La moyenne laisse voir les creux,
+    qui sont ce qu'on cherche à repérer d'un coup d'œil.
+    """
+    if levels.size == 0 or width <= 0:
+        return ""
+    edges = np.linspace(0, levels.size, width + 1).astype(int)
+    edges[1:] = np.maximum(edges[1:], edges[:-1] + 1)
+    starts = np.clip(edges[:-1], 0, levels.size - 1)
+    sums = np.add.reduceat(levels, starts)
+    counts = np.maximum(np.diff(np.append(starts, levels.size)), 1)
+    steps = np.clip((sums / counts * len(TRACK_CHARS)).astype(int),
+                    0, len(TRACK_CHARS) - 1)
+    return "".join(TRACK_CHARS[step] for step in steps)
+
+
+def _check_image(kind: str):
+    """Case cochée pour ce qu'on garde, case vide pour ce qu'on jette.
+
+    Une vraie case, dessinée : un glyphe Unicode reste un caractère, avec la
+    graisse et les proportions de la police, et ne ressemble jamais tout à fait
+    à une case à cocher. Elle dit deux choses d'un coup — l'état du segment, et
+    qu'on peut le changer.
+
+    Elle ne peut vivre que dans la colonne d'arbre, seule à accepter une image
+    dans un `Treeview` ; une colonne de valeurs afficherait le nom interne de
+    l'image en toutes lettres.
+    """
+    return assets.icon("check_on" if kind == MUSIC else "check_off")
 
 
 def _hms(seconds: float) -> str:

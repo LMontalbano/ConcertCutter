@@ -17,6 +17,7 @@ import numpy as _np
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
 from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
+from concertcutter.ui.export_dialog import ExportDialog
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
 
 
@@ -96,8 +97,8 @@ def main(wav: Path) -> int:
     shown = app.tree.set(first, "confidence")
     ok &= check(f"confiance en pourcentage ({shown})",
                 shown.endswith("%") and "." not in shown)
-    ok &= check("action lisible avec son chevron",
-                app.tree.set(first, "action").endswith("▾"))
+    ok &= check("action portee par une vraie case a cocher",
+                bool(app.tree.item(first, "image")))
 
     print("\nRelâchement de la sélection")
     app.tree.selection_set(first)
@@ -154,28 +155,31 @@ def main(wav: Path) -> int:
     app._title_editor.event_generate("<Escape>")
     app.update()
 
-    print("\nChoix de l'action par menu")
+    print("\nChoix de l'action par clic sur la cellule")
     music_pos = next(i for i, s in enumerate(analysis.segments) if s.kind == "music")
-    menu = app.build_action_menu(music_pos)
-    ok &= check("menu à deux choix", menu is not None and menu.index("end") == 1)
-    if menu is not None:
-        ok &= check("libellés explicites",
-                    "Garder" in menu.entrycget(0, "label")
-                    and "Supprimer" in menu.entrycget(1, "label"))
-        ok &= check("état courant coché", app._action_choice.get() == "music")
-    ok &= check("segment hors bornes : pas de menu",
-                app.build_action_menu(9999) is None)
+    # Un clic sur la colonne Action bascule directement : plus de menu a ouvrir
+    # pour un choix qui n'a que deux issues.
+    box = app.tree.bbox(str(music_pos), "#0")
+    ok &= check("case a cocher visible", bool(box))
+    before_image = app.tree.item(str(music_pos), "image")
+    if box:
+        app.tree.event_generate("<Button-1>", x=box[0] + box[2] // 2,
+                                y=box[1] + box[3] // 2)
+        app.update()
+        ok &= check("le clic a bascule le segment",
+                    analysis.segments[music_pos].kind == "gap")
+        checked = app.tree.item(str(music_pos), "image")
+        ok &= check(f"la case s'est decochee ({checked})",
+                    checked != before_image)
+        ok &= check("la bascule est annulable", app.history.can_undo)
 
-    app.set_segment_kind(music_pos, "music")     # déjà dans cet état
-    ok &= check("choisir l'état courant ne fait rien",
-                not app.history.can_undo or analysis.segments[music_pos].kind == "music")
-    depth_before = app.history.can_undo
-    app.set_segment_kind(music_pos, "gap")
-    ok &= check("choisir l'autre état applique",
-                analysis.segments[music_pos].kind == "gap")
-    ok &= check("libellé du tableau mis à jour",
-                app.tree.set(str(music_pos), "action").startswith("Supprimer"))
     app.set_segment_kind(music_pos, "music")
+    ok &= check("retour a l'etat initial",
+                analysis.segments[music_pos].kind == "music")
+    depth_before = app.history.can_undo
+    app.set_segment_kind(music_pos, "music")     # deja dans cet etat
+    ok &= check("reappliquer l'etat courant ne fait rien",
+                app.history.can_undo == depth_before)
 
     print("\nBascule d'un blanc : doit rester réversible")
     # Un blanc *encadré de musique* : c'est le seul cas où la bascule doit
@@ -324,7 +328,7 @@ def main(wav: Path) -> int:
         first_row = app.tree.get_children()[0]
         app._toggle_row_playback(first_row)
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("ligne marquée en lecture", app._playing_row == first_row)
         ok &= check("icône de la ligne passée en pause",
                     app.tree.set(first_row, "play") == GLYPH_PAUSE)
@@ -337,7 +341,7 @@ def main(wav: Path) -> int:
 
         app._toggle_row_playback(first_row)      # second clic = pause
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("second clic : lecture en pause", app.player.state == "paused")
         ok &= check("icône revenue à lecture",
                     app.tree.set(first_row, "play") == GLYPH_PLAY)
@@ -346,17 +350,66 @@ def main(wav: Path) -> int:
 
         app._toggle_row_playback(first_row)      # troisième clic = reprise
         time.sleep(0.3)
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("troisième clic : reprise", app.player.state == "playing")
         ok &= check("icône repassée en pause",
                     app.tree.set(first_row, "play") == GLYPH_PAUSE)
 
+        # Franchissement d'une frontière : l'icône suivait la ligne cliquée et
+        # restait donc en arrière dès que le son passait au segment suivant,
+        # alors que la tête de piste, elle, avançait. Les deux doivent tomber
+        # sur la même ligne.
+        app.play_from(max(0.0, analysis.segments[0].end - 0.4))
+        time.sleep(1.4)
+        app._sync_playing_row()
+        heard = app._row_at(app.player.position)
+        ok &= check(f"le son a franchi la frontière (ligne {heard})", heard != "0")
+        ok &= check("l'icône de lecture a suivi le son",
+                    app._play_cell_active == heard)
+        ok &= check("la tête de piste est sur la même ligne",
+                    app._track_row == heard)
+
+        # Tête posée depuis la forme d'onde, sans passer par une ligne : le
+        # bouton de la ligne écoutée doit suspendre, pas relancer au début.
+        segment = analysis.segments[music_position]
+        app.play_from(segment.start + 4.0)
+        time.sleep(0.7)
+        listened = app._row_at(app.player.position)
+        ok &= check(f"segment écouté repéré (ligne {listened})",
+                    listened == str(music_position))
+        app._toggle_row_playback(str(music_position))
+        time.sleep(0.3)
+        ok &= check("le bouton de la ligne écoutée suspend",
+                    app.player.state == "paused")
+        ok &= check("la lecture n'est pas repartie du début du segment",
+                    app.player.position > segment.start + 2.0)
+        app._toggle_row_playback(str(music_position))
+        time.sleep(0.3)
+        ok &= check("un second appui reprend", app.player.state == "playing")
+
         app.stop_playback()
-        app._refresh_play_cells()
+        app._sync_playing_row()
         ok &= check("arrêt : plus aucune ligne active", app._playing_row is None)
         ok &= check("icônes toutes en lecture",
                     all(app.tree.set(r, "play") == GLYPH_PLAY
                         for r in app.tree.get_children()))
+
+    print("\nLargeur des mini pistes")
+    # Aucun appel direct au recalcul : c'est la chaine reelle qu'on teste —
+    # <Configure>, puis la reprise differee une fois la disposition retombee.
+    # Appele a la main, le controle passerait meme avec l'ancien code, qui
+    # lisait une largeur pas encore mise a jour.
+    app.geometry("1100x800")
+    app.update(); app.update()
+    etroit = len(app._tracks[app.tree.get_children()[0]])
+    app.geometry("1900x800")
+    app.update(); app.update()
+    large = len(app._tracks[app.tree.get_children()[0]])
+    ok &= check(f"la piste s'allonge avec la fenetre ({etroit} -> {large})",
+                large > etroit)
+    reste = int(app.tree.column("track", "width")) - large * app._track_char_px
+    ok &= check(f"la piste remplit la colonne (reste {reste} px)",
+                reste < 3 * app._track_char_px)
 
     print("\nBarre de progression")
     app.seek.set_duration(analysis.duration)
@@ -400,6 +453,23 @@ def main(wav: Path) -> int:
                 str(app.status.winfo_parent()).startswith(str(app.analyze_button.winfo_parent()).rsplit(".", 1)[0]))
     ok &= check("état sous le bouton",
                 app.status.winfo_rooty() > app.analyze_button.winfo_rooty())
+
+    print("\nFenêtre d'export")
+    dialog = ExportDialog(app, mode="Album continu", directory="")
+    app.update()
+    ok &= check("forme reprise a l'ouverture", dialog.mode.get() == "Album continu")
+    dialog.validate()
+    ok &= check("sans destination, rien a valider", dialog.result is None)
+    dialog.set_directory("test/_smoke_export")
+    dialog.mode.set("Pistes separees")
+    dialog.validate()
+    ok &= check(f"validation rend forme et dossier ({dialog.result})",
+                dialog.result == ("Pistes separees", "test/_smoke_export"))
+
+    cancelled = ExportDialog(app, mode="Les deux", directory="test")
+    app.update()
+    cancelled.cancel()
+    ok &= check("annuler ne rend rien", cancelled.result is None)
 
     print("\nDossier d'export")
     import shutil
