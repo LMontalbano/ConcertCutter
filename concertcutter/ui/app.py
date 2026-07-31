@@ -52,7 +52,7 @@ PREVIEW_LEAD_S = 5.0
 SPLIT_GAP_S = 2.0
 PLAY_COLUMN = "#1"
 TITLE_COLUMN = "#2"
-ACTION_COLUMN = "#7"
+ACTION_COLUMN = "#0"
 
 # Largeur commune aux deux boutons de tête, en caractères : « Parcourir… » et
 # « ✂ Exporter… » se superposent au bord droit de la fenêtre, et deux largeurs
@@ -356,12 +356,20 @@ class App(tk.Tk):
         table.pack(fill="both", expand=True)
 
         columns = ("play", "index", "start", "end", "duration", "confidence",
-                   "action", "filler")
+                   "filler")
         # Six lignes demandées, pas dix : la hauteur réclamée par le tableau est
         # un plancher que la grille ne peut pas descendre, et à trente-deux
         # pixels la ligne, dix lignes mangeaient la forme d'onde en 880 de haut.
         # Le poids de la rangée lui rend la place dès que la fenêtre l'a.
-        self.tree = ttk.Treeview(table, columns=columns, show="headings", height=6)
+        # « tree headings » et non « headings » : seule la colonne d'arbre sait
+        # porter une image, et c'est ce qui permet d'y mettre une vraie case à
+        # cocher plutôt qu'un caractère qui lui ressemble. Elle est toujours la
+        # plus à gauche — d'où la case en tête de ligne et non en queue.
+        self.tree = ttk.Treeview(table, columns=columns, show="tree headings",
+                                 height=6)
+        self.tree.heading("#0", text="Garder", anchor="center")
+        self.tree.column("#0", width=74, minwidth=74, anchor="center",
+                         stretch=False)
         # `filler` est la seule colonne extensible : elle prend toute la largeur
         # excédentaire, sans en-tête ni contenu. Le tableau remplit donc la
         # fenêtre — la teinte de la ligne court jusqu'au bord — pendant que les
@@ -373,7 +381,6 @@ class App(tk.Tk):
             ("end", "Fin", 92, "center", False),
             ("duration", "Durée", 92, "center", False),
             ("confidence", "Confiance", 100, "center", False),
-            ("action", "Garder", 80, "center", False),
             ("filler", "", 0, "w", True),
         ):
             self.tree.heading(column, text=label, anchor=anchor)
@@ -996,10 +1003,9 @@ class App(tk.Tk):
                 title = segment.title.strip()
                 label = f"{number}. {title}" if title else f"{number}."
             self.tree.insert(
-                "", "end", iid=str(position),
+                "", "end", iid=str(position), image=_check_image(segment.kind),
                 values=(GLYPH_PLAY, label, _hms(segment.start), _hms(segment.end),
-                        _hms(segment.duration), _percent(segment.confidence),
-                        _action_label(segment.kind)),
+                        _hms(segment.duration), _percent(segment.confidence)),
                 tags=(segment.kind,))
 
         kept = sum(s.duration for s in self.analysis.tracks)
@@ -1031,7 +1037,8 @@ class App(tk.Tk):
 
     def _on_table_click(self, event):
         """Clic sur la colonne de lecture, le titre, ou l'action."""
-        if self.tree.identify_region(event.x, event.y) != "cell":
+        # La colonne d'arbre se signale par la région « tree », pas « cell ».
+        if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
             return None
         row = self.tree.identify_row(event.y)
         if not row:
@@ -1129,7 +1136,7 @@ class App(tk.Tk):
 
     def _on_table_hover(self, event) -> None:
         """Curseur main sur les colonnes interactives, pour qu'on les repère."""
-        if self.tree.identify_region(event.x, event.y) != "cell":
+        if self.tree.identify_region(event.x, event.y) not in ("cell", "tree"):
             self.tree.configure(cursor="")
             return
         column = self.tree.identify_column(event.x)
@@ -1241,20 +1248,19 @@ def _percent(confidence: float) -> str:
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
 
 
-def _action_label(kind: str) -> str:
-    """La case seule : cochée pour ce qu'on garde, vide pour ce qu'on jette.
+def _check_image(kind: str):
+    """Case cochée pour ce qu'on garde, case vide pour ce qu'on jette.
 
-    Une case dit deux choses à la fois — l'état du segment, et qu'on peut le
-    changer. C'est ce qui manquait au libellé nu : rien n'y annonçait que la
-    cellule répondait au clic, et le curseur main ne se voit qu'une fois le
-    pointeur déjà posé. Le mot est passé en en-tête de colonne, où il ne se
-    répète plus à chaque ligne.
+    Une vraie case, dessinée : un glyphe Unicode reste un caractère, avec la
+    graisse et les proportions de la police, et ne ressemble jamais tout à fait
+    à une case à cocher. Elle dit deux choses d'un coup — l'état du segment, et
+    qu'on peut le changer.
 
-    Une cellule de `Treeview` ne peut être ni soulignée ni colorée à part des
-    autres : son texte est la seule chose qu'on puisse changer pour elle seule,
-    d'où un glyphe plutôt qu'un vrai widget.
+    Elle ne peut vivre que dans la colonne d'arbre, seule à accepter une image
+    dans un `Treeview` ; une colonne de valeurs afficherait le nom interne de
+    l'image en toutes lettres.
     """
-    return "☑" if kind == MUSIC else "☐"
+    return assets.icon("check_on" if kind == MUSIC else "check_off")
 
 
 def _hms(seconds: float) -> str:

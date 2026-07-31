@@ -97,8 +97,8 @@ def main(wav: Path) -> int:
     shown = app.tree.set(first, "confidence")
     ok &= check(f"confiance en pourcentage ({shown})",
                 shown.endswith("%") and "." not in shown)
-    ok &= check("action portee par une case a cocher",
-                app.tree.set(first, "action").startswith(("☑", "☐")))
+    ok &= check("action portee par une vraie case a cocher",
+                bool(app.tree.item(first, "image")))
 
     print("\nRelâchement de la sélection")
     app.tree.selection_set(first)
@@ -159,16 +159,18 @@ def main(wav: Path) -> int:
     music_pos = next(i for i, s in enumerate(analysis.segments) if s.kind == "music")
     # Un clic sur la colonne Action bascule directement : plus de menu a ouvrir
     # pour un choix qui n'a que deux issues.
-    box = app.tree.bbox(str(music_pos), "action")
-    ok &= check("cellule Action visible", bool(box))
+    box = app.tree.bbox(str(music_pos), "#0")
+    ok &= check("case a cocher visible", bool(box))
+    before_image = app.tree.item(str(music_pos), "image")
     if box:
         app.tree.event_generate("<Button-1>", x=box[0] + box[2] // 2,
                                 y=box[1] + box[3] // 2)
         app.update()
         ok &= check("le clic a bascule le segment",
                     analysis.segments[music_pos].kind == "gap")
-        ok &= check("la case s'est decochee",
-                    app.tree.set(str(music_pos), "action").startswith("☐"))
+        checked = app.tree.item(str(music_pos), "image")
+        ok &= check(f"la case s'est decochee ({checked})",
+                    checked != before_image)
         ok &= check("la bascule est annulable", app.history.can_undo)
 
     app.set_segment_kind(music_pos, "music")
