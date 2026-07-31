@@ -21,6 +21,7 @@ gèlerait la fenêtre.
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import time
 import traceback
@@ -336,10 +337,14 @@ class App(tk.Tk):
         chosen = filedialog.askopenfilename(
             title="Choisir un concert", filetypes=[("Fichiers WAV", "*.wav *.WAV")]
         )
-        if not chosen:
-            return
+        if chosen:
+            self.load_source(Path(chosen))
+
+    def load_source(self, path: Path) -> None:
+        """Charge un WAV. Séparé du sélecteur pour permettre l'ouverture
+        directe d'un fichier passé en argument ou déposé sur l'application."""
         self.stop_playback()
-        self.source = Path(chosen)
+        self.source = Path(path)
         self.analysis = None
         self.features = None
         try:
@@ -1084,9 +1089,34 @@ def _hms(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def main() -> int:
-    App().mainloop()
+def main(argv: list[str] | None = None) -> int:
+    """Lance l'interface. Un chemin en argument ouvre directement ce fichier.
+
+    C'est ce qui permet de déposer un WAV sur l'exécutable pour l'ouvrir.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    app = App()
+    if argv:
+        candidate = _source_from(argv)
+        if candidate is not None:
+            app.after(120, lambda: app.load_source(candidate))
+        else:
+            app._set_status(f"Fichier introuvable : {' '.join(argv)}", log=True)
+    app.mainloop()
     return 0
+
+
+def _source_from(argv: list[str]) -> Path | None:
+    """Chemin du WAV à ouvrir, à partir des arguments reçus.
+
+    Les noms de concerts contiennent presque toujours des espaces. Un chemin
+    passé sans guillemets arrive donc découpé en plusieurs arguments : on tente
+    d'abord le premier seul, puis leur concaténation.
+    """
+    for candidate in (Path(argv[0]), Path(" ".join(argv))):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 if __name__ == "__main__":

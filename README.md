@@ -7,10 +7,27 @@ avec le public, applaudissements, accordage).
 main, plus une interface graphique pour corriger les frontières à la souris.
 Validé sur un concert réel de 2 h 05 : 25 morceaux sur 25.
 
+## Exécutable autonome
+
+`dist\ConcertCutter.exe` — un seul fichier de 27 Mo, qui embarque Python, numpy,
+soundfile et sa bibliothèque `libsndfile`. La machine cible n'a **rien** à
+installer. Double-clic pour lancer, ou déposer un WAV dessus pour l'ouvrir
+directement. Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos.
+
+Pour le reconstruire après une modification du code :
+
+```bash
+build_exe.bat
+```
+
+Le script installe PyInstaller au besoin. À noter : un simple `.bat` qui
+appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et les
+bibliothèques déjà installés sur la machine.
+
 ## Interface graphique
 
 ```bash
-python gui.py
+python gui.py [concert.wav]
 ```
 
 Ouvrir un WAV : la forme d'onde s'affiche immédiatement et le fichier est
