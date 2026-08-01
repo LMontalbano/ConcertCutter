@@ -399,8 +399,15 @@ class App(tk.Tk):
             self.tree.column(column, width=width, minwidth=width, anchor=anchor,
                              stretch=stretch)
         # Largeur d'un bloc dans la police du tableau : c'est elle qui dit
-        # combien il en tient dans la colonne.
-        self._track_char_px = tkfont.Font(font=theme.FONT).measure(TRACK_CHARS[0])
+        # combien il en tient dans la colonne. On prend le plus large, et non le
+        # premier : « ▁ » mesure 11 px là où les sept autres blocs et la tête en
+        # font 13. Compter avec 11 donnait un cinquième de blocs en trop, la
+        # silhouette débordait de la colonne, et le Treeview coupait ce qui
+        # dépassait — la tête de lecture disparaissait donc dans les dernières
+        # dizaines de secondes du segment, alors que le son continuait.
+        font = tkfont.Font(font=theme.FONT)
+        self._track_char_px = max(font.measure(char)
+                                  for char in TRACK_CHARS + TRACK_HEAD)
         self.tree.bind("<Configure>", self._on_table_resized, add="+")
 
         self.tree.tag_configure("music", background="#E4EDD9", foreground=theme.TEXT)

@@ -169,15 +169,20 @@ def apply(root: tk.Misc) -> ttk.Style:
     # reste ronde, ce qui tombe bien, c'est ce qui distingue un choix exclusif
     # d'une case à cocher. Le point retenu prend le bordeaux des actions ; au
     # repos la pastille est blanche, cerclée comme les champs de saisie.
-    style.configure("TRadiobutton", background=PANEL_BG, foreground=TEXT_MUTED,
+    #
+    # Le fond du widget suit celui de la fenêtre d'export, seule à porter des
+    # radios : réglé sur le crème clair des cartouches, chacun traînait derrière
+    # son intitulé un rectangle plus pâle que le fond, et les trois choix
+    # apparaissaient comme trois pavés rapportés.
+    style.configure("TRadiobutton", background=APP_BG, foreground=TEXT_MUTED,
                     font=FONT, padding=(0, 4), indicatorsize=11,
                     indicatormargin=(0, 0, 7, 0),
                     indicatorbackground=FIELD_BG, indicatorforeground=BURGUNDY,
                     upperbordercolor=BORDER_STRONG, lowerbordercolor=BORDER_STRONG,
-                    focuscolor=PANEL_BG)
+                    focuscolor=APP_BG)
     style.map(
         "TRadiobutton",
-        background=[("active", PANEL_BG)],
+        background=[("active", APP_BG)],
         # Le libellé du choix retenu passe à l'encre pleine : la pastille seule
         # se repère mal quand les trois intitulés sont côte à côte.
         foreground=[("selected", TEXT), ("disabled", BORDER_STRONG)],

@@ -10,12 +10,15 @@ rem               secondes de plus qu'en --onedir, le temps de se decompresser
 rem               dans un dossier temporaire ; a l'echelle d'un concert de deux
 rem               heures a analyser, c'est negligeable.
 rem --windowed  : pas de fenetre noire derriere l'interface.
-rem --collect-all soundfile : libsndfile_x64.dll vit dans un sous-dossier de
-rem               donnees du paquet, que la detection automatique rate.
 rem --add-data  : les images de l'interface (fonds de boutons, icones, logo).
 rem               Ce sont des donnees, pas des modules : sans cette ligne
 rem               l'executable demarre mais sans icone ni boutons arrondis.
 rem --icon      : icone de l'executable lui-meme, dans l'explorateur.
+rem
+rem libsndfile_x64.dll n'a pas besoin d'etre reclamee : soundfile est un module
+rem isole, pas un paquet, et --collect-all n'y trouvait rien -- il se contentait
+rem d'afficher deux avertissements. C'est le hook soundfile livre avec
+rem PyInstaller qui va chercher la DLL dans _soundfile_data, a cote du module.
 rem
 rem Ces reglages vivent ici et non dans ConcertCutter.spec : --noconfirm
 rem reecrit le .spec a chaque construction, et il est de toute facon ignore
@@ -40,7 +43,6 @@ python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name ConcertCutter ^
-    --collect-all soundfile ^
     --add-data "concertcutter/ui/assets;concertcutter/ui/assets" ^
     --icon concertcutter/ui/assets/icon.ico ^
     --exclude-module matplotlib ^
