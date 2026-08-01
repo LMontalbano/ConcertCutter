@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import sys
 import time
+import tkinter.font as tkfont
 from pathlib import Path
 
 import numpy as _np
 
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
+from concertcutter.ui import theme
 from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
 from concertcutter.ui.export_dialog import ExportDialog
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
@@ -410,6 +412,21 @@ def main(wav: Path) -> int:
     reste = int(app.tree.column("track", "width")) - large * app._track_char_px
     ok &= check(f"la piste remplit la colonne (reste {reste} px)",
                 reste < 3 * app._track_char_px)
+
+    # Remplir la colonne ne suffit pas : il faut aussi que tout tienne dedans.
+    # Le compte se faisait sur la largeur de « ▁ », le plus etroit des blocs,
+    # donc la silhouette debordait d'un cinquieme et le Treeview coupait la
+    # fin — avec la tete de lecture dedans. On mesure ici la chaine telle
+    # qu'elle est peinte, tete posee au dernier bloc, la ou ca coupait.
+    row = app.tree.get_children()[0]
+    fin = app.analysis.segments[int(row)].end
+    app._refresh_track_head(row, fin - 1e-3)
+    peint = tkfont.Font(font=theme.FONT).measure(app.tree.set(row, "track"))
+    colonne = int(app.tree.column("track", "width"))
+    ok &= check(f"la piste tient dans la colonne ({peint} px pour {colonne} px)",
+                peint <= colonne)
+    app._restore_track(row)
+    app._track_row = None
 
     print("\nBarre de progression")
     app.seek.set_duration(analysis.duration)
