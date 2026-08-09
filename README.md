@@ -19,11 +19,18 @@ exception est ffmpeg, si l'on demande l'export vidéo : il est alors posé à c�
 de l'exécutable, ou dans `%LOCALAPPDATA%\ConcertCutter`.
 
 **Windows va afficher un avertissement au premier lancement.** « Windows a
-protégé votre ordinateur », avec un seul bouton visible. C'est normal, et ce
-n'est pas un antivirus : Windows dit cela de tout programme dont l'auteur n'a
-pas acheté de certificat de signature, ce qui coûte quelques centaines d'euros
-par an. Pour passer outre : cliquer **Informations complémentaires**, puis
-**Exécuter quand même**. Ce n'est demandé qu'une fois.
+protégé votre ordinateur », avec un seul bouton visible. Ce n'est pas un
+antivirus qui aurait trouvé quelque chose : SmartScreen ne connaît simplement
+pas encore ce fichier. Pour passer outre : cliquer **Informations
+complémentaires**, puis **Exécuter quand même**.
+
+C'est à refaire à chaque nouvelle version — la réputation d'un fichier non
+signé se compte par fichier, et repart de zéro à chaque publication. Signer n'y
+changerait pas grand-chose : depuis 2024, même un certificat EV, à quelques
+centaines d'euros par an, doit construire sa réputation comme les autres. Le
+seul chemin qui supprime vraiment l'avertissement est le Microsoft Store, qui
+signe lui-même ce qu'il distribue — l'inscription y est gratuite depuis 2025 —
+au prix d'un empaquetage MSIX et d'un passage en revue.
 
 **Ensuite, en trois gestes** : *Ouvrir* un enregistrement WAV — la forme d'onde
 s'affiche tout de suite, et le son est déjà écoutable ; *Analyser* — les
