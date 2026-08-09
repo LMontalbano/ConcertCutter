@@ -1,0 +1,68 @@
+# Construit ConcertCutter.exe et le publie, pour qu'un lien de téléchargement
+# existe. C'est le point qui manquait : l'exécutable était produit sur la
+# machine de développement, dans un dossier `dist/` que git ignore. Personne
+# d'autre ne pouvait donc l'obtenir autrement qu'en installant Python.
+#
+# Deux déclencheurs, et pas de construction à chaque commit : l'exécutable pèse
+# 27 Mo, et une version par correctif ne dirait rien à qui vient télécharger.
+#
+#   git tag v1.0 && git push origin v1.0   -> publie la version v1.0
+#   onglet Actions > Run workflow          -> construit sans publier, pour voir
+#
+# La construction tourne sous Windows : PyInstaller ne croise pas les
+# plateformes, un exécutable Windows se fabrique sous Windows.
+
+name: Publier l'exécutable
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # nécessaire pour créer la release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Construire
+        run: .\build_exe.bat
+
+      # Un exécutable de quelques kilooctets serait le signe d'une construction
+      # partie de travers, et la release paraîtrait pourtant réussie.
+      - name: Vérifier le poids
+        shell: pwsh
+        run: |
+          $exe = Get-Item dist\ConcertCutter.exe
+          "{0:N1} Mo" -f ($exe.Length / 1MB)
+          if ($exe.Length -lt 15MB) { throw "executable trop petit : construction incomplete" }
+
+      # Disponible même sans publication : c'est ce qui rend le déclenchement
+      # manuel utile, on récupère l'exécutable dans l'onglet Actions.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ConcertCutter.exe
+          path: dist/ConcertCutter.exe
+
+      - name: Publier la release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ConcertCutter.exe
+          # Le nom du fichier attaché ne changeant pas d'une version à l'autre,
+          # le lien .../releases/latest/download/ConcertCutter.exe du README
+          # reste valable sans être réécrit à chaque publication.
+          generate_release_notes: true
