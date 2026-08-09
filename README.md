@@ -53,6 +53,7 @@ sont contre la forme d'onde sur laquelle elles agissent.
 | Scinder un morceau | Cliquer dans le tracé, puis « Couper ici » (C) |
 | Garder / Supprimer un passage | Cliquer la colonne Action, ou clic droit sur la ligne |
 | Nommer un morceau | Cliquer son nom dans la colonne Morceau et saisir |
+| Exporter en vidéo | Cocher une case sous « Vidéo » dans la fenêtre d'export |
 | Annuler / Rétablir | Ctrl+Z / Ctrl+Y, ou les boutons ↶ ↷ |
 
 Toutes les éditions sont annulables : bascule, déplacement de frontière,
@@ -105,7 +106,8 @@ pip install -r requirements.txt
 ```
 
 Aucune dépendance système : `numpy` et `soundfile` suffisent. Entrée et sortie
-en WAV uniquement.
+en WAV — sauf l'export vidéo, qui produit du MP4 et demande ffmpeg à part
+(voir « Export vidéo »).
 
 ## Utilisation
 
@@ -248,6 +250,60 @@ La cue sheet est rangée avec les fichiers techniques mais désigne son audio pa
 `../concert_clean.wav` : les lecteurs résolvent ce chemin depuis l'emplacement
 de la cue, donc elle reste fonctionnelle.
 
+## Export vidéo
+
+Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
+**une image fixe, fournie par toi, et le titre du morceau écrit dessus**.
+
+La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
+continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
+boutons radio — « l'un, l'autre, ou les deux » est en réalité deux questions
+oui/non — et aucune question préalable « audio ou vidéo ? » : cocher « Album
+continu » sous Vidéo dit déjà ce qu'on veut.
+
+Cocher une case sous Vidéo et choisir l'image. Les MP4 (H.264 + AAC,
+1920×1080) sont rangés dans `video/` :
+
+```
+└── Concert Antidote 14.07.2026/
+    ├── 01 - Ouverture.wav
+    └── video/
+        ├── concert_clean.mp4        (l'album continu)
+        ├── 01 - Ouverture.mp4
+        └── 02 - Le Long Chemin.mp4
+```
+
+Le titre incrusté est celui saisi dans la colonne Morceau — c'est le même que
+celui qui nomme les fichiers. Un morceau resté sans titre affiche `Piste 03`
+plutôt que rien. Le corps du texte s'ajuste à la longueur du titre pour qu'il
+tienne dans la largeur, sur un bandeau sombre qui le garde lisible quelle que
+soit l'image dessous. L'image garde ses proportions et se centre : elle n'est
+jamais déformée pour remplir le cadre.
+
+**Sur la vidéo de l'album continu, le titre suit le morceau en cours** : il
+change à chaque frontière, comme des chapitres. Une seule mention figée pendant
+deux heures n'aurait rien dit de ce qu'on écoute. Les instants d'apparition sont
+ceux de la vidéo produite, pas ceux du concert d'origine — les blancs retirés
+ont décalé tout ce qui suit.
+
+Si seule la vidéo t'intéresse, décocher les deux cases sous Audio : le son n'est
+alors écrit qu'une fois, dans les MP4. En ligne de commande :
+
+```bash
+python -m concertcutter render concert.segments.json -d sortie \
+    --video-image pochette.jpg --video les-deux --no-wav
+```
+
+**Ceci demande ffmpeg**, la seule dépendance externe du projet — 100 Mo, contre
+27 pour ConcertCutter tout entier, donc il n'est pas embarqué. Il est cherché
+dans `CONCERTCUTTER_FFMPEG`, puis à côté de `ConcertCutter.exe`, puis dans le
+`PATH` : déposer `ffmpeg.exe` dans le dossier de l'exécutable suffit. Sans lui,
+l'option est grisée et la fenêtre dit pourquoi, plutôt que de lancer un export
+qui échouerait à la première piste.
+
+L'image ne bouge jamais : le coût réel de l'encodage est celui de l'audio.
+Compter environ une minute de calcul pour trente minutes de concert.
+
 ## Protection des exports
 
 Réexporter dans un dossier déjà utilisé ne détruit plus rien en silence.
@@ -279,6 +335,9 @@ que l'utilisateur aurait déposé dans le dossier n'est jamais touché.
 | `--pad-start` | 0.5 s | Amorce conservée avant chaque morceau |
 | `--pad-end` | 0.6 s | Queue d'applaudissements conservée après |
 | `--fade-ms` | 40 | Fondus d'entrée et de sortie |
+| `--video-image F` | — | Écrit aussi des MP4, sur cette image de fond |
+| `--video` | `pistes` | Quelles vidéos : `pistes`, `album`, ou `les-deux` |
+| `--no-wav` | — | Avec `--video-image` : les vidéos seules, sans les WAV |
 | `--method energy` | — | Repasse au détecteur V0, pour comparaison |
 | `--cache F.npz` | — | Cache des descripteurs : 8 s au lieu de 0 s à relire |
 
@@ -318,6 +377,11 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
   large, et pas seulement sur 2 dB
 - `check_output.py` — durées, écrêtage, et bords à zéro (un fondu manquant
   s'entend comme un clic)
+- `check_video_export.py` — de bout en bout : le titre saisi finit-il écrit sur
+  l'image du MP4, et change-t-il bien au morceau suivant sur l'album continu ?
+  Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
+  fait pas échouer ffmpeg, elle sort une vidéo vierge. Le test s'annonce ignoré
+  si ffmpeg manque, il n'échoue pas
 
 `sweep.py` demande le paquet sur le `PYTHONPATH` :
 

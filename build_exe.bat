@@ -15,6 +15,12 @@ rem               Ce sont des donnees, pas des modules : sans cette ligne
 rem               l'executable demarre mais sans icone ni boutons arrondis.
 rem --icon      : icone de l'executable lui-meme, dans l'explorateur.
 rem
+rem ffmpeg n'est pas embarque : une centaine de Mo, contre 27 pour tout
+rem ConcertCutter, pour une sortie -- la video -- dont on se passe la plupart du
+rem temps. L'export video le cherche a cote de l'executable, puis dans le PATH :
+rem deposer ffmpeg.exe dans dist\ suffit a l'activer, et son absence grise
+rem simplement l'option.
+rem
 rem libsndfile_x64.dll n'a pas besoin d'etre reclamee : soundfile est un module
 rem isole, pas un paquet, et --collect-all n'y trouvait rien -- il se contentait
 rem d'afficher deux avertissements. C'est le hook soundfile livre avec

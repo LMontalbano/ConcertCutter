@@ -1,2 +1,6 @@
 numpy>=1.24
 soundfile>=0.12
+
+# L'export vidéo demande ffmpeg, qui n'est pas un paquet Python : à installer
+# à part, ou à déposer à côté de l'exécutable. Sans lui, tout le reste marche
+# et l'option vidéo se grise.

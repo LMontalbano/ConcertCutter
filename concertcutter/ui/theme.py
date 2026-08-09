@@ -15,7 +15,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from . import skin
+from . import assets, skin
 
 # Fonds
 APP_BG = "#EFE9DD"        # crème, fond général
@@ -119,6 +119,14 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.configure("PanelMuted.TLabel", background=PANEL_BG, foreground=TEXT_MUTED,
                     font=FONT_SMALL)
     style.configure("Title.TLabel", background=APP_BG, foreground=TEXT, font=FONT_TITLE)
+    # Un intitulé peut se griser comme un bouton : la fenêtre d'export éteint
+    # ainsi la section qui ne s'applique pas au choix en cours, plutôt que de
+    # l'escamoter — la fenêtre changerait de taille sous la main.
+    # Le fond suit explicitement : grisé, clam repeint le sien et l'intitulé
+    # éteint traînait un rectangle plus sombre que la fenêtre.
+    for name in ("TLabel", "Muted.TLabel", "Title.TLabel"):
+        style.map(name, foreground=[("disabled", BORDER_STRONG)],
+                  background=[("disabled", APP_BG)])
     style.configure("FileName.TLabel", background=PANEL_BG, foreground=TEXT,
                     font=FONT_FILE)
     # Les cartouches sont posés sur l'en-tête, pas sur le fond général : leur
@@ -162,6 +170,7 @@ def apply(root: tk.Misc) -> ttk.Style:
                     bordercolor=BORDER_STRONG, insertcolor=TEXT, padding=5)
     style.configure("TSpinbox", fieldbackground=FIELD_BG, foreground=TEXT,
                     bordercolor=BORDER_STRONG, arrowcolor=TEXT, padding=4)
+
     # Champ posé dans une cellule du tableau, pour saisir un titre. Le
     # rembourrage vertical des autres champs y ferait réclamer 43 px de haut à
     # une ligne qui en fait 32 : le champ, ramené de force à la hauteur de la
@@ -169,35 +178,32 @@ def apply(root: tk.Misc) -> ttk.Style:
     # basse était mangée par du blanc, et il ne réapparaissait entier qu'une
     # fois la saisie refermée.
     style.configure("Cell.TEntry", padding=(5, 0))
-    style.configure("TCheckbutton", background=PANEL_BG, foreground=TEXT)
-    style.map("TCheckbutton", background=[("active", PANEL_BG)])
-
-    # Bouton radio : clam laisse styler la pastille, mais pas sa forme — elle
-    # reste ronde, ce qui tombe bien, c'est ce qui distingue un choix exclusif
-    # d'une case à cocher. Le point retenu prend le bordeaux des actions ; au
-    # repos la pastille est blanche, cerclée comme les champs de saisie.
-    #
-    # Le fond du widget suit celui de la fenêtre d'export, seule à porter des
-    # radios : réglé sur le crème clair des cartouches, chacun traînait derrière
-    # son intitulé un rectangle plus pâle que le fond, et les trois choix
-    # apparaissaient comme trois pavés rapportés.
-    style.configure("TRadiobutton", background=APP_BG, foreground=TEXT_MUTED,
+    # Case à cocher : le fond suit celui de la fenêtre. Réglée sur le crème des
+    # cartouches, elle traînait derrière son intitulé un rectangle plus pâle.
+    style.configure("TCheckbutton", background=APP_BG, foreground=TEXT_MUTED,
                     font=FONT, padding=(0, 4), indicatorsize=11,
                     indicatormargin=(0, 0, 7, 0),
                     indicatorbackground=FIELD_BG, indicatorforeground=BURGUNDY,
                     upperbordercolor=BORDER_STRONG, lowerbordercolor=BORDER_STRONG,
                     focuscolor=APP_BG)
+    # « disabled » passe avant « selected » : ttk retient la première règle qui
+    # s'applique, et dans l'autre ordre une case cochée puis grisée gardait son
+    # encre pleine — la section éteinte paraissait encore active. Le libellé
+    # coché, lui, passe à l'encre pleine : la case seule se repère mal quand les
+    # intitulés sont les uns sous les autres.
     style.map(
-        "TRadiobutton",
+        "TCheckbutton",
         background=[("active", APP_BG)],
-        # Le libellé du choix retenu passe à l'encre pleine : la pastille seule
-        # se repère mal quand les trois intitulés sont côte à côte.
-        foreground=[("selected", TEXT), ("disabled", BORDER_STRONG)],
-        indicatorbackground=[("selected", FIELD_BG), ("active", FIELD_BG),
-                             ("disabled", APP_BG)],
-        upperbordercolor=[("selected", BURGUNDY), ("active", TEXT_MUTED)],
-        lowerbordercolor=[("selected", BURGUNDY), ("active", TEXT_MUTED)],
+        foreground=[("disabled", BORDER_STRONG), ("selected", TEXT)],
+        indicatorbackground=[("disabled", APP_BG), ("selected", FIELD_BG),
+                             ("active", FIELD_BG)],
+        indicatorforeground=[("disabled", BORDER_STRONG)],
+        upperbordercolor=[("disabled", BORDER), ("selected", BURGUNDY),
+                          ("active", TEXT_MUTED)],
+        lowerbordercolor=[("disabled", BORDER), ("selected", BURGUNDY),
+                          ("active", TEXT_MUTED)],
     )
+    _image_check(style)
 
     style.configure("Horizontal.TProgressbar", background=BURGUNDY,
                     troughcolor=APP_BG, bordercolor=BORDER, lightcolor=BURGUNDY,
@@ -282,6 +288,49 @@ def _seat(style: ttk.Style) -> None:
         for name in names:
             style.configure(name, background=surface)
             style.map(name, background=[(state, surface) for state in SEAT_STATES])
+
+
+def _image_check(style: ttk.Style) -> None:
+    """Remplace la case dessinée par celle du tableau, la même image.
+
+    Les segments à garder se cochent dans la colonne Garder, avec une case
+    dessinée (`ic_check_on`). La fenêtre d'export posait la même question — que
+    veux-tu ? — avec une case au trait de clam, plus petite et d'un autre
+    dessin : deux cases à cocher d'aspect différent dans le même programme.
+
+    L'état éteint se calcule à partir de l'image allumée, faute d'un fichier
+    dédié. Si les images manquent — un export incomplet des ressources —, on
+    garde la case de clam configurée juste au-dessus : moins jolie, jamais
+    absente.
+    """
+    on, off = assets.icon("check_on"), assets.icon("check_off")
+    if on is None or off is None:
+        return
+    # Chaque variante est un tuple « états…, image », et la première qui
+    # s'applique gagne : les états éteints passent donc avant la case cochée.
+    variants = []
+    for states, name in ((("disabled", "selected"), "check_on"),
+                         (("disabled",), "check_off")):
+        image = assets.faded(name, APP_BG)
+        if image is not None:
+            variants.append((*states, image))
+    variants.append(("selected", on))
+
+    try:
+        # L'écart avant l'intitulé se prend sur la largeur de l'élément, calée
+        # à gauche : `padding` ne sert qu'aux images étirables, et la case
+        # touchait le texte.
+        style.element_create("Check.indicator", "image", off, *variants,
+                             sticky="w", width=on.width() + 8)
+    except tk.TclError:
+        return  # déjà créé : `apply` peut être rappelé sur une seconde fenêtre
+    style.layout("TCheckbutton", [
+        ("Checkbutton.padding", {"sticky": "nswe", "children": [
+            ("Check.indicator", {"side": "left", "sticky": ""}),
+            ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
+                ("Checkbutton.label", {"sticky": "nswe"})]}),
+        ]}),
+    ])
 
 
 def _button(style: ttk.Style, name: str, bg: str, fg: str, border: str,
