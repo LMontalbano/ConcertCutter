@@ -17,7 +17,7 @@ from .detect_hmm import HmmParams, analyze as analyze_hmm
 from .excerpts import export_at, export_boundaries, parse_time
 from .labels import format_summary, write_audacity_labels
 from .render import (
-    ExportConflict, RenderParams, concert_dir, load_tracklist,
+    VIDEO_DIR, ExportConflict, RenderParams, concert_dir, load_tracklist,
     render as run_render, unique_dir,
 )
 from .rhythm import extract as extract_rhythm
@@ -155,6 +155,18 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
                        metavar="S", help="Amorce conservée avant chaque morceau")
     group.add_argument("--pad-end", type=float, default=defaults.pad_end_s,
                        metavar="S", help="Queue d'applaudissements conservée après")
+    group.add_argument("--video-image", type=Path, metavar="IMAGE",
+                       help="Écrire aussi des MP4 : cette image en fond, le "
+                            "titre du morceau incrusté dessus. Demande ffmpeg "
+                            "sur la machine")
+    group.add_argument("--video", choices=("pistes", "album", "les-deux"),
+                       default="pistes",
+                       help="Quelles vidéos écrire, avec --video-image : une "
+                            "par morceau (défaut), une pour le concert entier "
+                            "— le titre y suit le morceau en cours —, ou les deux")
+    group.add_argument("--no-wav", action="store_true",
+                       help="Ne produire que les vidéos, sans les WAV "
+                            "(avec --video-image)")
     group.add_argument("--overwrite", action="store_true",
                        help="Remplacer un export déjà présent dans le dossier "
                             "(sans ce drapeau, l'export s'arrête pour ne rien détruire)")
@@ -223,8 +235,13 @@ def _do_analyze(args) -> Analysis:
 
 
 def _do_render(analysis: Analysis, args) -> None:
-    titles = load_tracklist(args.tracklist) if args.tracklist else None
-    if titles and len(titles) != len(analysis.tracks):
+    # À défaut de tracklist, les titres déjà portés par les segments : le JSON
+    # relu vient souvent de l'interface, où ils ont été saisis à la main. Les
+    # ignorer produisait des « Piste 03 » alors que le titre était sous les yeux
+    # dans le fichier — et, depuis la vidéo, écrit sur l'image.
+    titles = (load_tracklist(args.tracklist) if args.tracklist
+              else [track.title for track in analysis.tracks])
+    if args.tracklist and len(titles) != len(analysis.tracks):
         print(
             f"\n[!] La tracklist annonce {len(titles)} titres mais "
             f"{len(analysis.tracks)} morceaux ont été détectés — "
@@ -235,19 +252,24 @@ def _do_render(analysis: Analysis, args) -> None:
     def progress(done: int, total: int, name: str) -> None:
         print(f"  [{done}/{total}] {name}", flush=True)
 
+    wants_video = bool(args.video_image)
+    params = RenderParams(
+        fade_ms=args.fade_ms,
+        pad_start_s=args.pad_start,
+        pad_end_s=args.pad_end,
+        write_full=not args.no_wav,
+        write_tracks=not args.no_wav,
+        video_full=wants_video and args.video in ("album", "les-deux"),
+        video_tracks=wants_video and args.video in ("pistes", "les-deux"),
+        video_image=str(args.video_image) if wants_video else None,
+    )
+
     # `-d` désigne l'emplacement ; le concert reçoit son propre dossier dedans.
     target = concert_dir(args.out_dir, analysis)
     print(f"\nRendu de {len(analysis.tracks)} pistes vers {target}...")
     try:
         result = run_render(
-            analysis,
-            target,
-            titles,
-            RenderParams(
-                fade_ms=args.fade_ms,
-                pad_start_s=args.pad_start,
-                pad_end_s=args.pad_end,
-            ),
+            analysis, target, titles, params,
             on_progress=progress,
             replace=args.overwrite,
         )
@@ -263,9 +285,15 @@ def _do_render(analysis: Analysis, args) -> None:
               f"l'export précédent.\nL'interface graphique propose aussi "
               f"« {unique_dir(target).name} ».", file=sys.stderr)
         raise SystemExit(1)
-    print(f"\nFichier complet : {result['full']}")
-    print(f"Cue sheet       : {result['cue']}")
-    print(f"Pistes ({len(result['tracks'])}) dans : {result['out_dir']}")
+    # Annoncé seulement si écrit : avec --no-wav, ces lignes affichaient
+    # « None » et donnaient l'export pour raté.
+    if result["full"]:
+        print(f"\nFichier complet : {result['full']}")
+        print(f"Cue sheet       : {result['cue']}")
+    print(f"\n{len(result['tracks'])} morceau(x) rendu(s) dans : {result['out_dir']}")
+    if result["videos"]:
+        print(f"Vidéos ({len(result['videos'])}) dans : "
+              f"{Path(result['out_dir']) / VIDEO_DIR}")
 
     hot = [t for t in result["tracks"] if t["peak"] >= 0.999]
     if hot:

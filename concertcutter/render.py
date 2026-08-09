@@ -1,6 +1,7 @@
-"""Rendu : un fichier complet nettoyé + un fichier par morceau.
+"""Rendu : un fichier complet nettoyé + un fichier par morceau, et au besoin
+une vidéo par morceau.
 
-Les deux sorties dérivent de la même liste de segments, donc d'une seule
+Les sorties dérivent toutes de la même liste de segments, donc d'une seule
 analyse. Le rendu lit le WAV source segment par segment : il ne charge jamais
 le concert entier en mémoire.
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +25,7 @@ from typing import Callable
 import numpy as np
 import soundfile as sf
 
+from . import video
 from .audio import probe, read_span
 from .labels import write_audacity_labels, write_cue
 from .segment import Analysis, Segment
@@ -33,6 +36,9 @@ _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # dossier du concert uniquement ce qui s'écoute, ce qui rend l'export directement
 # utilisable dans un lecteur ou sur une clé.
 DATA_DIR = "infos"
+# Les vidéos ont leur propre sous-dossier : elles doublent chaque morceau, et
+# mêlées aux WAV à la racine on ne saurait plus lequel des deux on écoute.
+VIDEO_DIR = "video"
 MANIFEST = ".concertcutter-export.json"
 
 
@@ -64,6 +70,22 @@ class RenderParams:
     write_full: bool = True    # l'album continu
     write_tracks: bool = True  # un fichier par morceau
     write_sidecars: bool = True  # repères Audacity et segments.json
+    # La vidéo se décline comme l'audio : le concert d'un seul tenant, découpé
+    # en morceaux, ou les deux. Sur la vidéo continue, le titre affiché suit le
+    # morceau en cours ; une seule mention figée deux heures durant n'aurait
+    # rien dit de ce qu'on écoute.
+    video_full: bool = False   # un MP4 pour tout le concert
+    video_tracks: bool = False  # un MP4 par morceau
+    video_image: str | None = None  # fond des vidéos, fourni par l'utilisateur
+
+    @property
+    def write_video(self) -> bool:
+        return self.video_full or self.video_tracks
+
+    @property
+    def video_name(self) -> str:
+        """La vidéo du concert entier porte le nom de l'album continu."""
+        return f"{VIDEO_DIR}/{Path(self.full_name).stem}.mp4"
 
 
 def render(
@@ -74,7 +96,10 @@ def render(
     on_progress: Callable[[int, int, str], None] | None = None,
     replace: bool = False,
 ) -> dict:
-    """Écrit le fichier complet et les pistes. `on_progress(fait, total, nom)`.
+    """Écrit le fichier complet, les pistes et les vidéos demandées.
+
+    `on_progress(fait, total, nom)` : le total compte les étapes, pas les
+    morceaux — une vidéo en ajoute une par piste.
 
     Lève `ExportConflict` si le dossier contient déjà un export, à moins de
     passer `replace=True` — qui efface alors l'export précédent d'après son
@@ -87,8 +112,13 @@ def render(
     tracks = analysis.tracks
     if not tracks:
         raise ValueError("Aucun segment musical à rendre.")
-    if not (params.write_full or params.write_tracks):
-        raise ValueError("Choisir au moins une sortie : album continu ou pistes.")
+    if not (params.write_full or params.write_tracks or params.write_video):
+        raise ValueError(
+            "Choisir au moins une sortie : album continu, pistes ou vidéos.")
+    # Contrôlé avant d'écrire quoi que ce soit : découvrir à la vingtième piste
+    # que ffmpeg manque laisserait un export à moitié fait.
+    if params.write_video:
+        _check_video(params)
 
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
     fade_len = int(round(params.fade_ms / 1000.0 * info.samplerate))
@@ -98,13 +128,30 @@ def render(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[dict] = []
+    videos: list[str] = []
+
+    # Un dossier de travail dès qu'une vidéo doit partir d'un audio qu'on ne
+    # garde pas : ffmpeg lit un fichier, pas un tableau numpy, donc le WAV
+    # existe le temps de l'encodage puis disparaît.
+    scratch = tempfile.TemporaryDirectory(prefix="concertcutter-") \
+        if (params.video_tracks and not params.write_tracks) \
+        or (params.video_full and not params.write_full) else None
+
     full_path = out_dir / params.full_name
+    if not params.write_full and params.video_full:
+        full_path = Path(scratch.name) / params.full_name
     full = None
-    if params.write_full:
+    if params.write_full or params.video_full:
         full = sf.SoundFile(
             str(full_path), mode="w", samplerate=info.samplerate,
             channels=info.channels, subtype=info.subtype,
         )
+
+    # L'encodage vidéo dure bien plus longtemps que l'écriture du WAV : compté
+    # comme une étape à part, sinon la progression resterait figée entre deux
+    # morceaux sans qu'on sache si quelque chose avance.
+    steps = len(spans) * (2 if params.video_tracks else 1) + int(params.video_full)
+    done = 0
 
     try:
         for index, (start, stop) in enumerate(spans, start=1):
@@ -113,9 +160,10 @@ def render(
 
             title = titles[index - 1] if titles and index <= len(titles) else None
             name = _track_filename(index, title)
+            track_path = out_dir / name
             if params.write_tracks:
                 sf.write(
-                    str(out_dir / name), audio, info.samplerate, subtype=info.subtype
+                    str(track_path), audio, info.samplerate, subtype=info.subtype
                 )
             if full is not None:
                 full.write(audio)
@@ -131,11 +179,56 @@ def render(
                     "duration": round((stop - start) / info.samplerate, 3),
                 }
             )
+            video_name = (f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}"
+                          if params.video_tracks else None)
+            done += 1
             if on_progress:
-                on_progress(index, len(spans), name)
+                # Annonce ce que l'étape produit vraiment : sans les WAV, la
+                # piste n'est qu'un intermédiaire vers la vidéo.
+                on_progress(done, steps,
+                            name if params.write_tracks else video_name or name)
+
+            if params.video_tracks:
+                if not params.write_tracks:
+                    track_path = Path(scratch.name) / name
+                    sf.write(str(track_path), audio, info.samplerate,
+                             subtype=info.subtype)
+                video.write_video(
+                    track_path, _track_label(index, title), out_dir / video_name,
+                    video.VideoParams(image=str(params.video_image)),
+                )
+                videos.append(video_name)
+                written[-1]["video"] = video_name
+                if not params.write_tracks:
+                    track_path.unlink(missing_ok=True)
+                done += 1
+                if on_progress:
+                    on_progress(done, steps, video_name)
+
+        if full is not None:
+            full.close()
+            full = None
+
+        if params.video_full:
+            # Les bornes viennent des durées rendues, pas du concert d'origine :
+            # les blancs retirés ont décalé tout ce qui suit.
+            captions = video.captions_from_durations(
+                [_track_label(item["index"], item["title"]) for item in written],
+                [item["duration"] for item in written],
+            )
+            if on_progress:
+                on_progress(done, steps, params.video_name)
+            video.write_video(full_path, captions, out_dir / params.video_name,
+                              video.VideoParams(image=str(params.video_image)))
+            videos.append(params.video_name)
+            done += 1
+            if on_progress:
+                on_progress(done, steps, params.video_name)
     finally:
         if full is not None:
             full.close()
+        if scratch is not None:
+            scratch.cleanup()
 
     data_dir = out_dir / DATA_DIR
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -158,8 +251,31 @@ def render(
         "full": str(full_path) if params.write_full else None,
         "cue": str(cue_path) if cue_path else None,
         "tracks": written,
+        "videos": videos,
         "out_dir": str(out_dir),
     }
+
+
+def _check_video(params: RenderParams) -> None:
+    """Refuse tout de suite un export vidéo qui ne pourrait pas aboutir."""
+    if not params.video_image:
+        raise ValueError("Choisir l'image de fond des vidéos.")
+    if not Path(params.video_image).exists():
+        raise FileNotFoundError(
+            f"Image de fond introuvable : {params.video_image}")
+    reason = video.unavailable_reason()
+    if reason:
+        raise ValueError(reason)
+
+
+def _track_label(index: int, title: str | None) -> str:
+    """Le titre du morceau, ou son numéro s'il est resté sans titre.
+
+    Un seul repli pour le nom de fichier et pour le texte incrusté sur la
+    vidéo : sans lui, une vidéo sans titre saisi resterait muette de tout texte
+    et se confondrait avec les autres.
+    """
+    return title.strip() if title and title.strip() else f"Piste {index:02d}"
 
 
 def concert_dir(parent: str | Path, analysis: Analysis) -> Path:
@@ -187,6 +303,12 @@ def _planned_names(spans, titles, params: RenderParams) -> list[str]:
         for index in range(1, len(spans) + 1):
             title = titles[index - 1] if titles and index <= len(titles) else None
             names.append(_track_filename(index, title))
+    if params.video_full:
+        names.append(params.video_name)
+    if params.video_tracks:
+        for index in range(1, len(spans) + 1):
+            title = titles[index - 1] if titles and index <= len(titles) else None
+            names.append(f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}")
     if params.write_full:
         names.append(f"{DATA_DIR}/{Path(params.full_name).stem}.cue")
     if params.write_sidecars:
@@ -310,10 +432,9 @@ def _apply_fades(audio: np.ndarray, fade_len: int) -> np.ndarray:
     return audio
 
 
-def _track_filename(index: int, title: str | None) -> str:
-    label = title.strip() if title and title.strip() else f"Piste {index:02d}"
-    label = _INVALID_CHARS.sub("_", label).strip(" .")
-    return f"{index:02d} - {label}.wav"
+def _track_filename(index: int, title: str | None, ext: str = ".wav") -> str:
+    label = _INVALID_CHARS.sub("_", _track_label(index, title)).strip(" .")
+    return f"{index:02d} - {label}{ext}"
 
 
 def load_tracklist(path: str | Path) -> list[str]:

@@ -34,8 +34,8 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
-    DATA_DIR, ExportConflict, RenderParams, check_output, concert_dir, render,
-    unique_dir,
+    DATA_DIR, VIDEO_DIR, ExportConflict, RenderParams, check_output,
+    concert_dir, render, unique_dir,
 )
 from ..segment import GAP, MUSIC, Analysis, Segment
 from ..spectral import SpectralFeatures, extract
@@ -111,9 +111,13 @@ class App(tk.Tk):
         self._title_guard: str | None = None
         self._settings_open = False
         # Retenus d'un export à l'autre : on réexporte le plus souvent
-        # au même endroit et sous la même forme.
-        self.export_mode = tk.StringVar(value="Les deux")
+        # au même endroit, sous la même forme et sur la même image.
+        self.export_full = True
+        self.export_tracks = True
+        self.export_video_full = False
+        self.export_video_tracks = False
         self.export_dir = ""
+        self.export_image = ""
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -594,20 +598,29 @@ class App(tk.Tk):
     def start_render(self) -> None:
         if self._busy or not self.analysis:
             return
-        # Forme et destination se choisissent ensemble, au moment d'exporter.
-        chosen = ask_export(self, self.export_mode.get(), self.export_dir)
+        # Sorties et destination se choisissent ensemble, au moment d'exporter.
+        chosen = ask_export(self, self.export_full, self.export_tracks,
+                            self.export_video_full, self.export_video_tracks,
+                            self.export_dir, self.export_image)
         if chosen is None:
             return
-        mode, out_dir = chosen
-        self.export_mode.set(mode)
+        full, tracks, video_full, video_tracks, out_dir, image = chosen
+        self.export_full = full
+        self.export_tracks = tracks
+        self.export_video_full = video_full
+        self.export_video_tracks = video_tracks
         self.export_dir = out_dir
+        self.export_image = image
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
                 pad_start_s=float(self.pad_start.get()),
                 pad_end_s=float(self.pad_end.get()),
-                write_full=self.export_mode.get() in ("Album continu", "Les deux"),
-                write_tracks=self.export_mode.get() in ("Pistes séparées", "Les deux"),
+                write_full=full,
+                write_tracks=tracks,
+                video_full=video_full,
+                video_tracks=video_tracks,
+                video_image=image or None,
             )
         except ValueError:
             messagebox.showerror("Réglages",
@@ -629,8 +642,12 @@ class App(tk.Tk):
 
         self._set_busy(True, "Export en cours…")
         self._set_progress(True)
-        self.progress.configure(mode="determinate", value=0,
-                                maximum=len(self.analysis.tracks))
+        # Une étape par piste, une seconde quand chaque piste donne aussi une
+        # vidéo, et une dernière pour la vidéo du concert entier.
+        self.progress.configure(
+            mode="determinate", value=0,
+            maximum=len(self.analysis.tracks) * (2 if params.video_tracks else 1)
+            + int(params.video_full))
         threading.Thread(target=self._run_render,
                          args=(self.analysis, str(out_dir), titles, params, replace),
                          daemon=True).start()
@@ -738,9 +755,13 @@ class App(tk.Tk):
         self._set_progress(False)
         self._set_busy(False)
         self._set_status(f"Export terminé : {result['out_dir']}", log=True)
+        videos = result.get("videos") or []
+        detail = (f"\n{len(videos)} vidéo(s) dans le sous-dossier "
+                  f"« {VIDEO_DIR} »." if videos else "")
         messagebox.showinfo(
             "Export terminé",
             f"{len(result['tracks'])} piste(s) écrite(s) dans :\n{result['out_dir']}"
+            f"{detail}"
             f"\n\nLes repères, la cue sheet et la segmentation sont dans le "
             f"sous-dossier « {DATA_DIR} ».")
 
@@ -1214,9 +1235,14 @@ class App(tk.Tk):
             return
 
         segment = self.analysis.segments[position]
-        editor = ttk.Entry(self.tree)
+        editor = ttk.Entry(self.tree, style="Cell.TEntry")
         editor.insert(0, segment.title)
-        editor.place(x=box[0], y=box[1], width=box[2], height=box[3])
+        # Jamais moins que sa hauteur naturelle : un champ écrasé ne recentre
+        # pas son texte, il en coupe le bas. Le surplus se répartit de part et
+        # d'autre de la ligne, pour que la saisie reste centrée sur elle.
+        height = max(box[3], editor.winfo_reqheight())
+        editor.place(x=box[0], y=box[1] - (height - box[3]) // 2,
+                     width=box[2], height=height)
         editor.focus_set()
         editor.select_range(0, "end")
         self._title_editor = editor

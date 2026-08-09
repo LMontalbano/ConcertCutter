@@ -47,6 +47,42 @@ def icon(name: str) -> tk.PhotoImage | None:
     return _icons[name]
 
 
+def faded(name: str, background: str, amount: float = 0.62) -> tk.PhotoImage | None:
+    """Version éteinte d'une icône, mélangée au fond. None si l'icône manque.
+
+    Calculée plutôt que livrée : une dix-septième image pour un seul état, qu'il
+    faudrait régénérer à chaque retouche de la palette, coûterait plus qu'elle
+    ne rapporte. Deux cent cinquante-six pixels, trois millisecondes, une fois.
+    """
+    source = icon(name)
+    if source is None:
+        return None
+    key = f"{name}@{background}:{amount}"
+    if key in _icons:
+        return _icons[key]
+
+    target = _rgb(background)
+    copy = source.copy()
+    for x in range(copy.width()):
+        for y in range(copy.height()):
+            # Les pixels transparents doivent le rester : les teinter dessinerait
+            # un carré plein à la place de la case.
+            if copy.transparency_get(x, y):
+                continue
+            blended = tuple(
+                int(value + (fond - value) * amount)
+                for value, fond in zip(copy.get(x, y), target)
+            )
+            copy.put("#%02x%02x%02x" % blended, to=(x, y))
+    _icons[key] = copy
+    return copy
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    color = color.lstrip("#")
+    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+
+
 def window_icons() -> list[tk.PhotoImage]:
     """Icônes de la fenêtre, de la plus grande à la plus petite.
 

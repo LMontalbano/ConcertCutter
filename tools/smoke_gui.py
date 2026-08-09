@@ -16,11 +16,12 @@ from tkinter import ttk
 
 import numpy as _np
 
+from concertcutter import video
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
 from concertcutter.ui import theme
 from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
-from concertcutter.ui.export_dialog import ExportDialog
+from concertcutter.ui.export_dialog import ExportChoice, ExportDialog
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
 
 
@@ -473,32 +474,113 @@ def main(wav: Path) -> int:
                 app.status.winfo_rooty() > app.analyze_button.winfo_rooty())
 
     print("\nFenêtre d'export")
-    dialog = ExportDialog(app, mode="Album continu", directory="")
+    dialog = ExportDialog(app, full=True, tracks=False, directory="")
     app.update()
-    ok &= check("forme reprise a l'ouverture", dialog.mode.get() == "Album continu")
+    ok &= check("sorties reprises a l'ouverture",
+                dialog.want_full.get() and not dialog.want_tracks.get())
 
-    # Le radio peint son propre fond : s'il ne tombe pas sur celui de la
+    # La case peint son propre fond : s'il ne tombe pas sur celui de la
     # fenetre, chaque choix traine un rectangle derriere son intitule.
-    radio = next(w for w in dialog.winfo_children()[0].winfo_children()
-                 if isinstance(w, ttk.Radiobutton))
     style = ttk.Style(dialog)
-    fond_radio = style.lookup(str(radio.cget("style")) or radio.winfo_class(),
-                              "background")
+    fond_case = style.lookup(
+        str(dialog._full_check.cget("style")) or "TCheckbutton", "background")
     fond_fenetre = style.lookup("TFrame", "background")
-    ok &= check(f"radios sur le fond de la fenetre ({fond_radio})",
-                fond_radio == fond_fenetre)
+    ok &= check(f"cases sur le fond de la fenetre ({fond_case})",
+                fond_case == fond_fenetre)
+
+    # Meme dessin que la colonne Garder du tableau : deux cases a cocher
+    # d'aspect different dans le meme programme se remarquent tout de suite.
+    elements = style.element_names()
+    ok &= check("cases dessinees comme celles du tableau",
+                "Check.indicator" in elements
+                and "Check.indicator" in str(style.layout("TCheckbutton")))
     dialog.validate()
     ok &= check("sans destination, rien a valider", dialog.result is None)
+    ok &= check(f"et la fenetre dit quoi ({dialog._hint.cget('text')})",
+                bool(dialog._hint.cget("text")))
     dialog.set_directory("test/_smoke_export")
-    dialog.mode.set("Pistes separees")
+    dialog.want_tracks.set(True)
+    dialog._refresh()
     dialog.validate()
-    ok &= check(f"validation rend forme et dossier ({dialog.result})",
-                dialog.result == ("Pistes separees", "test/_smoke_export"))
+    ok &= check(f"validation rend les sorties, le dossier et l'image ({dialog.result})",
+                dialog.result == ExportChoice(True, True, False, False,
+                                              "test/_smoke_export", ""))
 
-    cancelled = ExportDialog(app, mode="Les deux", directory="test")
+    # Le message du bas remplace le precedent sans pousser les bords : la
+    # fenetre sautait a chaque case cochee.
+    dialog = ExportDialog(app, directory="")
+    app.update()
+    tailles = set()
+    for etat in ((False, False), (True, False), (True, True)):
+        dialog.want_full.set(etat[0])
+        dialog.want_tracks.set(etat[1])
+        dialog._refresh()
+        app.update()
+        tailles.add((dialog.winfo_reqwidth(), dialog.winfo_reqheight()))
+    ok &= check(f"taille constante quel que soit le message ({tailles})",
+                len(tailles) == 1)
+    dialog.cancel()
+
+    cancelled = ExportDialog(app, directory="test")
     app.update()
     cancelled.cancel()
     ok &= check("annuler ne rend rien", cancelled.result is None)
+
+    print("\nAucune sortie")
+    dialog = ExportDialog(app, directory="test/_smoke_export")
+    app.update()
+    dialog.want_full.set(False)
+    dialog.want_tracks.set(False)
+    dialog._refresh()
+    ok &= check("aucune case cochee : rien a valider",
+                str(dialog._ok["state"]) == "disabled")
+    ok &= check(f"et la fenetre dit quoi ({dialog._hint.cget('text')})",
+                bool(dialog._hint.cget("text")))
+    dialog.cancel()
+
+    print("\nExport video")
+    veto = video.unavailable_reason()
+    dialog = ExportDialog(app, directory="test/_smoke_export")
+    app.update()
+    if veto:
+        # Machine sans ffmpeg : les cases doivent se griser en l'expliquant,
+        # pas laisser lancer un export qui echouerait a la premiere piste.
+        ok &= check("sans ffmpeg, la video est grisee",
+                    str(dialog._video_tracks_check["state"]) == "disabled")
+        ok &= check("la raison remplace la description",
+                    dialog._video_desc.cget("text") == veto)
+        dialog.cancel()
+    else:
+        ok &= check("image a choisir seulement une fois la video demandee",
+                    str(dialog._image_button["state"]) == "disabled")
+        dialog.want_video_tracks.set(True)
+        dialog._refresh()
+        ok &= check("video demandee sans image : rien a valider",
+                    str(dialog._ok["state"]) == "disabled")
+        dialog.set_image("test/_smoke_fond.png")
+        ok &= check("image choisie : export possible",
+                    str(dialog._ok["state"]) == "normal")
+
+        # La video se decline comme l'audio : album continu, pistes, ou les deux.
+        dialog.want_video_full.set(True)
+        dialog.want_full.set(False)     # la video seule se suffit
+        dialog.want_tracks.set(False)
+        dialog._refresh()
+        dialog.validate()
+        ok &= check(f"video seule, album et pistes ({dialog.result})",
+                    dialog.result == ExportChoice(False, False, True, True,
+                                                  "test/_smoke_export",
+                                                  "test/_smoke_fond.png"))
+
+        # Choisir un fond sans avoir coche de video en demande une : sinon le
+        # geste reste sans effet et la fenetre reclame encore une case.
+        seul = ExportDialog(app, full=False, tracks=True,
+                            directory="test/_smoke_export")
+        app.update()
+        seul.set_image("test/_smoke_fond.png")
+        ok &= check("choisir une image demande la video",
+                    seul.want_video_tracks.get())
+        seul.cancel()
 
     print("\nDossier d'export")
     import shutil
