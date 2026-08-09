@@ -88,25 +88,44 @@ class VideoParams:
 # -- disponibilité ---------------------------------------------------------
 
 
+def install_dir() -> Path:
+    """Où l'application dépose ffmpeg quand elle l'installe elle-même.
+
+    À côté de l'exécutable de préférence : l'utilisateur qui déplace
+    ConcertCutter.exe emporte ffmpeg avec, et une désinstallation est un dossier
+    à jeter. Mais un exécutable posé dans « Program Files » ou ouvert depuis une
+    archive n'a pas de dossier inscriptible autour de lui, et hors exécutable
+    empaqueté ce dossier est celui de Python — où ffmpeg n'a rien à faire. Dans
+    ces deux cas, le dossier de données de l'utilisateur.
+    """
+    if getattr(sys, "frozen", False):
+        beside = Path(sys.executable).resolve().parent
+        if os.access(beside, os.W_OK):
+            return beside
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
+    return Path(base or Path.home()) / "ConcertCutter"
+
+
 def find_ffmpeg() -> str | None:
     """Chemin de ffmpeg, ou None. Résultat mémorisé.
 
     Cherché dans l'ordre : la variable d'environnement, le dossier de
     l'exécutable (on peut déposer ffmpeg.exe à côté de ConcertCutter.exe sans
-    toucher au PATH), puis le PATH.
+    toucher au PATH), celui où l'application l'installe elle-même, puis le PATH.
     """
     if "ffmpeg" in _probe_cache:
         return _probe_cache["ffmpeg"]  # type: ignore[return-value]
 
+    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
     found = None
     override = os.environ.get("CONCERTCUTTER_FFMPEG", "").strip()
     if override and Path(override).exists():
         found = override
     if found is None:
-        name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-        beside = Path(sys.executable).resolve().parent / name
-        if beside.exists():
-            found = str(beside)
+        for folder in (Path(sys.executable).resolve().parent, install_dir()):
+            if (folder / name).exists():
+                found = str(folder / name)
+                break
     if found is None:
         found = shutil.which("ffmpeg")
 

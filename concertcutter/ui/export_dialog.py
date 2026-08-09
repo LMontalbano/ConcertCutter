@@ -19,22 +19,44 @@ Des cases à cocher, pas des boutons radio : « album continu ou pistes séparé
 ou les deux » est en réalité deux questions oui/non, et l'écrire ainsi supprime
 le troisième choix qui ne faisait que répéter les deux premiers.
 
+**La section vidéo répare elle-même ce qui lui manque.** Elle était grisée sous
+une phrase — « ffmpeg est introuvable, installez-le » — qui suppose de savoir ce
+qu'est ffmpeg, où le prendre, laquelle des archives proposées choisir, et où
+poser le fichier qu'elle contient. Un bouton fait les quatre. C'est la seule
+chose de l'application qui aille sur le réseau, et seulement quand on la clique.
+
 La fenêtre se pilote sans souris — `set_directory`, `set_image`, `validate`,
-`cancel`, et les variables Tk — pour que le contrôle automatique la traverse.
+`cancel`, `install_ffmpeg`, et les variables Tk — pour que le contrôle
+automatique la traverse.
 """
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import NamedTuple
 
-from .. import video
+from .. import ffmpeg_install, video
 from . import theme
 
 VIDEO_DESC = ("Titre du morceau intégré à la vidéo, sur l'image que vous "
               "joignez. Sur l'album continu, il suit le morceau en cours.")
+
+# Ce que voyait quelqu'un qui n'a pas ffmpeg : « ffmpeg est introuvable,
+# installez-le ». Pour un musicien qui a téléchargé un exécutable, c'est une
+# porte fermée — il faudrait trouver un site, choisir entre six archives, en
+# extraire un fichier, et savoir où le poser. Le bouton fait les quatre.
+FFMPEG_ABSENT = ("La vidéo demande ffmpeg, un outil qui ne fait pas partie de "
+                 "ConcertCutter — une centaine de mégaoctets, contre 27 pour "
+                 "l'application entière, pour une sortie dont on se passe "
+                 "souvent. Le bouton ci-dessous s'en charge, une fois pour "
+                 "toutes.")
+
+# Rythme d'interrogation de l'installation en cours. Le téléchargement se
+# compte en minutes : rafraîchir plus vite ne montrerait rien de plus.
+POLL_MS = 150
 
 # Le bas de la fenêtre est dimensionné pour le plus long de ces messages, et ne
 # bouge donc plus quand l'un remplace l'autre.
@@ -44,6 +66,10 @@ MISSING_DIR = "Choisir la destination."
 _MESSAGES = (MISSING_OUTPUT, MISSING_IMAGE, MISSING_DIR)
 
 HINT_WIDTH = 280
+
+# Largeur réservée au compte rendu de l'installation. Alignée sur celle des
+# descriptions, pour que ce rang ne soit jamais l'élément le plus large.
+INSTALL_WIDTH = 400
 
 
 class ExportChoice(NamedTuple):
@@ -85,8 +111,13 @@ class ExportDialog(tk.Toplevel):
         self.directory = tk.StringVar(value=directory)
         self.video_image = tk.StringVar(value=video_image)
         # Interrogé une fois : la réponse ne changera pas pendant que la
-        # fenêtre est ouverte, et chaque appel lance un sous-processus.
+        # fenêtre est ouverte — sauf si l'on installe ffmpeg d'ici, seul cas où
+        # c'est réinterrogé — et chaque appel lance un sous-processus.
         self._video_blocked = video.unavailable_reason()
+        self._installing = False
+        self._install_stop = False
+        self._install_step: tuple[str, int, int] = ("", 0, 0)
+        self._install_done: str | None = None
 
         body = ttk.Frame(self, padding=(20, 18))
         body.pack(fill="both", expand=True)
@@ -109,6 +140,14 @@ class ExportDialog(tk.Toplevel):
         self._video_desc = ttk.Label(body, text=VIDEO_DESC, style="Muted.TLabel",
                                      wraplength=400, justify="left")
         self._video_desc.pack(anchor="w", pady=(2, 8))
+
+        # Le rang d'installation n'existe que quand il a une raison d'être :
+        # créé absent, il ne prend aucune place chez qui a déjà ffmpeg, et la
+        # fenêtre garde la taille qu'elle a toujours eue.
+        self._install_row = self._build_install_row(body)
+        if self._can_install():
+            self._install_row.pack(anchor="w", fill="x", pady=(0, 10))
+
         self._video_full_check = self._box(body, "Album continu",
                                            self.want_video_full)
         self._video_tracks_check = self._box(body, "Pistes séparées",
@@ -201,9 +240,141 @@ class ExportDialog(tk.Toplevel):
         if chosen:
             self.set_image(chosen)
 
+    # -- installation de ffmpeg --------------------------------------------
+
+    def _build_install_row(self, parent) -> ttk.Frame:
+        row = ttk.Frame(parent)
+        self._install_button = ttk.Button(
+            row, text=f"Installer ffmpeg ({ffmpeg_install.APPROX_MB} Mo)",
+            command=self.install_ffmpeg)
+        self._install_button.pack(anchor="w")
+
+        # Barre et compte rendu vivent dans un cadre de taille imposée, comme
+        # le message du bas de la fenêtre. Posés librement, ils élargissaient
+        # la fenêtre au clic puis la rétrécissaient trois minutes plus tard :
+        # le défaut que tout le reste de cette fenêtre évite. La place est donc
+        # réservée d'avance, quitte à rester vide — elle n'existe de toute
+        # façon que sur une machine où ffmpeg manque.
+        holder = ttk.Frame(row, width=INSTALL_WIDTH, height=self._install_height())
+        holder.pack(anchor="w", fill="x", pady=(6, 0))
+        holder.pack_propagate(False)
+        # La barre n'apparaît qu'une fois le téléchargement lancé : montrée
+        # vide à l'avance, elle se lirait comme une opération déjà en cours.
+        self._install_bar = ttk.Progressbar(holder, mode="determinate",
+                                            maximum=1000)
+        self._install_state = ttk.Label(holder, text="", style="Muted.TLabel",
+                                        wraplength=INSTALL_WIDTH, justify="left")
+        self._install_state.pack(anchor="w", fill="x")
+        return row
+
+    def _install_height(self) -> int:
+        """De quoi loger la barre et deux lignes de compte rendu.
+
+        Deux lignes parce que la plus longue phrase du lot — « Téléchargement…
+        60 % (64 Mo sur 106 Mo) » ou le détail d'un échec — en occupe deux à
+        cette largeur.
+        """
+        probe = ttk.Label(self, style="Muted.TLabel", wraplength=INSTALL_WIDTH,
+                          justify="left", text="M\nM")
+        bar = ttk.Progressbar(self, mode="determinate")
+        probe.update_idletasks()
+        bar.update_idletasks()
+        height = probe.winfo_reqheight() + bar.winfo_reqheight() + 6
+        probe.destroy()
+        bar.destroy()
+        return height
+
+    def _can_install(self) -> bool:
+        """Vrai quand c'est bien ffmpeg qui manque, et qu'on sait le chercher.
+
+        Une police introuvable ou un ffmpeg sans `drawtext` bloquent aussi la
+        vidéo, mais un téléchargement n'y répondrait pas : le bouton mentirait.
+        """
+        return bool(self._video_blocked and video.find_ffmpeg() is None
+                    and ffmpeg_install.supported())
+
+    def install_ffmpeg(self) -> None:
+        """Lance le téléchargement en fond. Sans effet s'il tourne déjà."""
+        if self._installing or not self._can_install():
+            return
+        self._installing = True
+        self._install_stop = False
+        self._install_step = ("download", 0, 0)
+        self._install_done = None
+        self._install_button.configure(state="disabled")
+        # La barre se glisse au-dessus du compte rendu, déjà en place.
+        self._install_bar.pack(anchor="w", fill="x", before=self._install_state)
+        self._install_state.configure(text="Préparation…")
+        threading.Thread(target=self._run_install, daemon=True).start()
+        self.after(POLL_MS, self._poll_install)
+
+    def _run_install(self) -> None:
+        """Fil de fond. Ne touche à aucun widget : Tk n'est pas partageable."""
+        try:
+            ffmpeg_install.install(
+                progress=lambda step, done, total: setattr(
+                    self, "_install_step", (step, done, total)),
+                cancelled=lambda: self._install_stop,
+            )
+            self._install_done = ""
+        except ffmpeg_install.Cancelled:
+            self._install_done = "Installation annulée."
+        except Exception as error:
+            self._install_done = str(error)
+
+    def _poll_install(self) -> None:
+        """Reporte l'avancement dans la fenêtre, et conclut une fois fini.
+
+        Le sondage remplace un rappel direct depuis le fil : celui-ci pousse
+        une valeur toutes les 256 ko — quatre cents fois pour une archive —
+        alors que l'œil n'en distingue pas dix par seconde.
+        """
+        # La fenêtre a pu être fermée pendant le téléchargement ; le fil, lui,
+        # a reçu l'ordre de s'arrêter, mais peut mettre un bloc à le voir.
+        if not self.winfo_exists():
+            return
+        if self._install_done is None:
+            self._show_progress(*self._install_step)
+            self.after(POLL_MS, self._poll_install)
+            return
+        self._finish_install(self._install_done)
+
+    def _show_progress(self, step: str, done: int, total: int) -> None:
+        if step == "extract":
+            # La décompression dure deux secondes après plusieurs minutes de
+            # réseau : un second décompte reculerait la barre pour rien.
+            self._install_bar.configure(value=1000)
+            self._install_state.configure(text="Installation…")
+            return
+        if total:
+            self._install_bar.configure(value=int(1000 * done / total))
+            self._install_state.configure(
+                text=f"Téléchargement… {100 * done // total} % "
+                     f"({ffmpeg_install.human(done)} "
+                     f"sur {ffmpeg_install.human(total)})")
+        else:
+            self._install_state.configure(
+                text=f"Téléchargement… {ffmpeg_install.human(done)}")
+
+    def _finish_install(self, problem: str) -> None:
+        self._installing = False
+        self._install_bar.pack_forget()
+        if problem:
+            # L'échec laisse le bouton cliquable : une coupure de réseau se
+            # rattrape en réessayant, et la seconde source n'a peut-être été
+            # injoignable qu'un instant.
+            self._install_button.configure(state="normal")
+            self._install_state.configure(text=problem)
+            return
+        self._video_blocked = video.unavailable_reason()
+        self._install_row.pack_forget()
+        self._video_desc.configure(text=VIDEO_DESC)
+        self._refresh()
+
     def validate(self) -> None:
         if self._missing():
             return
+        self._install_stop = True
         vid = self._video_on()
         self.result = ExportChoice(
             full=self.want_full.get(),
@@ -216,6 +387,10 @@ class ExportDialog(tk.Toplevel):
         self.destroy()
 
     def cancel(self) -> None:
+        # Fermer la fenêtre arrête le téléchargement en cours : il n'a plus de
+        # destinataire, et cent mégaoctets continueraient de descendre sans que
+        # rien ne le montre.
+        self._install_stop = True
         self.result = None
         self.destroy()
 
@@ -274,7 +449,11 @@ class ExportDialog(tk.Toplevel):
             # ne change pas de taille sous la main de l'utilisateur.
             self.want_video_full.set(False)
             self.want_video_tracks.set(False)
-            self._video_desc.configure(text=self._video_blocked)
+            # Quand le manque se répare d'un clic, dire quoi faire plutôt que
+            # ce qui manque : « ffmpeg est introuvable » n'appelle aucune
+            # action chez qui n'a jamais entendu ce nom.
+            self._video_desc.configure(
+                text=FFMPEG_ABSENT if self._can_install() else self._video_blocked)
         _enable(not blocked, self._video_title, self._video_desc,
                 self._video_full_check, self._video_tracks_check)
         # L'image ne se choisit qu'une fois une vidéo demandée : sans ça, elle
