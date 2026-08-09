@@ -1,22 +1,34 @@
 # ConcertCutter
 
-Découpe un concert enregistré en morceaux, en retirant les blancs (discussions
-avec le public, applaudissements, accordage).
+Découpe un concert enregistré en morceaux, en retirant les blancs — discussions
+avec le public, applaudissements, accordage.
+
+![L'interface, un concert de 2 h 05 analysé](docs/interface.png)
 
 **État : V3.** Détection par mélange gaussien + Viterbi, aucun seuil réglé à la
 main, plus une interface graphique pour corriger les frontières à la souris.
 Validé sur un concert réel de 2 h 05 : 25 morceaux sur 25.
 
-## Télécharger
+### → **[Télécharger ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)** (Windows, environ 25 Mo)
 
-### → **[ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)** (Windows, environ 25 Mo)
+---
 
-**Il n'y a rien à installer.** Un seul fichier : on le télécharge, on le pose où
-l'on veut — le bureau fait très bien l'affaire — et on double-clique. Python,
-numpy et le reste sont dedans. Rien n'est inscrit dans Windows, rien n'ajouté au
-menu Démarrer ; pour désinstaller, on met le fichier à la corbeille. La seule
-exception est ffmpeg, si l'on demande l'export vidéo : il est alors posé à côté
-de l'exécutable, ou dans `%LOCALAPPDATA%\ConcertCutter`.
+**[Prise en main](#prise-en-main)** · **[En ligne de commande](#en-ligne-de-commande)**
+· **[Sous le capot](#sous-le-capot)** · **[Développement](#développement)**
+· **[Licence](#licence)**
+
+---
+
+# Prise en main
+
+## Installer, c'est-à-dire ne rien installer
+
+Un seul fichier : on le télécharge, on le pose où l'on veut — le bureau fait
+très bien l'affaire — et on double-clique. Python, numpy et le reste sont
+dedans. Rien n'est inscrit dans Windows, rien n'ajouté au menu Démarrer ; pour
+désinstaller, on met le fichier à la corbeille. La seule exception est ffmpeg,
+si l'on demande l'export vidéo : il est alors posé à côté de l'exécutable, ou
+dans `%LOCALAPPDATA%\ConcertCutter`.
 
 **Windows va afficher un avertissement au premier lancement.** « Windows a
 protégé votre ordinateur », avec un seul bouton visible. Ce n'est pas un
@@ -32,58 +44,23 @@ seul chemin qui supprime vraiment l'avertissement est le Microsoft Store, qui
 signe lui-même ce qu'il distribue — l'inscription y est gratuite depuis 2025 —
 au prix d'un empaquetage MSIX et d'un passage en revue.
 
-**Ensuite, en trois gestes** : *Ouvrir* un enregistrement WAV — la forme d'onde
-s'affiche tout de suite, et le son est déjà écoutable ; *Analyser* — les
-morceaux apparaissent en vert, les blancs en rose ; *Exporter* — choisir où
-poser le dossier du concert. Le reste de cette page décrit la mise au point fine
-et la ligne de commande, dont on peut se passer entièrement.
+## Les trois gestes
 
-**Pour l'export vidéo**, la fenêtre d'export propose un bouton qui télécharge et
-installe ffmpeg toute seule, une fois pour toutes — voir « Export vidéo ».
+**Ouvrir** un enregistrement WAV : la forme d'onde s'affiche immédiatement et le
+fichier est écoutable, **avant même d'analyser**. Le tracé d'un concert de 2 h
+apparaît en 5 s.
 
-## Construire l'exécutable
+**Analyser** : morceaux conservés en vert, passages supprimés en rose, une barre
+par frontière, et une vue d'ensemble sous le tracé.
 
-Utile seulement pour publier une version, ou après avoir modifié le code :
-
-```bash
-build_exe.bat
-```
-
-Le script installe PyInstaller au besoin et écrit `dist\ConcertCutter.exe`.
-Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos. Un simple `.bat`
-qui appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et
-les bibliothèques déjà installés sur la machine.
-
-**La publication est automatique.** `dist/` est ignoré par git : un exécutable
-construit ici ne va nulle part, et c'était la raison pour laquelle il n'existait
-aucun lien de téléchargement. Poser une étiquette de version déclenche
-`.github/workflows/release.yml`, qui reconstruit l'exécutable sous Windows et
-l'attache à une release GitHub :
-
-```bash
-git tag v1.1 && git push origin v1.1
-```
-
-Le fichier attaché garde toujours le même nom, ce qui rend le lien
-`releases/latest/download/ConcertCutter.exe` valable sans le réécrire. Le
-workflow se déclenche aussi à la main depuis l'onglet Actions, et dépose alors
-l'exécutable en pièce jointe de l'exécution, sans rien publier.
-
-## Interface graphique
-
-```bash
-python gui.py [concert.wav]
-```
-
-Ouvrir un WAV : la forme d'onde s'affiche immédiatement et le fichier est
-écoutable, **avant même d'analyser**. Le tracé d'un concert de 2 h apparaît en
-5 s. Analyser ensuite pour obtenir le découpage : morceaux conservés en vert,
-passages supprimés en rose, une barre par frontière, et une vue d'ensemble sous
-le tracé.
+**Exporter** : choisir où poser le dossier du concert. C'est tout — la suite de
+cette section ne sert qu'à corriger ce que la détection aurait manqué.
 
 Les actions qui portent sur le fichier entier — Analyser, Exporter, tracklist —
-sont groupées en haut avec le sélecteur de fichier. Les commandes d'édition
-sont contre la forme d'onde sur laquelle elles agissent.
+sont groupées en haut avec le sélecteur de fichier. Les commandes d'édition sont
+contre la forme d'onde sur laquelle elles agissent.
+
+## Corriger à la souris
 
 | Action | Comment |
 |---|---|
@@ -105,18 +82,10 @@ Toutes les éditions sont annulables : bascule, déplacement de frontière,
 suppression, découpe. L'historique retient les cinquante derniers états et
 repart à zéro à chaque nouvelle analyse.
 
-**Le zoom n'est pas un confort.** Deux heures étalées sur la largeur d'un écran
-font plus de six secondes par pixel : placer une frontière au bon endroit y est
-impossible. Sous une minute et demie de fenêtre visible, le tracé bascule
-automatiquement sur les échantillons réels, relus à la volée sur la seule
-portion affichée.
-
 Le tableau liste *tous* les segments, pas seulement les morceaux. Changer le
 sort d'une ligne entre « Garder » et « Supprimer » est le geste le plus direct
 pour corriger une erreur de catégorie — sans avoir à viser une frontière au
-pixel. La colonne Action ouvre un menu montrant les deux choix, l'actuel coché :
-une bascule au clic ne disait ni qu'elle était cliquable, ni ce qu'elle allait
-produire.
+pixel.
 
 Cette bascule ne détruit rien. Les segments restent des entités distinctes même
 quand plusieurs se suivent en « Garder » ; le regroupement en morceaux est
@@ -124,42 +93,155 @@ quand plusieurs se suivent en « Garder » ; le regroupement en morceaux est
 ses deux voisins en une seule piste, mais un second clic défait l'opération. Les
 segments ainsi rattachés apparaissent avec un `↳` dans la colonne Morceau.
 
-La tête de lecture apparaît sur les **deux** tracés — le zoom et la vue
-d'ensemble — parce que la seconde est la seule à montrer le concert entier, donc
-la seule qui situe l'écoute dans l'ensemble dès qu'on est zoomé.
+**Si tu connais le nombre de morceaux, donne-le** dans le champ « Morceaux
+attendus ». C'est la seule information qui vienne de l'extérieur du signal, donc
+la plus fiable du problème : l'outil fusionne alors les blancs les moins
+convaincants — les moins profonds et les plus courts — jusqu'à retomber sur le
+compte, et dit lesquels.
 
-La barre de progression est un canevas, pas un `ttk.Scale` : cette dernière
-avance d'un pas fixe quand on clique dans son couloir, ce qui demandait une
-dizaine de clics pour atteindre une minute précise sur un concert de deux
-heures. Ici, un clic vaut un déplacement direct.
+## Nommer les morceaux
 
-**Le lecteur** passe par l'interface MCI de Windows (`winmm.dll` via `ctypes`),
-et non par `winsound` qui ne sait que jouer un fichier entier — sans pause, ni
-position, ni intervalle. MCI lit **en flux** : mesuré à 0,06 s pour ouvrir un
-WAV de 1,86 Go, sans le charger en mémoire. On obtient donc lecture depuis un
-instant, intervalle borné, pause, reprise et position réelle, toujours sans
-aucune dépendance.
+Cliquer sur le nom d'un morceau dans la colonne Morceau ouvre un champ, Entrée
+valide, Échap annule. Sans titre, les fichiers sortent en `Piste 01`,
+`Piste 02`…
 
-Tkinter et `ctypes` sont dans la bibliothèque standard : l'interface n'ajoute
-rien à installer et reste empaquetable sans effort. La lecture n'existe que
-sous Windows ; ailleurs, tout le reste fonctionne.
+Le titre est attaché au segment qui ouvre le morceau, pas à un numéro de piste :
+une numérotation se décale dès qu'on ajoute ou retire une frontière, et les
+titres suivraient le mauvais morceau. Le renommage est annulable comme les
+autres éditions.
+
+## Exporter
+
+<img src="docs/export.png" alt="La fenêtre d'export" width="420">
+
+On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
+propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
+n'y a que de l'audio ; tout le reste va dans `infos/`.
+
+```
+<emplacement choisi>/
+└── Concert Antidote 14.07.2026/
+    ├── concert_clean.wav
+    ├── 01 - Ouverture.wav
+    ├── 02 - Le Long Chemin.wav
+    └── infos/
+        ├── concert_clean.cue
+        ├── reperes.txt
+        └── segments.json
+```
+
+La cue sheet est rangée avec les fichiers techniques mais désigne son audio par
+`../concert_clean.wav` : les lecteurs résolvent ce chemin depuis l'emplacement
+de la cue, donc elle reste fonctionnelle.
+
+**Réexporter dans un dossier déjà utilisé ne détruit rien en silence.** Le
+problème était double : les fichiers de même nom étaient écrasés sans un mot,
+et — plus insidieux — ceux dont le nom ne coïncidait pas restaient en place. Un
+second export de 5 morceaux dans un dossier qui en contenait 6 laissait
+**11 fichiers**, un mélange de deux versions qui paraissait complet.
+
+L'export refuse donc d'écrire par-dessus un export existant, et propose trois
+issues : écrire dans un dossier libre (`Concert Antidote 14.07.2026 (2)`),
+remplacer l'export précédent, ou annuler. Le remplacement s'appuie sur un
+manifeste `infos/.concertcutter-export.json` écrit à chaque export : seuls les
+fichiers qu'il liste sont effacés. Un fichier que l'utilisateur aurait déposé
+dans le dossier n'est jamais touché.
+
+## Export vidéo
+
+Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
+**une image fixe, fournie par toi, et le titre du morceau écrit dessus**.
+
+La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
+continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
+boutons radio — « l'un, l'autre, ou les deux » est en réalité deux questions
+oui/non — et aucune question préalable « audio ou vidéo ? » : cocher « Album
+continu » sous Vidéo dit déjà ce qu'on veut.
+
+Cocher une case sous Vidéo et choisir l'image. Les MP4 (H.264 + AAC,
+1920×1080) sont rangés dans `video/` :
+
+```
+└── Concert Antidote 14.07.2026/
+    ├── 01 - Ouverture.wav
+    └── video/
+        ├── concert_clean.mp4        (l'album continu)
+        ├── 01 - Ouverture.mp4
+        └── 02 - Le Long Chemin.mp4
+```
+
+Le titre incrusté est celui saisi dans la colonne Morceau — le même que celui
+qui nomme les fichiers. Un morceau resté sans titre affiche `Piste 03` plutôt
+que rien. Le corps du texte s'ajuste à la longueur du titre pour qu'il tienne
+dans la largeur, sur un bandeau sombre qui le garde lisible quelle que soit
+l'image dessous. L'image garde ses proportions et se centre : elle n'est jamais
+déformée pour remplir le cadre.
+
+**Sur la vidéo de l'album continu, le titre suit le morceau en cours** : il
+change à chaque frontière, comme des chapitres. Une seule mention figée pendant
+deux heures n'aurait rien dit de ce qu'on écoute. Les instants d'apparition sont
+ceux de la vidéo produite, pas ceux du concert d'origine — les blancs retirés
+ont décalé tout ce qui suit.
+
+Si seule la vidéo t'intéresse, décocher les deux cases sous Audio : le son n'est
+alors écrit qu'une fois, dans les MP4.
+
+L'image ne bouge jamais : le coût réel de l'encodage est celui de l'audio.
+Compter environ une minute de calcul pour trente minutes de concert.
+
+### ffmpeg s'installe d'un bouton
+
+<img src="docs/export-ffmpeg.png" alt="La fenêtre d'export sans ffmpeg" width="420">
+
+**La vidéo demande ffmpeg**, la seule dépendance externe du projet — 100 Mo,
+contre 25 pour ConcertCutter tout entier, donc il n'est pas embarqué.
+
+Un bouton, une barre de progression, et c'est fait — une seule fois, pour toutes
+les fois suivantes. Ce qui remplaçait cela était une phrase, « ffmpeg est
+introuvable, installez-le », qui suppose de savoir ce qu'est ffmpeg, quel site
+fait autorité, laquelle des six archives proposées prendre, et où poser le
+fichier qu'elle contient : quatre obstacles, dont aucun ne concerne le découpage
+d'un concert. C'est le seul endroit de l'application qui aille sur le réseau, et
+seulement au clic.
+
+L'archive vient de gyan.dev — les constructions que ffmpeg.org désigne pour
+Windows — avec les constructions BtbN sur GitHub en second recours si le premier
+site ne répond pas. Seul `bin/ffmpeg.exe` est extrait : le reste de l'archive
+pèse trois cents mégaoctets dont rien ne sert ici. Le binaire obtenu est
+**exécuté avant d'être déclaré installé** — une archive tronquée par une coupure
+de réseau donne un fichier de taille plausible, qui n'échouerait qu'à l'export,
+une heure plus tard.
+
+Il est ensuite cherché dans `CONCERTCUTTER_FFMPEG`, à côté de
+`ConcertCutter.exe`, dans le dossier d'installation
+(`%LOCALAPPDATA%\ConcertCutter`), puis dans le `PATH`. Y déposer `ffmpeg.exe` à
+la main reste donc possible, et un ffmpeg déjà présent sur la machine est
+reconnu sans rien télécharger.
+
+Sans lui, l'option est grisée et la fenêtre dit pourquoi, plutôt que de lancer
+un export qui échouerait à la première piste.
+
+---
+
+# En ligne de commande
+
+Tout ce qui précède se fait à la souris. Cette partie sert au traitement par
+lot, et à la mise au point.
 
 ## Installation
 
 ```bash
 pip install -r requirements.txt
+python gui.py [concert.wav]
 ```
 
 Aucune dépendance système : `numpy` et `soundfile` suffisent. Entrée et sortie
-en WAV — sauf l'export vidéo, qui produit du MP4 et demande ffmpeg à part
-(voir « Export vidéo »).
+en WAV — sauf l'export vidéo, qui produit du MP4 et demande ffmpeg à part.
 
-## Utilisation
-
-En une passe :
+## En une passe
 
 ```bash
-python -m concertcutter run concert.wav -d sortie
+python -m concertcutter run concert.wav -d sortie --expected-tracks 24
 ```
 
 Produit dans `sortie/` :
@@ -172,25 +254,6 @@ Et à côté du fichier source :
 
 - `concert.segments.json` — les segments détectés
 - `concert.labels.txt` — repères Audacity
-
-**Les titres se saisissent dans le tableau** : cliquer sur le nom d'un morceau
-dans la colonne Morceau ouvre un champ, Entrée valide, Échap annule. Sans titre,
-les fichiers sortent en `Piste 01`, `Piste 02`… Le titre est attaché au segment
-qui ouvre le morceau, pas à un numéro de piste : une numérotation se décale dès
-qu'on ajoute ou retire une frontière, et les titres suivraient le mauvais
-morceau. Le renommage est annulable comme les autres éditions.
-
-En ligne de commande, `--tracklist` reste disponible pour le traitement par lot.
-
-**Si tu connais le nombre de morceaux, donne-le.** C'est la seule information
-qui vienne de l'extérieur du signal, donc la plus fiable du problème :
-
-```bash
-python -m concertcutter run concert.wav -d sortie --expected-tracks 24
-```
-
-L'outil fusionne alors les blancs les moins convaincants — les moins profonds
-et les plus courts — jusqu'à retomber sur le compte, et dit lesquels.
 
 ## Revue manuelle
 
@@ -273,121 +336,7 @@ Donc : très bonne localisation, classement médiocre. C'est une **liste d'écou
 classée, pas un détecteur**. Elle sert surtout quand le nombre de morceaux
 trouvés est inférieur à celui attendu.
 
-## Structure de l'export
-
-On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
-propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
-n'y a que de l'audio ; tout le reste va dans `infos/`.
-
-```
-<emplacement choisi>/
-└── Concert Antidote 14.07.2026/
-    ├── concert_clean.wav
-    ├── 01 - Ouverture.wav
-    ├── 02 - Le Long Chemin.wav
-    └── infos/
-        ├── concert_clean.cue
-        ├── reperes.txt
-        └── segments.json
-```
-
-La cue sheet est rangée avec les fichiers techniques mais désigne son audio par
-`../concert_clean.wav` : les lecteurs résolvent ce chemin depuis l'emplacement
-de la cue, donc elle reste fonctionnelle.
-
-## Export vidéo
-
-Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
-**une image fixe, fournie par toi, et le titre du morceau écrit dessus**.
-
-La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
-continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
-boutons radio — « l'un, l'autre, ou les deux » est en réalité deux questions
-oui/non — et aucune question préalable « audio ou vidéo ? » : cocher « Album
-continu » sous Vidéo dit déjà ce qu'on veut.
-
-Cocher une case sous Vidéo et choisir l'image. Les MP4 (H.264 + AAC,
-1920×1080) sont rangés dans `video/` :
-
-```
-└── Concert Antidote 14.07.2026/
-    ├── 01 - Ouverture.wav
-    └── video/
-        ├── concert_clean.mp4        (l'album continu)
-        ├── 01 - Ouverture.mp4
-        └── 02 - Le Long Chemin.mp4
-```
-
-Le titre incrusté est celui saisi dans la colonne Morceau — c'est le même que
-celui qui nomme les fichiers. Un morceau resté sans titre affiche `Piste 03`
-plutôt que rien. Le corps du texte s'ajuste à la longueur du titre pour qu'il
-tienne dans la largeur, sur un bandeau sombre qui le garde lisible quelle que
-soit l'image dessous. L'image garde ses proportions et se centre : elle n'est
-jamais déformée pour remplir le cadre.
-
-**Sur la vidéo de l'album continu, le titre suit le morceau en cours** : il
-change à chaque frontière, comme des chapitres. Une seule mention figée pendant
-deux heures n'aurait rien dit de ce qu'on écoute. Les instants d'apparition sont
-ceux de la vidéo produite, pas ceux du concert d'origine — les blancs retirés
-ont décalé tout ce qui suit.
-
-Si seule la vidéo t'intéresse, décocher les deux cases sous Audio : le son n'est
-alors écrit qu'une fois, dans les MP4. En ligne de commande :
-
-```bash
-python -m concertcutter render concert.segments.json -d sortie \
-    --video-image pochette.jpg --video les-deux --no-wav
-```
-
-**Ceci demande ffmpeg**, la seule dépendance externe du projet — 100 Mo, contre
-27 pour ConcertCutter tout entier, donc il n'est pas embarqué. Sans lui,
-l'option est grisée et la fenêtre dit pourquoi, plutôt que de lancer un export
-qui échouerait à la première piste.
-
-**La fenêtre d'export sait l'installer elle-même.** Un bouton, une barre de
-progression, et c'est fait — une seule fois, pour toutes les fois suivantes. Ce
-qui remplaçait cela était une phrase, « ffmpeg est introuvable, installez-le »,
-qui suppose de savoir ce qu'est ffmpeg, quel site fait autorité, laquelle des
-six archives proposées prendre, et où poser le fichier qu'elle contient : quatre
-obstacles, dont aucun ne concerne le découpage d'un concert. C'est le seul
-endroit de l'application qui aille sur le réseau, et seulement au clic.
-
-L'archive vient de gyan.dev — les constructions que ffmpeg.org désigne pour
-Windows — avec les constructions BtbN sur GitHub en second recours si le premier
-site ne répond pas. Seul `bin/ffmpeg.exe` est extrait : le reste de l'archive
-pèse trois cents mégaoctets dont rien ne sert ici. Le binaire obtenu est
-**exécuté avant d'être déclaré installé** — une archive tronquée par une
-coupure de réseau donne un fichier de taille plausible, qui n'échouerait
-qu'à l'export, une heure plus tard.
-
-Il est ensuite cherché dans `CONCERTCUTTER_FFMPEG`, à côté de
-`ConcertCutter.exe`, dans le dossier d'installation
-(`%LOCALAPPDATA%\ConcertCutter`), puis dans le `PATH`. Y déposer `ffmpeg.exe`
-à la main reste donc possible, et un ffmpeg déjà présent sur la machine est
-reconnu sans rien télécharger.
-
-L'image ne bouge jamais : le coût réel de l'encodage est celui de l'audio.
-Compter environ une minute de calcul pour trente minutes de concert.
-
-## Protection des exports
-
-Réexporter dans un dossier déjà utilisé ne détruit plus rien en silence.
-
-Le problème était double. Les fichiers de même nom étaient écrasés sans un mot,
-et — plus insidieux — ceux dont le nom ne coïncidait pas restaient en place :
-un second export de 5 morceaux dans un dossier qui en contenait 6 laissait
-**11 fichiers**, un mélange de deux versions qui paraissait complet.
-
-L'export refuse désormais d'écrire par-dessus un export existant. L'interface
-propose alors trois issues : écrire dans un dossier libre
-(`Concert Antidote 14.07.2026 (2)`), remplacer l'export précédent, ou annuler.
-En ligne de commande, il faut `--overwrite`.
-
-Le remplacement s'appuie sur un manifeste `infos/.concertcutter-export.json`
-écrit à chaque export : seuls les fichiers qu'il liste sont effacés. Un fichier
-que l'utilisateur aurait déposé dans le dossier n'est jamais touché.
-
-## Réglages
+## Toutes les options
 
 | Option | Défaut | Effet |
 |---|---|---|
@@ -403,12 +352,17 @@ que l'utilisateur aurait déposé dans le dossier n'est jamais touché.
 | `--video-image F` | — | Écrit aussi des MP4, sur cette image de fond |
 | `--video` | `pistes` | Quelles vidéos : `pistes`, `album`, ou `les-deux` |
 | `--no-wav` | — | Avec `--video-image` : les vidéos seules, sans les WAV |
+| `--overwrite` | — | Autorise l'écriture par-dessus un export existant |
 | `--method energy` | — | Repasse au détecteur V0, pour comparaison |
-| `--cache F.npz` | — | Cache des descripteurs : 8 s au lieu de 0 s à relire |
+| `--cache F.npz` | — | Relit les descripteurs (instantané) au lieu de les recalculer (9 s sur 2 h 05) |
 
 Le coût des erreurs est asymétrique : garder dix secondes d'applaudissements
 passe inaperçu, rogner les deux premières mesures d'un morceau ruine la piste.
 Tous les défauts penchent du côté conservateur.
+
+---
+
+# Sous le capot
 
 ## Comment marche la détection
 
@@ -426,37 +380,37 @@ Tous les défauts penchent du côté conservateur.
 Sur le concert de test, les deux modes tombent à **-43,2 dB** et **-24,7 dB**,
 soit 18,5 dB d'écart, sans aucun réglage.
 
-## Outils de développement
+## Pourquoi l'interface est faite ainsi
 
-Il n'y a pas encore de matériel réel : `tools/` fabrique de quoi tester.
+**Le zoom n'est pas un confort.** Deux heures étalées sur la largeur d'un écran
+font plus de six secondes par pixel : placer une frontière au bon endroit y est
+impossible. Sous une minute et demie de fenêtre visible, le tracé bascule
+automatiquement sur les échantillons réels, relus à la volée sur la seule
+portion affichée.
 
-```bash
-python tools/make_fake_concert.py -n 6 -o test/faux_concert.wav
-python -m concertcutter run test/faux_concert.wav -d test/sortie
-python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.json
-```
+**La colonne Action ouvre un menu** montrant les deux choix, l'actuel coché :
+une bascule au clic ne disait ni qu'elle était cliquable, ni ce qu'elle allait
+produire.
 
-- `make_fake_concert.py` — faux concert + vérité terrain
-- `compare.py` — morceaux retrouvés et **secondes de musique rognées**
-- `sweep.py` — balaye `drop_db` pour vérifier qu'un réglage tient sur une plage
-  large, et pas seulement sur 2 dB
-- `check_output.py` — durées, écrêtage, et bords à zéro (un fondu manquant
-  s'entend comme un clic)
-- `check_ffmpeg_install.py` — le bouton d'installation : emplacement, sources
-  joignables, ménage d'un téléchargement abandonné, et la fenêtre qui ne bouge
-  pas pendant le travail. Le téléchargement y est simulé, sauf avec
-  `--vraiment` qui installe pour de bon puis remet la machine en état
-- `check_video_export.py` — de bout en bout : le titre saisi finit-il écrit sur
-  l'image du MP4, et change-t-il bien au morceau suivant sur l'album continu ?
-  Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
-  fait pas échouer ffmpeg, elle sort une vidéo vierge. Le test s'annonce ignoré
-  si ffmpeg manque, il n'échoue pas
+**La tête de lecture apparaît sur les deux tracés** — le zoom et la vue
+d'ensemble — parce que la seconde est la seule à montrer le concert entier, donc
+la seule qui situe l'écoute dans l'ensemble dès qu'on est zoomé.
 
-`sweep.py` demande le paquet sur le `PYTHONPATH` :
+**La barre de progression est un canevas**, pas un `ttk.Scale` : cette dernière
+avance d'un pas fixe quand on clique dans son couloir, ce qui demandait une
+dizaine de clics pour atteindre une minute précise sur un concert de deux
+heures. Ici, un clic vaut un déplacement direct.
 
-```bash
-PYTHONPATH=. python tools/sweep.py test/faux_concert.wav test/faux_concert.truth.json
-```
+**Le lecteur** passe par l'interface MCI de Windows (`winmm.dll` via `ctypes`),
+et non par `winsound` qui ne sait que jouer un fichier entier — sans pause, ni
+position, ni intervalle. MCI lit **en flux** : mesuré à 0,06 s pour ouvrir un
+WAV de 1,86 Go, sans le charger en mémoire. On obtient donc lecture depuis un
+instant, intervalle borné, pause, reprise et position réelle, toujours sans
+aucune dépendance.
+
+Tkinter et `ctypes` sont dans la bibliothèque standard : l'interface n'ajoute
+rien à installer et reste empaquetable sans effort. La lecture n'existe que
+sous Windows ; ailleurs, tout le reste fonctionne.
 
 ## Ce que le matériel réel a appris
 
@@ -491,7 +445,7 @@ public n'y entre que par repisse.
 - **Le tempogramme ne marche pas** sur ce matériel — voir l'en-tête de
   `segue.py`. Le code reste, sous `--with-rhythm`, mais désactivé.
 
-### Pistes pour la suite
+## Pistes pour la suite
 
 **Whisper, mais ciblé.** Transcrire les deux heures serait lent et peu fiable :
 Whisper est entraîné sur de la parole et hallucine abondamment sur de la
@@ -516,3 +470,79 @@ se calcule dans la passe spectrale existante.
 d'émissions alternative du HMM : le reste du code ne bougerait pas, tout passe
 par `list[Segment]`. Attention au poids pour une application à empaqueter —
 TensorFlow dépasse 500 Mo, un export ONNX serait préférable.
+
+---
+
+# Développement
+
+## Construire l'exécutable
+
+Utile seulement pour publier une version, ou après avoir modifié le code :
+
+```bash
+build_exe.bat
+```
+
+Le script installe PyInstaller au besoin et écrit `dist\ConcertCutter.exe`.
+Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos. Un simple `.bat`
+qui appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et
+les bibliothèques déjà installés sur la machine.
+
+**La publication est automatique.** `dist/` est ignoré par git : un exécutable
+construit ici ne va nulle part, et c'était la raison pour laquelle il n'existait
+aucun lien de téléchargement. Poser une étiquette de version déclenche
+`.github/workflows/release.yml`, qui reconstruit l'exécutable sous Windows et
+l'attache à une release GitHub :
+
+```bash
+git tag v1.1 && git push origin v1.1
+```
+
+Le fichier attaché garde toujours le même nom, ce qui rend le lien
+`releases/latest/download/ConcertCutter.exe` valable sans le réécrire. Le
+workflow se déclenche aussi à la main depuis l'onglet Actions, et dépose alors
+l'exécutable en pièce jointe de l'exécution, sans rien publier.
+
+## Outils
+
+`tools/` fabrique de quoi tester sans dépendre d'un concert réel, et contrôle ce
+qui ne se voit pas à la lecture.
+
+```bash
+python tools/make_fake_concert.py -n 6 -o test/faux_concert.wav
+python -m concertcutter run test/faux_concert.wav -d test/sortie
+python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.json
+```
+
+- `make_fake_concert.py` — faux concert + vérité terrain
+- `compare.py` — morceaux retrouvés et **secondes de musique rognées**
+- `sweep.py` — balaye `drop_db` pour vérifier qu'un réglage tient sur une plage
+  large, et pas seulement sur 2 dB
+- `check_output.py` — durées, écrêtage, et bords à zéro (un fondu manquant
+  s'entend comme un clic)
+- `check_ffmpeg_install.py` — le bouton d'installation : emplacement, sources
+  joignables, ménage d'un téléchargement abandonné, et la fenêtre qui ne bouge
+  pas pendant le travail. Le téléchargement y est simulé, sauf avec
+  `--vraiment` qui installe pour de bon puis remet la machine en état
+- `check_video_export.py` — de bout en bout : le titre saisi finit-il écrit sur
+  l'image du MP4, et change-t-il bien au morceau suivant sur l'album continu ?
+  Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
+  fait pas échouer ffmpeg, elle sort une vidéo vierge. Le test s'annonce ignoré
+  si ffmpeg manque, il n'échoue pas
+- `smoke_gui.py` — l'interface entière parcourue sans souris
+- `make_screenshots.py` — refait les captures de ce README. Une capture prise à
+  la main vieillit sans prévenir
+
+Ces scripts demandent le paquet sur le `PYTHONPATH` :
+
+```bash
+PYTHONPATH=. python tools/sweep.py test/faux_concert.wav test/faux_concert.truth.json
+```
+
+---
+
+# Licence
+
+[MIT](LICENSE). ffmpeg, s'il est installé par le bouton de la fenêtre d'export,
+reste distribué par ses auteurs sous ses propres conditions — il est téléchargé
+sur la machine de l'utilisateur, jamais redistribué ici.
