@@ -7,22 +7,60 @@ avec le public, applaudissements, accordage).
 main, plus une interface graphique pour corriger les frontières à la souris.
 Validé sur un concert réel de 2 h 05 : 25 morceaux sur 25.
 
-## Exécutable autonome
+## Télécharger
 
-`dist\ConcertCutter.exe` — un seul fichier de 27 Mo, qui embarque Python, numpy,
-soundfile et sa bibliothèque `libsndfile`. La machine cible n'a **rien** à
-installer. Double-clic pour lancer, ou déposer un WAV dessus pour l'ouvrir
-directement. Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos.
+### → **[ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)** (Windows, 27 Mo)
 
-Pour le reconstruire après une modification du code :
+**Il n'y a rien à installer.** Un seul fichier : on le télécharge, on le pose où
+l'on veut — le bureau fait très bien l'affaire — et on double-clique. Python,
+numpy et le reste sont dedans. Rien n'est inscrit dans Windows, rien n'ajouté au
+menu Démarrer ; pour désinstaller, on met le fichier à la corbeille. La seule
+exception est ffmpeg, si l'on demande l'export vidéo : il est alors posé à côté
+de l'exécutable, ou dans `%LOCALAPPDATA%\ConcertCutter`.
+
+**Windows va afficher un avertissement au premier lancement.** « Windows a
+protégé votre ordinateur », avec un seul bouton visible. C'est normal, et ce
+n'est pas un antivirus : Windows dit cela de tout programme dont l'auteur n'a
+pas acheté de certificat de signature, ce qui coûte quelques centaines d'euros
+par an. Pour passer outre : cliquer **Informations complémentaires**, puis
+**Exécuter quand même**. Ce n'est demandé qu'une fois.
+
+**Ensuite, en trois gestes** : *Ouvrir* un enregistrement WAV — la forme d'onde
+s'affiche tout de suite, et le son est déjà écoutable ; *Analyser* — les
+morceaux apparaissent en vert, les blancs en rose ; *Exporter* — choisir où
+poser le dossier du concert. Le reste de cette page décrit la mise au point fine
+et la ligne de commande, dont on peut se passer entièrement.
+
+**Pour l'export vidéo**, la fenêtre d'export propose un bouton qui télécharge et
+installe ffmpeg toute seule, une fois pour toutes — voir « Export vidéo ».
+
+## Construire l'exécutable
+
+Utile seulement pour publier une version, ou après avoir modifié le code :
 
 ```bash
 build_exe.bat
 ```
 
-Le script installe PyInstaller au besoin. À noter : un simple `.bat` qui
-appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et les
-bibliothèques déjà installés sur la machine.
+Le script installe PyInstaller au besoin et écrit `dist\ConcertCutter.exe`.
+Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos. Un simple `.bat`
+qui appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et
+les bibliothèques déjà installés sur la machine.
+
+**La publication est automatique.** `dist/` est ignoré par git : un exécutable
+construit ici ne va nulle part, et c'était la raison pour laquelle il n'existait
+aucun lien de téléchargement. Poser une étiquette de version déclenche
+`.github/workflows/release.yml`, qui reconstruit l'exécutable sous Windows et
+l'attache à une release GitHub :
+
+```bash
+git tag v1.1 && git push origin v1.1
+```
+
+Le fichier attaché garde toujours le même nom, ce qui rend le lien
+`releases/latest/download/ConcertCutter.exe` valable sans le réécrire. Le
+workflow se déclenche aussi à la main depuis l'onglet Actions, et dépose alors
+l'exécutable en pièce jointe de l'exécution, sans rien publier.
 
 ## Interface graphique
 
@@ -295,11 +333,31 @@ python -m concertcutter render concert.segments.json -d sortie \
 ```
 
 **Ceci demande ffmpeg**, la seule dépendance externe du projet — 100 Mo, contre
-27 pour ConcertCutter tout entier, donc il n'est pas embarqué. Il est cherché
-dans `CONCERTCUTTER_FFMPEG`, puis à côté de `ConcertCutter.exe`, puis dans le
-`PATH` : déposer `ffmpeg.exe` dans le dossier de l'exécutable suffit. Sans lui,
+27 pour ConcertCutter tout entier, donc il n'est pas embarqué. Sans lui,
 l'option est grisée et la fenêtre dit pourquoi, plutôt que de lancer un export
 qui échouerait à la première piste.
+
+**La fenêtre d'export sait l'installer elle-même.** Un bouton, une barre de
+progression, et c'est fait — une seule fois, pour toutes les fois suivantes. Ce
+qui remplaçait cela était une phrase, « ffmpeg est introuvable, installez-le »,
+qui suppose de savoir ce qu'est ffmpeg, quel site fait autorité, laquelle des
+six archives proposées prendre, et où poser le fichier qu'elle contient : quatre
+obstacles, dont aucun ne concerne le découpage d'un concert. C'est le seul
+endroit de l'application qui aille sur le réseau, et seulement au clic.
+
+L'archive vient de gyan.dev — les constructions que ffmpeg.org désigne pour
+Windows — avec les constructions BtbN sur GitHub en second recours si le premier
+site ne répond pas. Seul `bin/ffmpeg.exe` est extrait : le reste de l'archive
+pèse trois cents mégaoctets dont rien ne sert ici. Le binaire obtenu est
+**exécuté avant d'être déclaré installé** — une archive tronquée par une
+coupure de réseau donne un fichier de taille plausible, qui n'échouerait
+qu'à l'export, une heure plus tard.
+
+Il est ensuite cherché dans `CONCERTCUTTER_FFMPEG`, à côté de
+`ConcertCutter.exe`, dans le dossier d'installation
+(`%LOCALAPPDATA%\ConcertCutter`), puis dans le `PATH`. Y déposer `ffmpeg.exe`
+à la main reste donc possible, et un ffmpeg déjà présent sur la machine est
+reconnu sans rien télécharger.
 
 L'image ne bouge jamais : le coût réel de l'encodage est celui de l'audio.
 Compter environ une minute de calcul pour trente minutes de concert.
@@ -377,6 +435,10 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
   large, et pas seulement sur 2 dB
 - `check_output.py` — durées, écrêtage, et bords à zéro (un fondu manquant
   s'entend comme un clic)
+- `check_ffmpeg_install.py` — le bouton d'installation : emplacement, sources
+  joignables, ménage d'un téléchargement abandonné, et la fenêtre qui ne bouge
+  pas pendant le travail. Le téléchargement y est simulé, sauf avec
+  `--vraiment` qui installe pour de bon puis remet la machine en état
 - `check_video_export.py` — de bout en bout : le titre saisi finit-il écrit sur
   l'image du MP4, et change-t-il bien au morceau suivant sur l'album continu ?
   Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
