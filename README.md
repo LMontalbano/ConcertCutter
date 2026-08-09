@@ -9,7 +9,7 @@ Validé sur un concert réel de 2 h 05 : 25 morceaux sur 25.
 
 ## Télécharger
 
-### → **[ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)** (Windows, 27 Mo)
+### → **[ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)** (Windows, environ 25 Mo)
 
 **Il n'y a rien à installer.** Un seul fichier : on le télécharge, on le pose où
 l'on veut — le bureau fait très bien l'affaire — et on double-clique. Python,
