@@ -162,6 +162,13 @@ def apply(root: tk.Misc) -> ttk.Style:
                     bordercolor=BORDER_STRONG, insertcolor=TEXT, padding=5)
     style.configure("TSpinbox", fieldbackground=FIELD_BG, foreground=TEXT,
                     bordercolor=BORDER_STRONG, arrowcolor=TEXT, padding=4)
+    # Champ posé dans une cellule du tableau, pour saisir un titre. Le
+    # rembourrage vertical des autres champs y ferait réclamer 43 px de haut à
+    # une ligne qui en fait 32 : le champ, ramené de force à la hauteur de la
+    # ligne, rognait le bas des lettres — on tapait un titre dont la moitié
+    # basse était mangée par du blanc, et il ne réapparaissait entier qu'une
+    # fois la saisie refermée.
+    style.configure("Cell.TEntry", padding=(5, 0))
     style.configure("TCheckbutton", background=PANEL_BG, foreground=TEXT)
     style.map("TCheckbutton", background=[("active", PANEL_BG)])
 

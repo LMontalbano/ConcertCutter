@@ -1214,9 +1214,14 @@ class App(tk.Tk):
             return
 
         segment = self.analysis.segments[position]
-        editor = ttk.Entry(self.tree)
+        editor = ttk.Entry(self.tree, style="Cell.TEntry")
         editor.insert(0, segment.title)
-        editor.place(x=box[0], y=box[1], width=box[2], height=box[3])
+        # Jamais moins que sa hauteur naturelle : un champ écrasé ne recentre
+        # pas son texte, il en coupe le bas. Le surplus se répartit de part et
+        # d'autre de la ligne, pour que la saisie reste centrée sur elle.
+        height = max(box[3], editor.winfo_reqheight())
+        editor.place(x=box[0], y=box[1] - (height - box[3]) // 2,
+                     width=box[2], height=height)
         editor.focus_set()
         editor.select_range(0, "end")
         self._title_editor = editor
