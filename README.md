@@ -89,7 +89,7 @@ d'une traite.
 | Poser une frontière | Cliquer dans le tracé, puis « Couper » (C) — vert ou rouge |
 | Séparer un morceau en deux pistes | « Séparer » (Maj+C), qui insère le blanc nécessaire |
 | Garder / Supprimer un passage | Cliquer la colonne Action de la ligne |
-| Tout cocher / décocher | Les boutons au-dessus du tableau |
+| Avancer dans un morceau | Cliquer dans sa silhouette, colonne Piste |
 | Nommer un morceau | Cliquer son nom dans la colonne Morceau et saisir |
 | Choisir les morceaux à exporter | La liste « Morceaux » de la fenêtre d'export |
 | Exporter en vidéo | Cocher une case sous « Vidéo » dans la fenêtre d'export |
@@ -123,7 +123,16 @@ Cette bascule ne détruit rien. Les segments restent des entités distinctes mê
 quand plusieurs se suivent en « Garder » ; le regroupement en morceaux est
 *calculé* au moment du rendu. Marquer un blanc comme conservé réunit donc bien
 ses deux voisins en une seule piste, mais un second clic défait l'opération. Les
-segments ainsi rattachés apparaissent avec un `↳` dans la colonne Morceau.
+segments ainsi rattachés portent le nom du morceau suivi de `(suite)`.
+
+**Le numéro d'un morceau est posé à l'analyse et ne bouge plus.** Il bougeait :
+décocher le morceau 4 faisait remonter tous les suivants d'un cran, si bien
+qu'on ne pouvait plus désigner un morceau par son numéro d'un bout à l'autre
+d'une séance, ni retrouver dans un dossier d'export le « 12 » qu'on avait sous
+les yeux en travaillant. Un morceau écarté laisse maintenant un trou dans la
+suite — 01, 02, 04, 05 —, ce qui est exactement l'information utile : il manque
+quelque chose, et on sait quoi. Il garde son numéro et son nom dans le tableau,
+suivis de la mention « retiré », et les retrouve si on le recoche.
 
 **Si tu connais le nombre de morceaux, donne-le** dans le champ « Morceaux
 attendus ». C'est la seule information qui vienne de l'extérieur du signal, donc
@@ -149,14 +158,21 @@ autres éditions.
 
 <img src="docs/export.png" alt="La fenêtre d'export" width="420">
 
+La fenêtre pose **trois questions numérotées**, dans l'ordre où on se les pose :
+quels morceaux, sous quelle forme, où. Les morceaux passent en premier — c'est
+la seule décision qui porte sur le concert, les deux autres portent sur des
+fichiers. Chaque réglage est rangé sous ce qu'il modifie : le fondu enchaîné
+sous les deux cases audio, puisqu'il n'agit que sur le fichier d'un seul tenant,
+et le fondu entre images sous les images.
+
 On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
 propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
 n'y a que de l'audio ; tout le reste va dans `infos/`.
 
 **Un concert n'a pas toujours à sortir en entier** — trois titres pour une
-maquette, le rappel seul pour l'envoyer à quelqu'un. La liste « Morceaux » de la
-fenêtre d'export permet de n'en cocher qu'une partie. Décocher là ne touche ni
-au découpage ni à la numérotation : la piste 7 s'appelle `07` même si elle part
+maquette, le rappel seul pour l'envoyer à quelqu'un. La première question de la
+fenêtre permet de n'en cocher qu'une partie. Décocher là ne touche ni au
+découpage ni à la numérotation : la piste 7 s'appelle `07` même si elle part
 seule, sans quoi le dossier ne correspondrait plus ni au concert ni à un export
 complet du même enregistrement. Pour retirer un passage du concert lui-même,
 c'est la case du tableau.
@@ -197,6 +213,15 @@ Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
 images se choisissent d'un coup et défilent alors en diaporama, avec un fondu de
 l'une à l'autre — une seule photo tenue deux heures finit par peser.
 
+**Rien à régler en secondes.** Les images se répartissent d'elles-mêmes sur la
+durée à couvrir, et sur la vidéo du concert entier le changement d'image tombe
+sur le changement de morceau : le passage d'un titre au suivant gagne ainsi un
+repère visuel, là où un défilement à intervalle fixe dérivait et tombait au
+milieu d'un morceau une fois sur deux. Plus d'images que de morceaux : elles se
+répartissent à l'intérieur des morceaux, toutes servies. Moins d'images que de
+morceaux : elles tournent, et chaque changement de morceau amène quand même la
+suivante.
+
 La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
 continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
 boutons radio — « l'un, l'autre, ou les deux » est en réalité deux questions
@@ -223,10 +248,8 @@ l'image dessous. L'image garde ses proportions et se centre : elle n'est jamais
 déformée pour remplir le cadre.
 
 Les images d'un diaporama peuvent avoir des tailles différentes : chacune est
-mise au cadre avant d'être enchaînée. Un cycle est encodé à part puis rejoué en
-boucle — dérouler les images sur la durée du concert demanderait neuf cents
-entrées pour deux heures. La reprise du cycle tombe en plein fondu, elle ne se
-voit pas.
+mise au cadre avant d'être enchaînée, ce qui évite à ffmpeg de buter sur un
+changement de format en cours de flux.
 
 **Sur la vidéo de l'album continu, le titre suit le morceau en cours** : il
 change à chaque frontière, comme des chapitres. Une seule mention figée pendant
