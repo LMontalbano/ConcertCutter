@@ -59,9 +59,16 @@ HELP_VIDEO_FULL = ("Un MP4 du concert entier, sur l'image de fond. Le titre "
 HELP_VIDEO_TRACKS = ("Un MP4 par morceau, son titre incrusté. C'est la forme "
                      "qu'attendent les plateformes qui n'acceptent que de la "
                      "vidéo.")
-HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. Elle "
-              "garde ses proportions et se centre sur du noir — elle n'est "
-              "jamais déformée pour remplir le cadre.")
+HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. On peut "
+              "en choisir plusieurs d'un coup — elles défilent alors en "
+              "diaporama. Chacune garde ses proportions et se centre sur du "
+              "noir, elle n'est jamais déformée pour remplir le cadre.")
+HELP_SLIDE = ("Temps d'affichage de chaque image avant de passer à la "
+              "suivante. Le diaporama repart au début tant que le morceau "
+              "dure.")
+HELP_SLIDE_FADE = ("Durée du fondu d'une image à la suivante. À zéro, elles se "
+                   "remplacent d'un coup. Le passage du cycle au suivant est "
+                   "fondu lui aussi, pour que la boucle ne se voie pas.")
 HELP_DIR = ("Le concert reçoit son propre dossier ici, nommé d'après "
             "l'enregistrement. Un export déjà présent n'est jamais écrasé "
             "sans qu'on le demande.")
@@ -119,6 +126,12 @@ class ExportChoice(NamedTuple):
     video_tracks: bool
     directory: str
     video_image: str = ""
+    # Les autres fonds, quand on en a choisi plusieurs : ils défilent en boucle
+    # sous le son. `video_image` reste la première, pour que tout ce qui n'en
+    # attend qu'une continue de marcher.
+    video_images: tuple[str, ...] = ()
+    slide_s: float = video.SLIDE_S
+    slide_fade_s: float = video.SLIDE_FADE_S
     # Numéros des morceaux retenus, ou None quand ils y sont tous. None plutôt
     # qu'une liste complète : le rendu n'a alors rien à filtrer, et un projet
     # rouvert après l'ajout d'un morceau l'exporte au lieu de l'oublier parce
@@ -135,6 +148,7 @@ class ExportDialog(tk.Toplevel):
     def __init__(self, master, full: bool = True, tracks: bool = True,
                  video_full: bool = False, video_tracks: bool = False,
                  directory: str = "", video_image: str = "",
+                 video_images: tuple[str, ...] = (),
                  pieces: list[tuple[int, str, float]] | None = None,
                  selection: tuple[int, ...] | None = None):
         super().__init__(master)
@@ -149,6 +163,14 @@ class ExportDialog(tk.Toplevel):
         self.want_video_tracks = tk.BooleanVar(value=bool(video_tracks))
         self.directory = tk.StringVar(value=directory)
         self.video_image = tk.StringVar(value=video_image)
+        # Ce que le champ montre : un chemin quand il n'y a qu'une image, leur
+        # compte quand il y en a plusieurs — vingt chemins bout à bout ne se
+        # lisent pas.
+        self.image_shown = tk.StringVar(value=video_image)
+        self.video_images: tuple[str, ...] = (
+            tuple(video_images) or ((video_image,) if video_image else ()))
+        self.slide_s = tk.StringVar(value=f"{video.SLIDE_S:.0f}")
+        self.slide_fade_s = tk.StringVar(value=f"{video.SLIDE_FADE_S:.1f}")
         self.pieces = list(pieces or [])
         # Interrogé une fois : la réponse ne changera pas pendant que la
         # fenêtre est ouverte — sauf si l'on installe ffmpeg d'ici, seul cas où
@@ -206,13 +228,28 @@ class ExportDialog(tk.Toplevel):
 
         image_row = ttk.Frame(body)
         image_row.pack(fill="x", pady=(8, 0))
-        self._image = ttk.Entry(image_row, textvariable=self.video_image,
+        self._image = ttk.Entry(image_row, textvariable=self.image_shown,
                                 width=44, state="readonly")
         self._image.pack(side="left", fill="x", expand=True)
         self._image_button = ttk.Button(image_row, text="Image…",
                                         command=self.browse_image)
         self._image_button.pack(side="left", padx=(8, 0))
         tooltip.attach(self._image_button, HELP_IMAGE)
+
+        # Les réglages du diaporama n'apparaissent qu'à partir de deux images :
+        # une durée d'affichage pour une seule photo ne veut rien dire.
+        self._slide_row = ttk.Frame(body)
+        ttk.Label(self._slide_row, text="Chaque image",
+                  style="Muted.TLabel").pack(side="left")
+        slide = ttk.Entry(self._slide_row, textvariable=self.slide_s, width=5)
+        slide.pack(side="left", padx=(7, 4))
+        ttk.Label(self._slide_row, text="s     Fondu",
+                  style="Muted.TLabel").pack(side="left")
+        fade = ttk.Entry(self._slide_row, textvariable=self.slide_fade_s, width=5)
+        fade.pack(side="left", padx=(7, 4))
+        ttk.Label(self._slide_row, text="s", style="Muted.TLabel").pack(side="left")
+        tooltip.attach(slide, HELP_SLIDE)
+        tooltip.attach(fade, HELP_SLIDE_FADE)
 
         ttk.Separator(body).pack(fill="x", pady=16)
 
@@ -252,6 +289,11 @@ class ExportDialog(tk.Toplevel):
         self._hint = ttk.Label(holder, text="", style="Muted.TLabel",
                                wraplength=HINT_WIDTH, justify="left")
         self._hint.pack(anchor="w", fill="both", expand=True)
+
+        # Le champ montre d'emblée ce qui a été retenu du dernier export : un
+        # diaporama de douze images ne se rechoisit pas de mémoire.
+        if len(self.video_images) > 1:
+            self.set_images(self.video_images)
 
         self.directory.trace_add("write", lambda *_: self._refresh())
         self.video_image.trace_add("write", lambda *_: self._refresh())
@@ -351,13 +393,24 @@ class ExportDialog(tk.Toplevel):
         self.directory.set(path)
 
     def set_image(self, path: str) -> None:
-        """Choisir une image sans avoir coché de vidéo en demande une.
+        """Une image de fond, et une seule."""
+        self.set_images([path] if path else [])
+
+    def set_images(self, paths) -> None:
+        """Choisir des images sans avoir coché de vidéo en demande une.
 
         Aller chercher un fond puis se voir répondre qu'il manque encore une
         case serait absurde : le geste dit déjà ce qu'on veut.
         """
-        self.video_image.set(path)
-        if path and not self._video_on():
+        chosen = tuple(str(path) for path in paths if str(path).strip())
+        self.video_images = chosen
+        self.video_image.set(chosen[0] if chosen else "")
+        self.image_shown.set(
+            chosen[0] if len(chosen) == 1
+            else (f"{len(chosen)} images : "
+                  + ", ".join(Path(path).name for path in chosen[:3])
+                  + ("…" if len(chosen) > 3 else "")) if chosen else "")
+        if chosen and not self._video_on():
             self.want_video_tracks.set(True)
         self._refresh()
 
@@ -370,13 +423,15 @@ class ExportDialog(tk.Toplevel):
 
     def browse_image(self) -> None:
         current = self.video_image.get()
-        chosen = filedialog.askopenfilename(
-            parent=self, title="Image de fond des vidéos",
+        chosen = filedialog.askopenfilenames(
+            parent=self, title="Image de fond, ou images du diaporama",
             initialdir=str(Path(current).parent) if current else None,
             filetypes=[("Images", " ".join(f"*{ext}" for ext in video.IMAGE_TYPES)),
                        ("Tous les fichiers", "*.*")])
         if chosen:
-            self.set_image(chosen)
+            # Triées par nom : le sélecteur les rend dans l'ordre où l'on a
+            # cliqué, qui n'est pas celui qu'on veut voir défiler.
+            self.set_images(sorted(chosen))
 
     # -- installation de ffmpeg --------------------------------------------
 
@@ -521,6 +576,9 @@ class ExportDialog(tk.Toplevel):
             video_tracks=vid and self.want_video_tracks.get(),
             directory=self.directory.get(),
             video_image=self.video_image.get() if vid else "",
+            video_images=self.video_images if vid else (),
+            slide_s=_number(self.slide_s.get(), video.SLIDE_S),
+            slide_fade_s=_number(self.slide_fade_s.get(), video.SLIDE_FADE_S),
             selection=self.selected(),
         )
         self.destroy()
@@ -604,6 +662,10 @@ class ExportDialog(tk.Toplevel):
         # n'irait nulle part.
         self._image_button.configure(
             state="normal" if self._video_on() else "disabled")
+        if len(self.video_images) > 1 and self._video_on():
+            self._slide_row.pack(anchor="w", fill="x", pady=(8, 0))
+        else:
+            self._slide_row.pack_forget()
 
         missing = self._missing()
         self._hint.configure(text=missing)
@@ -626,6 +688,19 @@ def _enable(on: bool, *widgets) -> None:
         widget.configure(state="normal" if on else "disabled")
 
 
+def _number(text: str, fallback: float) -> float:
+    """Un réglage saisi, ou sa valeur par défaut s'il ne se lit pas.
+
+    Refuser la validation pour un champ mal tapé arrêterait tout l'export sur
+    un détail de diaporama ; retomber sur la valeur d'usine ne coûte rien et se
+    voit tout de suite à la lecture.
+    """
+    try:
+        return max(0.0, float(text.replace(",", ".")))
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _clock(seconds: float) -> str:
     """Durée en minutes et secondes, heures comprises au-delà de soixante."""
     seconds = max(0.0, float(seconds))
@@ -636,12 +711,14 @@ def _clock(seconds: float) -> str:
 
 def ask_export(master, full: bool, tracks: bool, video_full: bool,
                video_tracks: bool, directory: str, video_image: str = "",
+               video_images: tuple[str, ...] = (),
                pieces: list[tuple[int, str, float]] | None = None,
                selection: tuple[int, ...] | None = None) -> ExportChoice | None:
     """Ouvre la fenêtre et attend. Retourne le choix, ou None si l'on annule."""
     dialog = ExportDialog(master, full=full, tracks=tracks,
                           video_full=video_full, video_tracks=video_tracks,
                           directory=directory, video_image=video_image,
+                          video_images=video_images,
                           pieces=pieces, selection=selection)
     dialog.center_on(master)
     dialog.transient(master)

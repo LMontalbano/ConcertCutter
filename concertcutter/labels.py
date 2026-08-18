@@ -33,7 +33,9 @@ def write_cue(
     Sans elle, `concert_clean.wav` est un bloc de deux heures sans repères. Une
     cue sheet à côté, et foobar2000, VLC ou un graveur y voient les pistes et
     permettent de sauter de l'une à l'autre. Les temps sont ceux du fichier
-    rendu, pas de la source : c'est le cumul des durées de piste.
+    rendu, pas de la source : c'est le cumul des durées de piste — telles
+    qu'elles occupent l'album, un fondu enchaîné les ayant raccourcies d'autant
+    si l'on en a demandé un.
     """
     lines = []
     if performer:

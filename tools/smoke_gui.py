@@ -729,9 +729,11 @@ def main(wav: Path) -> int:
     dialog.want_tracks.set(True)
     dialog._refresh()
     dialog.validate()
+    # Comparaison sur les six premieres reponses : la fenetre en a gagne
+    # d'autres — diaporama, selection — qui ne sont pas l'objet de ce controle.
     ok &= check(f"validation rend les sorties, le dossier et l'image ({dialog.result})",
-                dialog.result == ExportChoice(True, True, False, False,
-                                              "test/_smoke_export", ""))
+                dialog.result[:6] == ExportChoice(True, True, False, False,
+                                                  "test/_smoke_export", "")[:6])
 
     # Le message du bas remplace le precedent sans pousser les bords : la
     # fenetre sautait a chaque case cochee.
@@ -795,9 +797,9 @@ def main(wav: Path) -> int:
         dialog._refresh()
         dialog.validate()
         ok &= check(f"video seule, album et pistes ({dialog.result})",
-                    dialog.result == ExportChoice(False, False, True, True,
-                                                  "test/_smoke_export",
-                                                  "test/_smoke_fond.png"))
+                    dialog.result[:6] == ExportChoice(False, False, True, True,
+                                                      "test/_smoke_export",
+                                                      "test/_smoke_fond.png")[:6])
 
         # Choisir un fond sans avoir coche de video en demande une : sinon le
         # geste reste sans effet et la fenetre reclame encore une case.

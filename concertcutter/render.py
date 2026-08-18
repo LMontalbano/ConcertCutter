@@ -88,6 +88,12 @@ class RenderParams:
     # coût nul en applaudissements : elle mord sur la fin du blanc précédent.
     pad_start_s: float = 0.5   # amorce conservée avant le morceau
     pad_end_s: float = 0.6     # queue d'applaudissements conservée après
+    # Recouvrement entre deux morceaux de l'album continu. Zéro par défaut :
+    # bout à bout est ce que fait un disque, et personne n'a demandé qu'un
+    # concert s'enchaîne tout seul sans le dire. Au-delà de zéro, la fin d'un
+    # morceau se fond dans le début du suivant — utile quand on veut de
+    # l'album continu une écoute sans couture plutôt qu'un document.
+    crossfade_s: float = 0.0
     full_name: str = "concert_clean.wav"
     write_full: bool = True    # l'album continu
     write_tracks: bool = True  # un fichier par morceau
@@ -99,6 +105,11 @@ class RenderParams:
     video_full: bool = False   # un MP4 pour tout le concert
     video_tracks: bool = False  # un MP4 par morceau
     video_image: str | None = None  # fond des vidéos, fourni par l'utilisateur
+    # Diaporama : plusieurs fonds qui défilent, au lieu d'une photo tenue deux
+    # heures. Vide, `video_image` fait seule le fond, comme avant.
+    video_images: tuple[str, ...] = ()
+    video_slide_s: float = video.SLIDE_S
+    video_slide_fade_s: float = 0.0
     # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
     # toujours à sortir en entier — trois titres pour une maquette, le rappel
     # seul pour l'envoyer à quelqu'un. Décocher les autres dans le tableau
@@ -160,6 +171,12 @@ def render(
     written: list[dict] = []
     videos: list[str] = []
 
+    # Queue du morceau précédent, retenue le temps de la mêler au début du
+    # suivant. Sans fondu, elle reste vide et l'album s'écrit bout à bout comme
+    # avant.
+    overlap = max(0, int(round(params.crossfade_s * info.samplerate)))
+    tail: np.ndarray | None = None
+
     # La progression est rapportée depuis plusieurs fils : le compteur passe
     # sous verrou, et les étapes n'arrivent plus dans l'ordre. C'est sans
     # conséquence — la barre montre une avance, pas une place dans la file.
@@ -206,7 +223,7 @@ def render(
 
     def encode(track_path: Path, label: str, target: str, temporary: bool) -> None:
         video.write_video(track_path, label, out_dir / target,
-                          video.VideoParams(image=str(params.video_image)))
+                          _video_params(params))
         if temporary:
             track_path.unlink(missing_ok=True)
         step(target)
@@ -224,7 +241,8 @@ def render(
                     str(track_path), audio, info.samplerate, subtype=info.subtype
                 )
             if full is not None:
-                full.write(audio)
+                body, tail = _crossfade(tail, audio, overlap)
+                full.write(body)
 
             written.append(
                 {
@@ -262,6 +280,8 @@ def render(
             job.result()
 
         if full is not None:
+            if tail is not None:
+                full.write(tail)     # la queue du dernier morceau n'attend rien
             full.close()
             full = None
 
@@ -270,12 +290,12 @@ def render(
             # les blancs retirés ont décalé tout ce qui suit.
             captions = video.captions_from_durations(
                 [_track_label(item["index"], item["title"]) for item in written],
-                [item["duration"] for item in written],
+                _album_durations(written, params.crossfade_s),
             )
             if on_progress:
                 on_progress(counter["done"], steps, params.video_name)
             video.write_video(full_path, captions, out_dir / params.video_name,
-                              video.VideoParams(image=str(params.video_image)))
+                              _video_params(params))
             videos.append(params.video_name)
             step(params.video_name)
     finally:
@@ -298,7 +318,11 @@ def render(
         # La cue vit à côté des autres fichiers techniques, mais elle doit
         # continuer à désigner l'audio resté à la racine : d'où le chemin
         # relatif, que les lecteurs résolvent depuis l'emplacement de la cue.
-        write_cue(written, f"../{params.full_name}", cue_path)
+        # Les temps de la cue suivent l'album, pas la source : un fondu
+        # enchaîné raccourcit le fichier d'autant, et une cue calculée sur les
+        # durées d'origine ferait dériver tous les repères après le premier.
+        write_cue(_on_album(written, params.crossfade_s),
+                  f"../{params.full_name}", cue_path)
 
     if params.write_sidecars:
         write_audacity_labels(analysis, data_dir / "reperes.txt")
@@ -316,15 +340,31 @@ def render(
 
 
 def _check_video(params: RenderParams) -> None:
-    """Refuse tout de suite un export vidéo qui ne pourrait pas aboutir."""
-    if not params.video_image:
+    """Refuse tout de suite un export vidéo qui ne pourrait pas aboutir.
+
+    Toutes les images sont vérifiées, pas seulement la première : découvrir à
+    la vingtième piste que la troisième photo a été déplacée laisserait un
+    export à moitié fait.
+    """
+    stills = _video_params(params).stills()
+    if not stills:
         raise ValueError("Choisir l'image de fond des vidéos.")
-    if not Path(params.video_image).exists():
-        raise FileNotFoundError(
-            f"Image de fond introuvable : {params.video_image}")
+    for still in stills:
+        if not Path(still).exists():
+            raise FileNotFoundError(f"Image de fond introuvable : {still}")
     reason = video.unavailable_reason()
     if reason:
         raise ValueError(reason)
+
+
+def _video_params(params: RenderParams) -> video.VideoParams:
+    """Traduit les réglages d'export en réglages de rendu vidéo."""
+    return video.VideoParams(
+        image=str(params.video_image or ""),
+        images=tuple(str(path) for path in params.video_images),
+        slide_s=params.video_slide_s,
+        slide_fade_s=params.video_slide_fade_s,
+    )
 
 
 def _title_for(titles: list[str] | None, number: int) -> str | None:
@@ -497,6 +537,61 @@ def _padded_spans(
         if end_frame > start_frame and (wanted is None or number in wanted):
             spans.append((number, start_frame, end_frame))
     return spans
+
+
+def _album_durations(written: list[dict], crossfade_s: float) -> list[float]:
+    """Durées telles qu'elles se suivent dans l'album continu.
+
+    Chaque fondu mange `crossfade_s` : le morceau suivant commence pendant que
+    le précédent s'éteint. La place occupée par un morceau dans l'album est
+    donc sa durée moins un fondu — sauf le dernier, que rien ne recouvre.
+    """
+    durations = [item["duration"] for item in written]
+    if crossfade_s <= 0 or len(durations) < 2:
+        return durations
+    return [max(0.0, duration - crossfade_s) for duration in durations[:-1]] \
+        + [durations[-1]]
+
+
+def _on_album(written: list[dict], crossfade_s: float) -> list[dict]:
+    """Les mêmes pistes, mais avec la durée qu'elles occupent dans l'album."""
+    if crossfade_s <= 0:
+        return written
+    return [dict(item, duration=duration)
+            for item, duration in zip(written,
+                                      _album_durations(written, crossfade_s))]
+
+
+def _crossfade(tail: np.ndarray | None, audio: np.ndarray, overlap: int):
+    """Mêle la queue retenue au début du morceau suivant.
+
+    Rend deux choses : ce qui peut partir dans l'album tout de suite, et ce
+    qu'on retient pour le morceau d'après. Sans recouvrement il n'y a rien à
+    retenir, le morceau part entier, et c'est exactement le chemin d'avant.
+
+    Courbes en cosinus et non linéaires : deux rampes droites qui se croisent
+    laissent au milieu du fondu une somme de puissances plus faible qu'à ses
+    extrémités, et l'on entend le creux au passage. En cosinus, la somme des
+    carrés reste constante — c'est le fondu qu'on ne remarque pas.
+    """
+    if overlap <= 0:
+        return audio, None
+
+    if tail is not None:
+        if len(audio) <= len(tail):
+            # Un morceau plus court que le fondu lui-même : le fondre
+            # reviendrait à l'effacer. On pose les deux bout à bout et on
+            # repart à zéro.
+            return np.concatenate([tail, audio]), None
+        span = len(tail)
+        ramp = np.linspace(0.0, np.pi / 2, span, dtype=np.float32)[:, None]
+        audio = audio.copy()
+        audio[:span] = tail * np.cos(ramp) + audio[:span] * np.sin(ramp)
+
+    keep = min(overlap, len(audio) // 2)
+    if keep == 0:
+        return audio, None
+    return audio[:-keep], audio[-keep:].copy()
 
 
 def _apply_fades(audio: np.ndarray, fade_len: int) -> np.ndarray:

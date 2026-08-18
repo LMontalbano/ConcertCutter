@@ -166,6 +166,7 @@ class App(tk.Tk):
         # part donc à l'export au lieu d'être oublié parce qu'il ne figurait
         # pas dans une liste écrite la veille.
         self.export_selection: tuple[int, ...] | None = None
+        self.export_images: tuple[str, ...] = ()
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -491,6 +492,12 @@ class App(tk.Tk):
         self.pad_start = self._field(editing, "Amorce avant (s)", "0.5")
         self.pad_end = self._field(editing, "Queue après (s)", "0.6")
         self.fade_ms = self._field(editing, "Fondus (ms)", "40")
+        # Distinct des « Fondus (ms) », qui sont l'anti-clic de chaque bout de
+        # piste : celui-ci fait se recouvrir deux morceaux dans l'album
+        # continu. À zéro par défaut — bout à bout est ce que fait un disque,
+        # et un concert qui s'enchaînerait tout seul sans qu'on l'ait demandé
+        # serait une surprise.
+        self.crossfade = self._field(editing, "Fondu enchaîné (s)", "0")
         return holder
 
     def _field(self, parent, label: str, default: str) -> tk.StringVar:
@@ -908,12 +915,19 @@ class App(tk.Tk):
         chosen = ask_export(self, self.export_full, self.export_tracks,
                             self.export_video_full, self.export_video_tracks,
                             self.export_dir, self.export_image,
+                            video_images=self.export_images,
                             pieces=self._pieces(),
                             selection=self.export_selection)
         if chosen is None:
             return
-        (full, tracks, video_full, video_tracks, out_dir, image,
-         selection) = chosen
+        # Par leur nom et non par leur rang : la fenêtre a gagné des réponses
+        # — les images du diaporama, ses durées — et un déballage positionnel
+        # se serait décalé en silence, en donnant la sélection de morceaux pour
+        # une liste d'images.
+        full, tracks = chosen.full, chosen.tracks
+        video_full, video_tracks = chosen.video_full, chosen.video_tracks
+        out_dir, image, selection = (chosen.directory, chosen.video_image,
+                                     chosen.selection)
         self.export_full = full
         self.export_tracks = tracks
         self.export_video_full = video_full
@@ -921,16 +935,21 @@ class App(tk.Tk):
         self.export_dir = out_dir
         self.export_image = image
         self.export_selection = selection
+        self.export_images = chosen.video_images
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
                 pad_start_s=float(self.pad_start.get()),
                 pad_end_s=float(self.pad_end.get()),
+                crossfade_s=float(self.crossfade.get() or 0),
                 write_full=full,
                 write_tracks=tracks,
                 video_full=video_full,
                 video_tracks=video_tracks,
                 video_image=image or None,
+                video_images=chosen.video_images,
+                video_slide_s=chosen.slide_s,
+                video_slide_fade_s=chosen.slide_fade_s,
                 selection=selection,
             )
         except ValueError:
@@ -1337,6 +1356,7 @@ class App(tk.Tk):
             "min_gap": self.min_gap, "min_song": self.min_song,
             "pad_start": self.pad_start, "pad_end": self.pad_end,
             "fade_ms": self.fade_ms, "expected": self.expected,
+            "crossfade": self.crossfade,
         }
 
     def _pieces(self) -> list[tuple[int, str, float]]:
@@ -1354,6 +1374,7 @@ class App(tk.Tk):
     def _collect_export(self) -> dict:
         return {
             "dir": self.export_dir, "image": self.export_image,
+            "images": list(self.export_images),
             "selection": (list(self.export_selection)
                           if self.export_selection is not None else None),
             "full": self.export_full, "tracks": self.export_tracks,
@@ -1371,6 +1392,8 @@ class App(tk.Tk):
             self.export_dir = saved["dir"]
         if isinstance(saved.get("image"), str):
             self.export_image = saved["image"]
+        if isinstance(saved.get("images"), list):
+            self.export_images = tuple(str(path) for path in saved["images"])
         for name in ("full", "tracks", "video_full", "video_tracks"):
             if isinstance(saved.get(name), bool):
                 setattr(self, f"export_{name}", saved[name])
