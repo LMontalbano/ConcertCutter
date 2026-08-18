@@ -151,6 +151,10 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
                        help="Fichier texte, un titre par ligne")
     group.add_argument("--fade-ms", type=float, default=defaults.fade_ms,
                        metavar="MS", help="Durée des fondus d'entrée et de sortie")
+    group.add_argument("--crossfade", type=float, default=defaults.crossfade_s,
+                       metavar="S",
+                       help="Fondu enchaîné entre morceaux dans l'album "
+                            "continu. 0 : bout à bout, comme un disque")
     group.add_argument("--pad-start", type=float, default=defaults.pad_start_s,
                        metavar="S", help="Amorce conservée avant chaque morceau")
     group.add_argument("--pad-end", type=float, default=defaults.pad_end_s,
@@ -294,6 +298,7 @@ def _do_render(analysis: Analysis, args) -> None:
         fade_ms=args.fade_ms,
         pad_start_s=args.pad_start,
         pad_end_s=args.pad_end,
+        crossfade_s=args.crossfade,
         write_full=not args.no_wav,
         write_tracks=not args.no_wav,
         video_full=wants_video and args.video in ("album", "les-deux"),
