@@ -195,35 +195,46 @@ def main(wav: Path) -> int:
     app._refresh_table()
     app.update()
 
-    print("\nTout cocher, tout décocher, inverser")
-    kinds_before = [s.kind for s in analysis.segments]
-    depth = app.history.can_undo
-    app.toggle_all()
+    print("\nNuméros figés à l'analyse")
+    # Décocher le morceau 3 faisait remonter tous les suivants d'un cran : on
+    # ne pouvait plus désigner un morceau par son numéro d'un bout à l'autre
+    # d'une séance, ni retrouver dans le dossier d'export le « 12 » qu'on avait
+    # sous les yeux en travaillant.
+    numbers_before = [t.number for t in analysis.tracks]
+    ok &= check(f"numéros posés à l'analyse ({numbers_before})",
+                all(n > 0 for n in numbers_before)
+                and numbers_before == sorted(set(numbers_before)))
+    victim = numbers_before[len(numbers_before) // 2]
+    position = next(i for i, s in enumerate(analysis.segments)
+                    if s.number == victim and s.kind == "music")
+    analysis.segments[position].title = "Sans Toi"
+    app.set_segment_kind(position, "gap")
     app.update()
-    ok &= check("tout décoché en un clic",
-                all(s.kind == "gap" for s in analysis.segments))
-    ok &= check("aucune frontière perdue",
-                len(analysis.segments) == len(kinds_before))
-    ok &= check("export refusé sans piste",
-                str(app.render_button["state"]) == "disabled")
-    ok &= check("le bouton propose maintenant de tout cocher",
-                str(app.bulk_button["text"]) == "Tout cocher")
-    app.undo()
+    ok &= check(f"le morceau {victim} décoché laisse un trou, pas un décalage",
+                [t.number for t in analysis.tracks]
+                == [n for n in numbers_before if n != victim])
+    ok &= check("son numéro et son nom restent affichés",
+                f"{victim}." in app.tree.set(str(position), "index")
+                and "Sans Toi" in app.tree.set(str(position), "index"))
+    ok &= check("et la ligne dit qu'il est retiré",
+                "retiré" in app.tree.set(str(position), "index"))
+    app.set_segment_kind(position, "music")
     app.update()
-    ok &= check("une seule annulation suffit à tout remettre",
-                [s.kind for s in analysis.segments] == kinds_before)
-    ok &= check("export à nouveau possible",
-                str(app.render_button["state"]) == "normal")
-    app.invert_all()
+    ok &= check("recoché, il retrouve sa place",
+                [t.number for t in analysis.tracks] == numbers_before)
+    analysis.segments[position].title = ""
+    app._refresh_table()
     app.update()
-    ok &= check("inversion appliquée",
-                [s.kind for s in analysis.segments]
-                == ["gap" if k == "music" else "music" for k in kinds_before])
-    app.undo()
-    app.update()
-    ok &= check("inversion annulable d'un coup",
-                [s.kind for s in analysis.segments] == kinds_before)
-    del depth
+
+    print("\nLe nom du morceau sur chaque ligne")
+    # Une flèche « ↳ » tenait lieu de nom sur les suites rattachées : il fallait
+    # remonter la liste des yeux pour savoir ce qu'on regardait.
+    ok &= check("plus aucune flèche seule dans la colonne Morceau",
+                all(app.tree.set(r, "index").strip() != "↳"
+                    for r in app.tree.get_children()))
+    ok &= check("aucune ligne sans identité",
+                all(app.tree.set(r, "index").strip()
+                    for r in app.tree.get_children()))
 
     print("\nRaccourcis neutralisés pendant une saisie")
     app.edit_title(start_row)
@@ -490,11 +501,35 @@ def main(wav: Path) -> int:
     app.update()
     ok &= check("l'arrêt désarme la boucle", app._loop_position is None)
 
+    print("\nLa colonne Piste avance la lecture")
+    # La silhouette montrait déjà où en est la lecture sans qu'on puisse rien y
+    # faire : c'était le seul repère de l'écran qu'on ne pouvait pas toucher.
+    # Elle vaut maintenant barre de progression du segment.
+    ligne = next(r for r in app.tree.get_children()
+                 if analysis.segments[int(r)].duration > 30)
+    seg = analysis.segments[int(ligne)]
+    boite = app.tree.bbox(ligne, "track")
+    ok &= check("silhouette visible et mesurable", bool(boite) and boite[2] > 0)
+    if boite:
+        app._seek_in_track(ligne, boite[0] + int(0.75 * boite[2]))
+        app.update()
+        vise = seg.start + 0.75 * seg.duration
+        ok &= check(f"lecture placée aux trois quarts du segment "
+                    f"({_clock(app.wave.cursor or 0)} pour {_clock(vise)})",
+                    abs((app.wave.cursor or 0) - vise) < 0.05 * seg.duration)
+        # Un clic hors des bornes ne doit pas sortir du segment.
+        app._seek_in_track(ligne, boite[0] - 500)
+        app.update()
+        ok &= check("clic à gauche du cadre : borné au début du segment",
+                    abs((app.wave.cursor or 0) - seg.start) < 1.0)
+        app._seek_in_track(ligne, boite[0] + boite[2] + 500)
+        app.update()
+        ok &= check("clic à droite : borné à la fin",
+                    (app.wave.cursor or 0) <= seg.end + 1e-6)
+    app.stop_playback()
+    app.update()
+
     print("\nSuivi de la ligne écoutée")
-    ok &= check("suivi actif par défaut", app.follow_play.get())
-    app._stop_following()
-    ok &= check("un défilement à la main le suspend", not app.follow_play.get())
-    app.follow_play.set(True)
     played = app.tree.get_children()[1]
     app._follow_row(played)
     ok &= check("la ligne écoutée est teintée",

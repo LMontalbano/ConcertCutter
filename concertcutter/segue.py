@@ -203,6 +203,9 @@ def apply_segues(
         params={**analysis.params, "segues_applied": len(candidates)},
     )
     result.normalize()
+    # Les enchaînements appliqués créent des morceaux : ils prennent la suite
+    # des numéros déjà posés, sans toucher à ceux-là.
+    result.assign_numbers()
     return result
 
 

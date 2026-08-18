@@ -163,7 +163,7 @@ def render(
 
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
     fade_len = int(round(params.fade_ms / 1000.0 * info.samplerate))
-    names = _planned_names(spans, titles, params)
+    names = _planned_names(spans, titles, params, tracks)
 
     _guard_output(out_dir, names, replace)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -229,11 +229,11 @@ def render(
         step(target)
 
     try:
-        for number, start, stop in spans:
+        for rank, number, start, stop in spans:
             audio = read_span(analysis.source, start, stop)
             audio = _apply_fades(audio, fade_len)
 
-            title = _title_for(titles, number)
+            title = _title_for(titles, rank, tracks)
             name = _track_filename(number, title)
             track_path = out_dir / name
             if params.write_tracks:
@@ -367,15 +367,19 @@ def _video_params(params: RenderParams) -> video.VideoParams:
     )
 
 
-def _title_for(titles: list[str] | None, number: int) -> str | None:
-    """Titre du morceau numéro `number`, cherché dans la liste complète.
+def _title_for(titles: list[str] | None, rank: int, tracks=None) -> str | None:
+    """Titre du morceau de rang `rank` dans la liste complète des morceaux.
 
-    La liste couvre tout le concert, la sélection non : indexer par le rang
-    dans la sélection donnerait à la piste 7 le titre de la première exportée.
+    Par le rang et non par le numéro : les numéros sont figés à l'analyse et
+    peuvent donc sauter — décocher le quatrième morceau laisse 3, 5, 6 — alors
+    qu'une tracklist se lit ligne à ligne, dans l'ordre des morceaux restants.
+    Le titre porté par le morceau lui-même sert de repli.
     """
-    if not titles or not (1 <= number <= len(titles)):
-        return None
-    return titles[number - 1]
+    if titles and 0 <= rank < len(titles):
+        return titles[rank]
+    if tracks and 0 <= rank < len(tracks):
+        return tracks[rank].title or None
+    return None
 
 
 def _track_label(index: int, title: str | None) -> str:
@@ -400,25 +404,26 @@ def concert_dir(parent: str | Path, analysis: Analysis) -> Path:
     return Path(parent) / safe
 
 
-def _planned_names(spans, titles, params: RenderParams) -> list[str]:
+def _planned_names(spans, titles, params: RenderParams, tracks=None) -> list[str]:
     """Tous les fichiers que ce rendu va écrire, avant d'en écrire un seul.
 
     Chemins relatifs au dossier du concert. Les connaître à l'avance est ce qui
     permet de détecter un conflit *avant* d'avoir détruit quoi que ce soit.
     """
     names: list[str] = []
-    numbers = [number for number, _start, _stop in spans]
+    numbers = [(rank, number) for rank, number, _start, _stop in spans]
     if params.write_full:
         names.append(params.full_name)
     if params.write_tracks:
-        names += [_track_filename(number, _title_for(titles, number))
-                  for number in numbers]
+        names += [_track_filename(number, _title_for(titles, rank, tracks))
+                  for rank, number in numbers]
     if params.video_full:
         names.append(params.video_name)
     if params.video_tracks:
         names += [
-            f"{VIDEO_DIR}/{_track_filename(number, _title_for(titles, number), '.mp4')}"
-            for number in numbers
+            f"{VIDEO_DIR}/"
+            f"{_track_filename(number, _title_for(titles, rank, tracks), '.mp4')}"
+            for rank, number in numbers
         ]
     if params.write_full:
         names.append(f"{DATA_DIR}/{Path(params.full_name).stem}.cue")
@@ -441,7 +446,9 @@ def check_output(
     params = params or RenderParams()
     info = probe(analysis.source)
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
-    _guard_output(Path(out_dir), _planned_names(spans, titles, params), replace=False)
+    _guard_output(Path(out_dir),
+                  _planned_names(spans, titles, params, analysis.tracks),
+                  replace=False)
 
 
 def previous_export(out_dir: str | Path) -> list[str]:
@@ -525,7 +532,11 @@ def _padded_spans(
 
     spans = []
     for index, track in enumerate(tracks):
-        number = index + 1
+        # Le numéro vient du morceau, pas de son rang : il a été posé à
+        # l'analyse et ne bouge plus, si bien qu'un concert dont on a décoché
+        # le quatrième morceau sort en 01, 02, 03, 05 — un trou plutôt qu'un
+        # décalage silencieux de tout ce qui suit.
+        number = track.number or index + 1
         prev_end = tracks[index - 1].end if index > 0 else 0.0
         next_start = tracks[index + 1].start if index + 1 < len(tracks) else analysis.duration
 
@@ -535,7 +546,7 @@ def _padded_spans(
         start_frame = max(0, int(round(start * samplerate)))
         end_frame = min(total_frames, int(round(end * samplerate)))
         if end_frame > start_frame and (wanted is None or number in wanted):
-            spans.append((number, start_frame, end_frame))
+            spans.append((index, number, start_frame, end_frame))
     return spans
 
 

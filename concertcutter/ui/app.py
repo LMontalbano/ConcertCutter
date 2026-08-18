@@ -75,6 +75,7 @@ SHORT_NAME = 28
 TITLE_COLUMN = "#1"
 START_COLUMN = "#2"
 END_COLUMN = "#3"
+TRACK_COLUMN = "#6"
 PLAY_COLUMN = "#7"
 ACTION_COLUMN = "#0"
 
@@ -148,7 +149,6 @@ class App(tk.Tk):
         self._title_commit = None
         self._title_guard: str | None = None
         self._settings_open = False
-        self._bulk_kind = GAP
         self._followed_row: str | None = None
         self._loop_position: int | None = None
         self.project_path: Path | None = None
@@ -534,28 +534,11 @@ class App(tk.Tk):
         head.pack(fill="x", pady=(0, 8))
         ttk.Label(head, text="Segments détectés", style="Title.TLabel").pack(side="left")
 
-        # Repartir de zéro plutôt que décocher vingt-cinq lignes une à une :
-        # sur un enregistrement où l'on ne veut qu'un ou deux morceaux, c'est
-        # le geste d'ouverture. Le libellé annonce ce que le clic va faire, il
-        # ne décrit pas l'état courant — un bouton qui dit « Tout coché » ne
-        # dit pas ce qu'il produit.
-        self.bulk_button = ttk.Button(head, text="Tout décocher",
-                                      style="Ghost.TButton",
-                                      command=self.toggle_all, state="disabled")
-        self.bulk_button.pack(side="left", padx=(16, 0))
-        self.invert_button = ttk.Button(head, text="Inverser",
-                                        style="Ghost.TButton",
-                                        command=self.invert_all, state="disabled")
-        self.invert_button.pack(side="left", padx=(8, 0))
-
-        self.follow_play = tk.BooleanVar(value=True)
-        follow = ttk.Checkbutton(head, text="Suivre la lecture",
-                                 variable=self.follow_play)
-        follow.pack(side="left", padx=(16, 0))
-        tooltip.attach(follow,
-                       "Fait défiler le tableau jusqu'au segment qui sort des "
-                       "haut-parleurs. Se décoche dès qu'on fait défiler à la "
-                       "main, pour laisser consulter le reste de la liste.")
+        # Pas de « Tout décocher » ni d'« Inverser » : ils servaient à ne
+        # garder que deux morceaux sur vingt-cinq, ce que la liste de la
+        # fenêtre d'export fait maintenant sans toucher au montage. Les cases
+        # de ce tableau-ci décident de ce qui est *un morceau*, question qui ne
+        # se règle pas en bloc.
 
         self.count_label = ttk.Label(head, text="", style="Muted.TLabel")
         self.count_label.pack(side="right")
@@ -631,13 +614,6 @@ class App(tk.Tk):
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scroll.set)
-        # `tree.see` ne passe pas par ces événements : seul un geste de
-        # l'utilisateur coupe le suivi, jamais le suivi lui-même.
-        self.tree.bind("<MouseWheel>", self._stop_following, add="+")
-        self.tree.bind("<Button-4>", self._stop_following, add="+")
-        self.tree.bind("<Button-5>", self._stop_following, add="+")
-        scroll.bind("<Button-1>", self._stop_following, add="+")
-        scroll.bind("<B1-Motion>", self._stop_following, add="+")
         return holder
 
     def _build_log(self) -> ttk.Frame:
@@ -1121,6 +1097,11 @@ class App(tk.Tk):
             return
         self.player.play(start, stop)
         self._playing_row = row
+        # La tête de lecture saute tout de suite, sans attendre le battement
+        # d'horloge : un dixième de seconde d'écart entre le son qui démarre et
+        # le repère qui bouge suffit à faire douter du clic.
+        self.wave.set_cursor(start)
+        self._sync_slider(start)
         self.wave.ensure_visible(start)
         self._refresh_play_button()
         self._sync_playing_row()
@@ -1367,9 +1348,9 @@ class App(tk.Tk):
         """
         if not self.analysis:
             return []
-        return [(number, track.title.strip() or f"Piste {number:02d}",
+        return [(track.number, track.title.strip() or f"Piste {track.number:02d}",
                  track.duration)
-                for number, track in enumerate(self.analysis.tracks, start=1)]
+                for track in self.analysis.tracks]
 
     def _collect_export(self) -> dict:
         return {
@@ -1595,33 +1576,6 @@ class App(tk.Tk):
         current = self.analysis.segments[position].kind
         self.set_segment_kind(position, GAP if current == MUSIC else MUSIC)
 
-    def toggle_all(self) -> None:
-        """Coche ou décoche tous les segments, selon ce que le bouton annonce."""
-        if not self.analysis:
-            return
-        kind = self._bulk_kind
-        if not self._apply_kinds(
-                {position: kind for position in range(len(self.analysis.segments))}):
-            return
-        action = "cochés" if kind == MUSIC else "décochés"
-        self._set_status(f"Tous les segments {action} — "
-                         f"{len(self.analysis.tracks)} morceaux.", log=True)
-
-    def invert_all(self) -> None:
-        """Échange conservé et supprimé sur toute la liste.
-
-        Utile quand la détection s'est trompée de moitié — cela arrive sur un
-        enregistrement où les applaudissements sont plus forts que la musique.
-        """
-        if not self.analysis:
-            return
-        if not self._apply_kinds(
-                {position: GAP if segment.kind == MUSIC else MUSIC
-                 for position, segment in enumerate(self.analysis.segments)}):
-            return
-        self._set_status(f"Sélection inversée — "
-                         f"{len(self.analysis.tracks)} morceaux.", log=True)
-
     # -- historique --------------------------------------------------------
 
     def _remember(self) -> None:
@@ -1679,27 +1633,12 @@ class App(tk.Tk):
         if not self.analysis:
             self.count_label.configure(text="")
             self.summary.configure(text="")
-            self._refresh_bulk_buttons()
+            self._refresh_side_buttons()
             return
 
-        numbers = self.analysis.track_numbers()
+        self.analysis.assign_numbers()
         for position, segment in enumerate(self.analysis.segments):
-            number = numbers[position]
-            if number is None:
-                # Un segment décoché garde son nom. Le titre vit sur le segment
-                # et survivait déjà à la bascule ; c'est l'affichage qui le
-                # remplaçait par un tiret, et on croyait donc l'avoir perdu en
-                # décochant. Il n'y a rien à restaurer, seulement à montrer.
-                title = segment.title.strip()
-                label = title or "—"
-            elif position and numbers[position - 1] == number:
-                # Suite d'un morceau déjà commencé : on montre le rattachement
-                # plutôt que de répéter un numéro, sinon on croirait à deux
-                # pistes distinctes.
-                label = "  ↳"
-            else:
-                title = segment.title.strip()
-                label = f"{number}. {title}" if title else f"{number}."
+            label = self._row_label(position, segment)
             track = self._segment_track(segment)
             self._tracks[str(position)] = track
             self.tree.insert(
@@ -1718,32 +1657,37 @@ class App(tk.Tk):
             text=f"Conservé : {_hms(kept)}     Supprimé : {_hms(dropped)}     "
                  f"Source : {_hms(self.analysis.duration)}     "
                  f"({100 * kept / max(self.analysis.duration, 1e-9):.1f} % conservé)")
-        self._refresh_bulk_buttons()
+        self._refresh_side_buttons()
         self._refresh_resume_button()
         # Toute édition finit par repasser ici : un seul point d'accroche
         # suffit donc à ne jamais rater une modification.
         self._touch_project()
 
-    def _refresh_bulk_buttons(self) -> None:
-        """Le bouton annonce le geste qui reste à faire.
+    def _row_label(self, position: int, segment) -> str:
+        """Ce qu'affiche la colonne Morceau, pour n'importe quelle ligne.
 
-        Tant qu'un segment est encore coché, il propose de tout décocher ; une
-        fois la liste vide, il propose l'inverse. Un bouton figé sur « Tout
-        décocher » n'aurait servi qu'une fois.
+        Chaque ligne dit à quel morceau elle appartient, quel que soit son
+        sort. Une flèche `↳` tenait lieu de nom sur les suites rattachées, et
+        un tiret sur les segments décochés : dans les deux cas, il fallait
+        remonter la liste des yeux pour savoir ce qu'on regardait. Le nom
+        revient partout, et la mention entre parenthèses dit ce qui distingue
+        la ligne plutôt que de remplacer son identité.
         """
+        title = segment.title.strip()
+        if segment.kind == MUSIC:
+            name = f"{segment.number}. {title}" if title else f"{segment.number}."
+            return name if self.analysis.is_track_start(position) else f"{name}  (suite)"
+        if segment.number:
+            # Un morceau détecté puis écarté : il garde son numéro et son nom,
+            # et l'export laissera simplement un trou dans la suite.
+            return f"{segment.number}. {title} — retiré" if title \
+                else f"{segment.number}. — retiré"
+        return title or "Blanc"
+
+    def _refresh_side_buttons(self) -> None:
+        """Les boutons qui dépendent de l'état du concert, pas d'un clic."""
         self._refresh_render_button()
-        segments = self.analysis.segments if self.analysis else []
-        if not segments:
-            self.bulk_button.configure(state="disabled")
-            self.invert_button.configure(state="disabled")
-            self._refresh_resume_button()
-            return
-        kept = sum(1 for segment in segments if segment.kind == MUSIC)
-        self._bulk_kind = GAP if kept else MUSIC
-        self.bulk_button.configure(
-            state="normal",
-            text="Tout décocher" if self._bulk_kind == GAP else "Tout cocher")
-        self.invert_button.configure(state="normal")
+        self._refresh_resume_button()
 
     def _refresh_render_button(self) -> None:
         """L'export ne s'ouvre que s'il reste quelque chose à écrire.
@@ -1859,21 +1803,8 @@ class App(tk.Tk):
             kind = self.analysis.segments[int(target)].kind
             self.tree.item(target, tags=(f"{kind}_playing",) if playing else (kind,))
         self._followed_row = row
-        if row is not None and self.follow_play.get() and self.tree.exists(row):
+        if row is not None and self.tree.exists(row):
             self.tree.see(row)
-
-    def _stop_following(self, _event=None) -> None:
-        """Un défilement à la main coupe le suivi.
-
-        Consulter la fin de la liste pendant qu'on écoute le début est un geste
-        légitime ; le tableau qui revient de force au bout d'une seconde est le
-        pire des deux comportements. La case se décoche donc toute seule, et
-        elle se recoche d'un clic — invisible, la suspension passerait pour une
-        panne du suivi.
-        """
-        if self.follow_play.get():
-            self.follow_play.set(False)
-            self._set_status("Suivi de la lecture suspendu — la case le rallume.")
 
     def _row_at(self, moment: float | None) -> str | None:
         """Ligne dont le segment contient cet instant."""
@@ -1943,7 +1874,29 @@ class App(tk.Tk):
         if column in (START_COLUMN, END_COLUMN):
             self.edit_time(row, "start" if column == START_COLUMN else "end")
             return "break"
+        if column == TRACK_COLUMN:
+            self._seek_in_track(row, event.x)
+            return "break"
         return None
+
+    def _seek_in_track(self, row: str, x: int) -> None:
+        """Clic dans la silhouette : la lecture se place à cet endroit du segment.
+
+        La colonne montrait déjà où en est la lecture, sans qu'on puisse rien
+        y faire ; c'était le seul repère de l'écran qu'on ne pouvait pas
+        toucher. Elle vaut maintenant barre de progression du segment — sur une
+        ligne de tableau, on vise un dixième de morceau bien plus vite que
+        l'instant correspondant dans une forme d'onde dézoomée.
+        """
+        if not self.analysis:
+            return
+        box = self.tree.bbox(row, "track")
+        if not box or box[2] <= 0:
+            return
+        segment = self.analysis.segments[int(row)]
+        share = max(0.0, min(1.0, (x - box[0]) / box[2]))
+        self.play_from(segment.start + share * segment.duration, segment.end,
+                       row=row)
 
     # -- saisie dans le tableau --------------------------------------------
 
@@ -1961,7 +1914,7 @@ class App(tk.Tk):
             return
         position = int(row)
         segment = self.analysis.segments[position]
-        number = self.analysis.track_numbers()[position]
+        number = segment.number
 
         def apply(value: str) -> str:
             if value == segment.title:
@@ -2111,7 +2064,7 @@ class App(tk.Tk):
             return
         column = self.tree.identify_column(event.x)
         row = self.tree.identify_row(event.y)
-        if column in (PLAY_COLUMN, ACTION_COLUMN):
+        if column in (PLAY_COLUMN, ACTION_COLUMN, TRACK_COLUMN):
             self.tree.configure(cursor="hand2")
         elif column == TITLE_COLUMN and self._can_name(row):
             self.tree.configure(cursor="xterm")
@@ -2129,10 +2082,8 @@ class App(tk.Tk):
         if not (self.analysis and row):
             return False
         position = int(row)
-        numbers = self.analysis.track_numbers()
-        if not (0 <= position < len(numbers)) or numbers[position] is None:
-            return False
-        return not (position and numbers[position - 1] == numbers[position])
+        return (0 <= position < len(self.analysis.segments)
+                and self.analysis.is_track_start(position))
 
     def _can_move(self, row: str, column: str) -> bool:
         """Vrai si l'horaire de cette cellule tient à une frontière déplaçable.
@@ -2154,12 +2105,11 @@ class App(tk.Tk):
         if not (self.analysis and row):
             return False
         position = int(row)
-        numbers = self.analysis.track_numbers()
-        if not (0 <= position < len(numbers)):
+        if not (0 <= position < len(self.analysis.segments)):
             return False
-        if numbers[position] is None:       # un blanc : nommable
-            return True
-        return not (position and numbers[position - 1] == numbers[position])
+        if self.analysis.segments[position].kind != MUSIC:
+            return True                     # un blanc : nommable
+        return self.analysis.is_track_start(position)
 
     def _toggle_row_playback(self, row: str) -> None:
         """Joue le segment de la ligne, ou le met en pause si c'est lui qu'on entend.

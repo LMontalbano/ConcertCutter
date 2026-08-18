@@ -26,7 +26,7 @@ from pathlib import Path
 import soundfile as sf
 
 from concertcutter.render import DATA_DIR, RenderParams, render
-from concertcutter.segment import Analysis
+from concertcutter.segment import GAP, MUSIC, Analysis
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -36,8 +36,14 @@ def main(segments_path: Path, root: Path) -> int:
     ok = True
     shutil.rmtree(root, ignore_errors=True)
     analysis = Analysis.from_json(segments_path)
-    titles = [f"Morceau {number}"
-              for number in range(1, len(analysis.tracks) + 1)]
+    # Les titres sont posés sur les segments, comme la fenêtre le fait : ils
+    # suivent alors leur morceau quoi qu'il advienne des autres. Une liste
+    # passée à part, elle, se lit par rang — c'est ce que veut `--tracklist`,
+    # où la ligne N nomme le N-ième morceau qui sortira.
+    for segment in analysis.segments:
+        if segment.number and segment.kind == MUSIC:
+            segment.title = f"Morceau {segment.number}"
+    titles = None
 
     print(f"Le concert compte {len(analysis.tracks)} morceaux")
 
@@ -67,6 +73,10 @@ def main(segments_path: Path, root: Path) -> int:
     ok &= _check("les titres suivent leur morceau, pas leur rang",
                  all(f"Morceau {number}" in reference[number][0]
                      for number in wanted))
+    ok &= _check("et restent collés au bon numéro dans l'export partiel",
+                 all(any(f"{number:02d} - Morceau {number}" in name
+                         for name in files)
+                     for number in wanted))
 
     same = all(abs(item["duration"] - reference[item["index"]][1]) < 0.01
                for item in picked["tracks"])
@@ -87,6 +97,24 @@ def main(segments_path: Path, root: Path) -> int:
     tracks_in_cue = cue.count("TRACK ")
     ok &= _check(f"la cue sheet suit ({tracks_in_cue} entrées)",
                  tracks_in_cue == len(wanted))
+
+    print("\nUn morceau décoché laisse un trou, pas un décalage")
+    # Les numéros sont figés à l'analyse : décocher le morceau 2 doit laisser
+    # 01, 03, 04… et non renuméroter tout ce qui suit. C'est ce qui permet de
+    # désigner un morceau par son numéro d'un bout à l'autre d'une séance, et
+    # de retrouver dans le dossier d'export celui qu'on avait sous les yeux.
+    dropped = 2
+    position = next(index for index, segment in enumerate(analysis.segments)
+                    if segment.number == dropped and segment.kind == MUSIC)
+    analysis.segments[position].kind = GAP
+    holed = render(analysis, root / "trou", titles, RenderParams(write_full=False))
+    names = sorted(item["file"] for item in holed["tracks"])
+    print("  " + ", ".join(names))
+    ok &= _check(f"le morceau {dropped} manque, les autres n'ont pas bougé",
+                 all(reference[number][0] in names
+                     for number in reference if number != dropped)
+                 and reference[dropped][0] not in names)
+    analysis.segments[position].kind = MUSIC
 
     print("\nGarde-fous")
     try:
