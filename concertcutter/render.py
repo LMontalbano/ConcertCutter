@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +42,26 @@ DATA_DIR = "infos"
 # mêlées aux WAV à la racine on ne saurait plus lequel des deux on écoute.
 VIDEO_DIR = "video"
 MANIFEST = ".concertcutter-export.json"
+
+# Encodages vidéo menés de front.
+#
+# Un bêta-testeur a remarqué que l'export ne prend qu'environ 30 % du
+# processeur. C'est exact, et ce n'est pas un défaut de l'application : ffmpeg
+# encodant une image fixe à dix images par seconde n'a presque rien à
+# paralléliser, et occupe quatre ou cinq unités sur seize. La mémoire est au
+# même régime pour une raison voulue — le rendu lit une piste à la fois plutôt
+# que de charger les deux gigaoctets du concert.
+#
+# Ce qu'on peut récupérer, c'est le temps où un ffmpeg attend pendant qu'un
+# autre pourrait travailler. Mesuré sur le concert de 2 h 05 : x1,4 en menant
+# plusieurs encodages de front, et — c'est le point — deux suffisent. Au-delà,
+# la courbe est plate : ce n'est pas x264 qui limite mais l'encodage audio et
+# les entrées-sorties, que multiplier les fils ne divise pas.
+#
+# Deux, donc, et non « autant que d'unités » : saturer la machine pendant les
+# deux minutes d'un export rendrait tout le reste inutilisable pour un gain
+# nul.
+VIDEO_WORKERS = 2
 
 
 class ExportConflict(Exception):
@@ -77,6 +99,12 @@ class RenderParams:
     video_full: bool = False   # un MP4 pour tout le concert
     video_tracks: bool = False  # un MP4 par morceau
     video_image: str | None = None  # fond des vidéos, fourni par l'utilisateur
+    # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
+    # toujours à sortir en entier — trois titres pour une maquette, le rappel
+    # seul pour l'envoyer à quelqu'un. Décocher les autres dans le tableau
+    # aurait marché, mais au prix de la numérotation et du montage de l'album
+    # continu, qu'on ne voulait pas toucher pour autant.
+    selection: tuple[int, ...] | None = None
 
     @property
     def write_video(self) -> bool:
@@ -115,6 +143,8 @@ def render(
     if not (params.write_full or params.write_tracks or params.write_video):
         raise ValueError(
             "Choisir au moins une sortie : album continu, pistes ou vidéos.")
+    if params.selection is not None and not params.selection:
+        raise ValueError("Choisir au moins un morceau à exporter.")
     # Contrôlé avant d'écrire quoi que ce soit : découvrir à la vingtième piste
     # que ffmpeg manque laisserait un export à moitié fait.
     if params.write_video:
@@ -129,6 +159,20 @@ def render(
 
     written: list[dict] = []
     videos: list[str] = []
+
+    # La progression est rapportée depuis plusieurs fils : le compteur passe
+    # sous verrou, et les étapes n'arrivent plus dans l'ordre. C'est sans
+    # conséquence — la barre montre une avance, pas une place dans la file.
+    progress_lock = threading.Lock()
+    counter = {"done": 0}
+
+    def step(label: str) -> None:
+        if on_progress is None:
+            return
+        with progress_lock:
+            counter["done"] += 1
+            done_now = counter["done"]
+        on_progress(done_now, steps, label)
 
     # Un dossier de travail dès qu'une vidéo doit partir d'un audio qu'on ne
     # garde pas : ffmpeg lit un fichier, pas un tableau numpy, donc le WAV
@@ -151,15 +195,29 @@ def render(
     # comme une étape à part, sinon la progression resterait figée entre deux
     # morceaux sans qu'on sache si quelque chose avance.
     steps = len(spans) * (2 if params.video_tracks else 1) + int(params.video_full)
-    done = 0
+
+    # Les encodages partent au fil de l'eau : le premier tourne pendant que la
+    # deuxième piste se lit encore. Les enchaîner après coup laisserait le
+    # disque inoccupé la moitié du temps, puis le processeur l'autre moitié.
+    pool = (ThreadPoolExecutor(max_workers=VIDEO_WORKERS,
+                               thread_name_prefix="concertcutter-video")
+            if params.video_tracks else None)
+    jobs = []
+
+    def encode(track_path: Path, label: str, target: str, temporary: bool) -> None:
+        video.write_video(track_path, label, out_dir / target,
+                          video.VideoParams(image=str(params.video_image)))
+        if temporary:
+            track_path.unlink(missing_ok=True)
+        step(target)
 
     try:
-        for index, (start, stop) in enumerate(spans, start=1):
+        for number, start, stop in spans:
             audio = read_span(analysis.source, start, stop)
             audio = _apply_fades(audio, fade_len)
 
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            name = _track_filename(index, title)
+            title = _title_for(titles, number)
+            name = _track_filename(number, title)
             track_path = out_dir / name
             if params.write_tracks:
                 sf.write(
@@ -170,7 +228,7 @@ def render(
 
             written.append(
                 {
-                    "index": index,
+                    "index": number,
                     "file": name,
                     "title": title,
                     "peak": round(float(np.max(np.abs(audio))) if len(audio) else 0.0, 4),
@@ -179,31 +237,29 @@ def render(
                     "duration": round((stop - start) / info.samplerate, 3),
                 }
             )
-            video_name = (f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}"
+            video_name = (f"{VIDEO_DIR}/{_track_filename(number, title, '.mp4')}"
                           if params.video_tracks else None)
-            done += 1
-            if on_progress:
-                # Annonce ce que l'étape produit vraiment : sans les WAV, la
-                # piste n'est qu'un intermédiaire vers la vidéo.
-                on_progress(done, steps,
-                            name if params.write_tracks else video_name or name)
+            # Annonce ce que l'étape produit vraiment : sans les WAV, la
+            # piste n'est qu'un intermédiaire vers la vidéo.
+            step(name if params.write_tracks else video_name or name)
 
             if params.video_tracks:
-                if not params.write_tracks:
+                temporary = not params.write_tracks
+                if temporary:
                     track_path = Path(scratch.name) / name
                     sf.write(str(track_path), audio, info.samplerate,
                              subtype=info.subtype)
-                video.write_video(
-                    track_path, _track_label(index, title), out_dir / video_name,
-                    video.VideoParams(image=str(params.video_image)),
-                )
                 videos.append(video_name)
                 written[-1]["video"] = video_name
-                if not params.write_tracks:
-                    track_path.unlink(missing_ok=True)
-                done += 1
-                if on_progress:
-                    on_progress(done, steps, video_name)
+                jobs.append(pool.submit(encode, track_path,
+                                        _track_label(number, title),
+                                        video_name, temporary))
+
+        # Les vidéos des pistes finissent ici : la vidéo du concert entier a
+        # besoin de l'album continu refermé, et une exception d'un fil doit
+        # remonter avant qu'on n'annonce l'export terminé.
+        for job in jobs:
+            job.result()
 
         if full is not None:
             full.close()
@@ -217,14 +273,17 @@ def render(
                 [item["duration"] for item in written],
             )
             if on_progress:
-                on_progress(done, steps, params.video_name)
+                on_progress(counter["done"], steps, params.video_name)
             video.write_video(full_path, captions, out_dir / params.video_name,
                               video.VideoParams(image=str(params.video_image)))
             videos.append(params.video_name)
-            done += 1
-            if on_progress:
-                on_progress(done, steps, params.video_name)
+            step(params.video_name)
     finally:
+        if pool is not None:
+            # `cancel_futures` : après une erreur, les encodages qui n'ont pas
+            # commencé n'ont plus lieu d'être — et ceux qui tournent tiennent
+            # encore le dossier de travail qu'on s'apprête à effacer.
+            pool.shutdown(wait=True, cancel_futures=True)
         if full is not None:
             full.close()
         if scratch is not None:
@@ -268,6 +327,17 @@ def _check_video(params: RenderParams) -> None:
         raise ValueError(reason)
 
 
+def _title_for(titles: list[str] | None, number: int) -> str | None:
+    """Titre du morceau numéro `number`, cherché dans la liste complète.
+
+    La liste couvre tout le concert, la sélection non : indexer par le rang
+    dans la sélection donnerait à la piste 7 le titre de la première exportée.
+    """
+    if not titles or not (1 <= number <= len(titles)):
+        return None
+    return titles[number - 1]
+
+
 def _track_label(index: int, title: str | None) -> str:
     """Le titre du morceau, ou son numéro s'il est resté sans titre.
 
@@ -297,18 +367,19 @@ def _planned_names(spans, titles, params: RenderParams) -> list[str]:
     permet de détecter un conflit *avant* d'avoir détruit quoi que ce soit.
     """
     names: list[str] = []
+    numbers = [number for number, _start, _stop in spans]
     if params.write_full:
         names.append(params.full_name)
     if params.write_tracks:
-        for index in range(1, len(spans) + 1):
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            names.append(_track_filename(index, title))
+        names += [_track_filename(number, _title_for(titles, number))
+                  for number in numbers]
     if params.video_full:
         names.append(params.video_name)
     if params.video_tracks:
-        for index in range(1, len(spans) + 1):
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            names.append(f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}")
+        names += [
+            f"{VIDEO_DIR}/{_track_filename(number, _title_for(titles, number), '.mp4')}"
+            for number in numbers
+        ]
     if params.write_full:
         names.append(f"{DATA_DIR}/{Path(params.full_name).stem}.cue")
     if params.write_sidecars:
@@ -392,19 +463,29 @@ def unique_dir(path: str | Path) -> Path:
 
 def _padded_spans(
     analysis: Analysis, params: RenderParams, samplerate: int, total_frames: int
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int, int]]:
     """Étend chaque morceau de son amorce et de sa queue, en échantillons.
+
+    Rend des triplets (numéro de piste, premier échantillon, dernier). Le
+    numéro voyage avec la plage plutôt que d'être recompté à l'arrivée :
+    exporter les morceaux 3, 7 et 12 doit donner « 03 », « 07 » et « 12 », et
+    non « 01 », « 02 », « 03 » — un dossier renuméroté ne correspondrait plus
+    ni au concert ni à un export précédent du même concert.
 
     Le débord est borné par les morceaux voisins : il puise dans le blanc
     adjacent, jamais dans la piste d'à côté, et les morceaux enchaînés sans
-    blanc ne se recouvrent donc pas.
+    blanc ne se recouvrent donc pas. Le calcul se fait sur *tous* les morceaux,
+    y compris ceux qu'on n'écrit pas : c'est la position du voisin qui borne,
+    qu'il parte à l'export ou non.
     """
     tracks = analysis.tracks
     pad_start = params.pad_start_s
     pad_end = params.pad_end_s
+    wanted = set(params.selection) if params.selection is not None else None
 
     spans = []
     for index, track in enumerate(tracks):
+        number = index + 1
         prev_end = tracks[index - 1].end if index > 0 else 0.0
         next_start = tracks[index + 1].start if index + 1 < len(tracks) else analysis.duration
 
@@ -413,8 +494,8 @@ def _padded_spans(
 
         start_frame = max(0, int(round(start * samplerate)))
         end_frame = min(total_frames, int(round(end * samplerate)))
-        if end_frame > start_frame:
-            spans.append((start_frame, end_frame))
+        if end_frame > start_frame and (wanted is None or number in wanted):
+            spans.append((number, start_frame, end_frame))
     return spans
 
 

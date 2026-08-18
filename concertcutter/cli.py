@@ -167,6 +167,11 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--no-wav", action="store_true",
                        help="Ne produire que les vidéos, sans les WAV "
                             "(avec --video-image)")
+    group.add_argument("--only", metavar="N[,N...]",
+                       help="N'écrire que ces morceaux, désignés par leur "
+                            "numéro (1,4,7 ou 3-9). Ils gardent ce numéro dans "
+                            "les noms de fichiers : la piste 7 s'appelle « 07 » "
+                            "même si elle part seule")
     group.add_argument("--overwrite", action="store_true",
                        help="Remplacer un export déjà présent dans le dossier "
                             "(sans ce drapeau, l'export s'arrête pour ne rien détruire)")
@@ -188,6 +193,38 @@ def _load_features(args) -> SpectralFeatures | None:
     feats.save(args.cache)
     print(f"Descripteurs écrits dans {args.cache}")
     return feats
+
+
+def _selection(text: str | None, total: int) -> tuple[int, ...] | None:
+    """Lit « 1,4,7 » ou « 3-9 » en numéros de morceaux. None si rien n'est demandé.
+
+    Les numéros hors du concert sont refusés plutôt qu'ignorés : demander la
+    piste 30 d'un concert qui en compte 25 est presque toujours une faute de
+    frappe, et un export silencieusement amputé ne se verrait qu'après coup.
+    """
+    if not text:
+        return None
+    numbers: list[int] = []
+    for piece in text.replace(" ", "").split(","):
+        if not piece:
+            continue
+        try:
+            if "-" in piece:
+                first, last = piece.split("-", 1)
+                numbers += list(range(int(first), int(last) + 1))
+            else:
+                numbers.append(int(piece))
+        except ValueError:
+            raise SystemExit(
+                f"--only : « {piece} » n'est pas un numéro de morceau.")
+    outside = sorted({number for number in numbers if not 1 <= number <= total})
+    if outside:
+        raise SystemExit(
+            f"--only : le concert compte {total} morceaux, "
+            f"{', '.join(str(number) for number in outside)} n'existe pas.")
+    if not numbers:
+        raise SystemExit("--only : aucun morceau désigné.")
+    return tuple(sorted(set(numbers)))
 
 
 def _do_analyze(args) -> Analysis:
@@ -262,11 +299,14 @@ def _do_render(analysis: Analysis, args) -> None:
         video_full=wants_video and args.video in ("album", "les-deux"),
         video_tracks=wants_video and args.video in ("pistes", "les-deux"),
         video_image=str(args.video_image) if wants_video else None,
+        selection=_selection(args.only, len(analysis.tracks)),
     )
 
     # `-d` désigne l'emplacement ; le concert reçoit son propre dossier dedans.
     target = concert_dir(args.out_dir, analysis)
-    print(f"\nRendu de {len(analysis.tracks)} pistes vers {target}...")
+    count = (len(params.selection) if params.selection is not None
+             else len(analysis.tracks))
+    print(f"\nRendu de {count} pistes vers {target}...")
     try:
         result = run_render(
             analysis, target, titles, params,

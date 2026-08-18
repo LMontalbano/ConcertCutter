@@ -161,6 +161,11 @@ class App(tk.Tk):
         self.export_video_tracks = False
         self.export_dir = ""
         self.export_image = ""
+        # Aucun filtrage tant qu'on n'en demande pas : None n'est pas la liste
+        # complète, c'est l'absence de choix — un morceau ajouté après coup
+        # part donc à l'export au lieu d'être oublié parce qu'il ne figurait
+        # pas dans une liste écrite la veille.
+        self.export_selection: tuple[int, ...] | None = None
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -902,16 +907,20 @@ class App(tk.Tk):
         # Sorties et destination se choisissent ensemble, au moment d'exporter.
         chosen = ask_export(self, self.export_full, self.export_tracks,
                             self.export_video_full, self.export_video_tracks,
-                            self.export_dir, self.export_image)
+                            self.export_dir, self.export_image,
+                            pieces=self._pieces(),
+                            selection=self.export_selection)
         if chosen is None:
             return
-        full, tracks, video_full, video_tracks, out_dir, image = chosen
+        (full, tracks, video_full, video_tracks, out_dir, image,
+         selection) = chosen
         self.export_full = full
         self.export_tracks = tracks
         self.export_video_full = video_full
         self.export_video_tracks = video_tracks
         self.export_dir = out_dir
         self.export_image = image
+        self.export_selection = selection
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
@@ -922,6 +931,7 @@ class App(tk.Tk):
                 video_full=video_full,
                 video_tracks=video_tracks,
                 video_image=image or None,
+                selection=selection,
             )
         except ValueError:
             messagebox.showerror("Réglages",
@@ -945,9 +955,11 @@ class App(tk.Tk):
         self._set_progress(True)
         # Une étape par piste, une seconde quand chaque piste donne aussi une
         # vidéo, et une dernière pour la vidéo du concert entier.
+        wanted = (len(selection) if selection is not None
+                  else len(self.analysis.tracks))
         self.progress.configure(
             mode="determinate", value=0,
-            maximum=len(self.analysis.tracks) * (2 if params.video_tracks else 1)
+            maximum=wanted * (2 if params.video_tracks else 1)
             + int(params.video_full))
         threading.Thread(target=self._run_render,
                          args=(self.analysis, str(out_dir), titles, params, replace),
@@ -1327,9 +1339,23 @@ class App(tk.Tk):
             "fade_ms": self.fade_ms, "expected": self.expected,
         }
 
+    def _pieces(self) -> list[tuple[int, str, float]]:
+        """Les morceaux tels que la fenêtre d'export doit les présenter.
+
+        Le titre saisi s'il existe, sinon le nom que prendra le fichier : une
+        liste de « Piste 03 » se choisit mal, mais mieux qu'une liste de vides.
+        """
+        if not self.analysis:
+            return []
+        return [(number, track.title.strip() or f"Piste {number:02d}",
+                 track.duration)
+                for number, track in enumerate(self.analysis.tracks, start=1)]
+
     def _collect_export(self) -> dict:
         return {
             "dir": self.export_dir, "image": self.export_image,
+            "selection": (list(self.export_selection)
+                          if self.export_selection is not None else None),
             "full": self.export_full, "tracks": self.export_tracks,
             "video_full": self.export_video_full,
             "video_tracks": self.export_video_tracks,
@@ -1348,6 +1374,9 @@ class App(tk.Tk):
         for name in ("full", "tracks", "video_full", "video_tracks"):
             if isinstance(saved.get(name), bool):
                 setattr(self, f"export_{name}", saved[name])
+        picked = saved.get("selection")
+        if isinstance(picked, list):
+            self.export_selection = tuple(int(number) for number in picked)
 
     def resume_last(self) -> None:
         """Rouvre le travail le plus récent."""

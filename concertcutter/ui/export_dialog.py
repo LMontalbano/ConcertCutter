@@ -39,10 +39,36 @@ from tkinter import filedialog, ttk
 from typing import NamedTuple
 
 from .. import ffmpeg_install, video
-from . import theme
+from . import assets, theme, tooltip
 
 VIDEO_DESC = ("Titre du morceau intégré à la vidéo, sur l'image que vous "
               "joignez. Sur l'album continu, il suit le morceau en cours.")
+
+# Ce que chaque case produit vraiment. Les libellés disent la forme du fichier,
+# pas ce qu'on en fait : « Album continu » ne dit pas qu'une cue sheet
+# l'accompagne, ni que c'est le fichier qu'on grave. Quatre phrases valaient
+# mieux que quatre libellés rallongés.
+HELP_FULL = ("Un seul WAV : le concert entier, blancs retirés. Une cue sheet "
+             "l'accompagne dans « infos », pour retrouver les morceaux à la "
+             "lecture ou à la gravure.")
+HELP_TRACKS = ("Un WAV par morceau, numéroté et nommé d'après le titre saisi "
+               "dans le tableau. C'est ce qu'attend un lecteur ou une clé USB.")
+HELP_VIDEO_FULL = ("Un MP4 du concert entier, sur l'image de fond. Le titre "
+                   "affiché suit le morceau en cours plutôt que de rester "
+                   "figé deux heures.")
+HELP_VIDEO_TRACKS = ("Un MP4 par morceau, son titre incrusté. C'est la forme "
+                     "qu'attendent les plateformes qui n'acceptent que de la "
+                     "vidéo.")
+HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. Elle "
+              "garde ses proportions et se centre sur du noir — elle n'est "
+              "jamais déformée pour remplir le cadre.")
+HELP_DIR = ("Le concert reçoit son propre dossier ici, nommé d'après "
+            "l'enregistrement. Un export déjà présent n'est jamais écrasé "
+            "sans qu'on le demande.")
+HELP_PICK = ("Décocher un morceau ici ne change ni le découpage ni la "
+             "numérotation : la piste 7 s'appellera « 07 » même si elle part "
+             "seule. Pour retirer un passage du concert lui-même, c'est la "
+             "case du tableau.")
 
 # Ce que voyait quelqu'un qui n'a pas ffmpeg : « ffmpeg est introuvable,
 # installez-le ». Pour un musicien qui a téléchargé un exécutable, c'est une
@@ -63,7 +89,13 @@ POLL_MS = 150
 MISSING_OUTPUT = "Cocher au moins un fichier à écrire."
 MISSING_IMAGE = "Choisir l'image de fond des vidéos."
 MISSING_DIR = "Choisir la destination."
-_MESSAGES = (MISSING_OUTPUT, MISSING_IMAGE, MISSING_DIR)
+MISSING_PIECE = "Cocher au moins un morceau à exporter."
+_MESSAGES = (MISSING_OUTPUT, MISSING_IMAGE, MISSING_DIR, MISSING_PIECE)
+
+# Lignes visibles de la liste des morceaux avant qu'elle ne défile. Huit tient
+# dans la fenêtre sans la faire déborder d'un écran de portable.
+PICK_ROWS = 8
+PICK_WIDTH = 420
 
 HINT_WIDTH = 280
 
@@ -87,6 +119,11 @@ class ExportChoice(NamedTuple):
     video_tracks: bool
     directory: str
     video_image: str = ""
+    # Numéros des morceaux retenus, ou None quand ils y sont tous. None plutôt
+    # qu'une liste complète : le rendu n'a alors rien à filtrer, et un projet
+    # rouvert après l'ajout d'un morceau l'exporte au lieu de l'oublier parce
+    # qu'il ne figurait pas dans une liste écrite la veille.
+    selection: tuple[int, ...] | None = None
 
 
 class ExportDialog(tk.Toplevel):
@@ -97,7 +134,9 @@ class ExportDialog(tk.Toplevel):
 
     def __init__(self, master, full: bool = True, tracks: bool = True,
                  video_full: bool = False, video_tracks: bool = False,
-                 directory: str = "", video_image: str = ""):
+                 directory: str = "", video_image: str = "",
+                 pieces: list[tuple[int, str, float]] | None = None,
+                 selection: tuple[int, ...] | None = None):
         super().__init__(master)
         self.title("Exporter le concert")
         self.resizable(False, False)
@@ -110,6 +149,7 @@ class ExportDialog(tk.Toplevel):
         self.want_video_tracks = tk.BooleanVar(value=bool(video_tracks))
         self.directory = tk.StringVar(value=directory)
         self.video_image = tk.StringVar(value=video_image)
+        self.pieces = list(pieces or [])
         # Interrogé une fois : la réponse ne changera pas pendant que la
         # fenêtre est ouverte — sauf si l'on installe ffmpeg d'ici, seul cas où
         # c'est réinterrogé — et chaque appel lance un sous-processus.
@@ -129,8 +169,17 @@ class ExportDialog(tk.Toplevel):
                        "ou les deux.",
             style="Muted.TLabel", wraplength=400, justify="left").pack(
                 anchor="w", pady=(2, 8))
-        self._full_check = self._box(body, "Album continu", self.want_full)
-        self._tracks_check = self._box(body, "Pistes séparées", self.want_tracks)
+        self._full_check = self._box(body, "Album continu", self.want_full,
+                                     HELP_FULL)
+        self._tracks_check = self._box(body, "Pistes séparées", self.want_tracks,
+                                       HELP_TRACKS)
+
+        # La liste n'apparaît que s'il y a un choix à faire : sur un concert
+        # d'un seul morceau, une case unique ne demanderait rien.
+        self._picker = None
+        if len(self.pieces) > 1:
+            ttk.Separator(body).pack(fill="x", pady=16)
+            self._build_picker(body, selection)
 
         ttk.Separator(body).pack(fill="x", pady=16)
 
@@ -149,9 +198,11 @@ class ExportDialog(tk.Toplevel):
             self._install_row.pack(anchor="w", fill="x", pady=(0, 10))
 
         self._video_full_check = self._box(body, "Album continu",
-                                           self.want_video_full)
+                                           self.want_video_full,
+                                           HELP_VIDEO_FULL)
         self._video_tracks_check = self._box(body, "Pistes séparées",
-                                             self.want_video_tracks)
+                                             self.want_video_tracks,
+                                             HELP_VIDEO_TRACKS)
 
         image_row = ttk.Frame(body)
         image_row.pack(fill="x", pady=(8, 0))
@@ -161,10 +212,13 @@ class ExportDialog(tk.Toplevel):
         self._image_button = ttk.Button(image_row, text="Image…",
                                         command=self.browse_image)
         self._image_button.pack(side="left", padx=(8, 0))
+        tooltip.attach(self._image_button, HELP_IMAGE)
 
         ttk.Separator(body).pack(fill="x", pady=16)
 
-        ttk.Label(body, text="Destination", style="Title.TLabel").pack(anchor="w")
+        destination = ttk.Label(body, text="Destination", style="Title.TLabel")
+        destination.pack(anchor="w")
+        tooltip.attach(destination, HELP_DIR)
         ttk.Label(body, text="Le concert recevra son propre dossier à cet endroit.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
 
@@ -206,6 +260,90 @@ class ExportDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self.cancel())
         self.bind("<Return>", lambda _e: self.validate())
         self.protocol("WM_DELETE_WINDOW", self.cancel)
+
+    # -- morceaux ----------------------------------------------------------
+
+    def _build_picker(self, body, selection) -> None:
+        """Un morceau par ligne, une case chacune.
+
+        Un `Treeview` plutôt qu'une pile de `Checkbutton` : il défile tout seul
+        au-delà de huit lignes — un concert en compte vingt-cinq —, et sa
+        colonne d'arbre porte la même vraie case à cocher que le tableau de la
+        fenêtre principale, qui se lit au même endroit avec le même sens.
+        """
+        header = ttk.Frame(body)
+        header.pack(fill="x")
+        title = ttk.Label(header, text="Morceaux", style="Title.TLabel")
+        title.pack(side="left")
+        tooltip.attach(title, HELP_PICK)
+        ttk.Button(header, text="Aucun", style="Ghost.TButton",
+                   command=lambda: self.check_all(False)).pack(side="right")
+        ttk.Button(header, text="Tous", style="Ghost.TButton",
+                   command=lambda: self.check_all(True)).pack(side="right",
+                                                              padx=(0, 6))
+        self._picked_label = ttk.Label(body, text="", style="Muted.TLabel")
+        self._picked_label.pack(anchor="w", pady=(2, 8))
+
+        holder = ttk.Frame(body)
+        holder.pack(fill="x")
+        rows = min(len(self.pieces), PICK_ROWS)
+        self._picker = ttk.Treeview(holder, show="tree", height=rows,
+                                    selectmode="none")
+        self._picker.column("#0", width=PICK_WIDTH, stretch=True)
+        self._picker.pack(side="left", fill="x", expand=True)
+        if len(self.pieces) > rows:
+            bar = ttk.Scrollbar(holder, orient="vertical",
+                                command=self._picker.yview)
+            bar.pack(side="right", fill="y")
+            self._picker.configure(yscrollcommand=bar.set)
+
+        wanted = set(selection) if selection is not None else None
+        self._picked = {}
+        for number, label, duration in self.pieces:
+            self._picked[number] = wanted is None or number in wanted
+            self._picker.insert("", "end", iid=str(number),
+                                text=f"  {number:02d}   {label}   ·   "
+                                     f"{_clock(duration)}")
+        self._picker.bind("<Button-1>", self._on_pick)
+        self._paint_picks()
+
+    def _on_pick(self, event) -> str | None:
+        row = self._picker.identify_row(event.y)
+        if not row:
+            return None
+        # Toute la ligne bascule, pas seulement la case : viser une case de
+        # seize pixels dans une liste de vingt-cinq lignes est un travail de
+        # précision que rien ne justifie ici.
+        self._picked[int(row)] = not self._picked[int(row)]
+        self._paint_picks()
+        self._refresh()
+        return "break"
+
+    def check_all(self, on: bool) -> None:
+        """Tout cocher ou tout décocher. Sert surtout à repartir de zéro."""
+        for number in self._picked:
+            self._picked[number] = on
+        self._paint_picks()
+        self._refresh()
+
+    def _paint_picks(self) -> None:
+        for number, on in self._picked.items():
+            image = assets.icon("check_on" if on else "check_off")
+            if image is not None:
+                self._picker.item(str(number), image=image)
+        kept = [n for n, on in self._picked.items() if on]
+        total = sum(duration for number, _label, duration in self.pieces
+                    if number in set(kept))
+        self._picked_label.configure(
+            text=f"{len(kept)} morceau(x) sur {len(self.pieces)} · "
+                 f"{_clock(total)} à écrire")
+
+    def selected(self) -> tuple[int, ...] | None:
+        """Numéros retenus, ou None s'ils y sont tous."""
+        if self._picker is None:
+            return None
+        kept = tuple(number for number, on in self._picked.items() if on)
+        return None if len(kept) == len(self.pieces) else kept
 
     # -- pilotage ----------------------------------------------------------
 
@@ -383,6 +521,7 @@ class ExportDialog(tk.Toplevel):
             video_tracks=vid and self.want_video_tracks.get(),
             directory=self.directory.get(),
             video_image=self.video_image.get() if vid else "",
+            selection=self.selected(),
         )
         self.destroy()
 
@@ -413,10 +552,13 @@ class ExportDialog(tk.Toplevel):
         probe.destroy()
         return tallest
 
-    def _box(self, parent, label: str, variable: tk.BooleanVar) -> ttk.Checkbutton:
+    def _box(self, parent, label: str, variable: tk.BooleanVar,
+             help_text: str = "") -> ttk.Checkbutton:
         check = ttk.Checkbutton(parent, text=label, variable=variable,
                                 command=self._refresh)
         check.pack(anchor="w")
+        if help_text:
+            tooltip.attach(check, help_text)
         return check
 
     def _video_on(self) -> bool:
@@ -434,6 +576,8 @@ class ExportDialog(tk.Toplevel):
         if not (self.want_full.get() or self.want_tracks.get()
                 or self._video_on()):
             return MISSING_OUTPUT
+        if self._picker is not None and not any(self._picked.values()):
+            return MISSING_PIECE
         if self._video_on() and not self.video_image.get():
             return MISSING_IMAGE
         if not self.directory.get():
@@ -482,13 +626,23 @@ def _enable(on: bool, *widgets) -> None:
         widget.configure(state="normal" if on else "disabled")
 
 
+def _clock(seconds: float) -> str:
+    """Durée en minutes et secondes, heures comprises au-delà de soixante."""
+    seconds = max(0.0, float(seconds))
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
 def ask_export(master, full: bool, tracks: bool, video_full: bool,
-               video_tracks: bool, directory: str,
-               video_image: str = "") -> ExportChoice | None:
+               video_tracks: bool, directory: str, video_image: str = "",
+               pieces: list[tuple[int, str, float]] | None = None,
+               selection: tuple[int, ...] | None = None) -> ExportChoice | None:
     """Ouvre la fenêtre et attend. Retourne le choix, ou None si l'on annule."""
     dialog = ExportDialog(master, full=full, tracks=tracks,
                           video_full=video_full, video_tracks=video_tracks,
-                          directory=directory, video_image=video_image)
+                          directory=directory, video_image=video_image,
+                          pieces=pieces, selection=selection)
     dialog.center_on(master)
     dialog.transient(master)
     dialog.grab_set()

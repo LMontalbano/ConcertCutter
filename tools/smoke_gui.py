@@ -8,6 +8,7 @@ l'utilisateur. Le rendu graphique lui-même n'est pas testé ici.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import time
 import tkinter.font as tkfont
@@ -16,14 +17,14 @@ from tkinter import ttk
 
 import numpy as _np
 
-import shutil
-
 from concertcutter import project, video
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
 from concertcutter.ui import theme
 from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
-from concertcutter.ui.export_dialog import ExportChoice, ExportDialog
+from concertcutter.ui.export_dialog import (
+    MISSING_PIECE, ExportChoice, ExportDialog,
+)
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
 
 
@@ -807,6 +808,44 @@ def main(wav: Path) -> int:
         ok &= check("choisir une image demande la video",
                     seul.want_video_tracks.get())
         seul.cancel()
+
+    print("\nChoix des morceaux a exporter")
+    # Le piege n'est pas de filtrer, c'est de renumeroter : exporter les
+    # morceaux 2 et 4 doit donner « 02 » et « 04 ». La fenetre rend donc des
+    # numeros d'origine, et None quand ils y sont tous.
+    pieces = [(n, t.title.strip() or f"Piste {n:02d}", t.duration)
+              for n, t in enumerate(analysis.tracks, start=1)]
+    picker = ExportDialog(app, directory="test/_smoke_export", pieces=pieces)
+    app.update()
+    ok &= check(f"un morceau par ligne ({len(picker._picker.get_children())})",
+                len(picker._picker.get_children()) == len(pieces))
+    ok &= check("tous coches a l'ouverture : rien a filtrer",
+                picker.selected() is None)
+    picker.check_all(False)
+    app.update()
+    ok &= check("aucun coche : rien a valider", bool(picker._missing()))
+    ok &= check("et la fenetre dit quoi (" + picker._missing() + ")",
+                picker._missing() == MISSING_PIECE)
+    picker._picked[2] = True
+    picker._picked[len(pieces)] = True
+    picker._paint_picks()
+    picker._refresh()
+    app.update()
+    ok &= check(f"numeros d'origine rendus ({picker.selected()})",
+                picker.selected() == (2, len(pieces)))
+    ok &= check("export a nouveau possible", not picker._missing())
+    picker.validate()
+    app.update()
+    ok &= check("le choix voyage dans le resultat",
+                picker.result is not None
+                and picker.result.selection == (2, len(pieces)))
+
+    seul = ExportDialog(app, directory="test/_smoke_export",
+                        pieces=pieces[:1])
+    app.update()
+    ok &= check("un concert d'un seul morceau n'affiche pas de liste",
+                seul._picker is None and seul.selected() is None)
+    seul.cancel()
 
     print("\nDossier d'export")
     from concertcutter.render import RenderParams
