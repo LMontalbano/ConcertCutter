@@ -8,7 +8,7 @@ produit ici est le point de reprise manuelle : on peut le relire, le corriger
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 MUSIC = "music"
@@ -123,6 +123,26 @@ class Analysis:
     def from_json(path: str | Path) -> "Analysis":
         # utf-8-sig : ce fichier est fait pour être corrigé à la main, et un
         # éditeur Windows peut y laisser un BOM que json.loads refuserait.
-        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        payload["segments"] = [Segment(**s) for s in payload["segments"]]
-        return Analysis(**payload)
+        return Analysis.from_payload(
+            json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+    @staticmethod
+    def from_payload(payload: dict) -> "Analysis":
+        """Analyse relue depuis un dictionnaire, en ignorant ce qu'on ne sait pas lire.
+
+        `Analysis(**payload)` levait un `TypeError` sur la moindre clé inconnue.
+        Ce fichier est pourtant celui qu'on ouvre pour reprendre un travail, et
+        celui qu'on corrige à la main : une version ultérieure qui y ajoute un
+        champ le rendrait illisible par celle-ci, alors qu'il porte tout ce
+        qu'il faut. On garde ce qu'on connaît, on laisse le reste.
+        """
+        known = {field.name for field in fields(Analysis)}
+        kept = {key: value for key, value in payload.items() if key in known}
+        kept["segments"] = [_segment_from(item) for item in kept.get("segments", [])]
+        return Analysis(**kept)
+
+
+def _segment_from(payload: dict) -> Segment:
+    """Segment relu, même tolérance que pour l'analyse qui le porte."""
+    known = {field.name for field in fields(Segment)}
+    return Segment(**{key: value for key, value in payload.items() if key in known})

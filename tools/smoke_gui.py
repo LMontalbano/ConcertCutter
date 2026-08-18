@@ -16,7 +16,9 @@ from tkinter import ttk
 
 import numpy as _np
 
-from concertcutter import video
+import shutil
+
+from concertcutter import project, video
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
 from concertcutter.ui import theme
@@ -58,6 +60,13 @@ def _face(button) -> str:
 
 def main(wav: Path) -> int:
     ok = True
+    # Le dossier de reprise part dans le dossier d'essai : un test de fumée n'a
+    # rien à écrire dans les données de l'utilisateur, et surtout rien à y
+    # laisser traîner sous le nom d'un vrai concert.
+    scratch = Path("test/_smoke_projets")
+    shutil.rmtree(scratch, ignore_errors=True)
+    project.store = lambda: scratch
+
     app = App()
     app.update()  # force la construction des widgets
 
@@ -800,7 +809,6 @@ def main(wav: Path) -> int:
         seul.cancel()
 
     print("\nDossier d'export")
-    import shutil
     from concertcutter.render import RenderParams
     target = Path("test/_smoke_export")
     shutil.rmtree(target, ignore_errors=True)
@@ -818,7 +826,22 @@ def main(wav: Path) -> int:
     app.split_here()  # ne doit rien faire ni lever
     ok &= check("coupe sans curseur ignorée", True)
 
-    app.destroy()
+    print("\nTravail en cours enregistré à la fermeture")
+    # La fenêtre se ferme souvent deux secondes après la dernière correction :
+    # c'est justement celle-là qu'on retrouverait manquante en rouvrant, si la
+    # fermeture attendait le différé.
+    app.export_dir = "test/_smoke_export"
+    app._on_close()     # et non `destroy` : c'est le chemin qu'emprunte la croix
+    saved = list(scratch.glob(f"*{project.SUFFIX}"))
+    ok &= check(f"point de reprise écrit ({len(saved)} fichier)", len(saved) == 1)
+    if saved:
+        work = project.read(saved[0])
+        ok &= check("il porte le découpage courant",
+                    len(work.analysis.segments) == len(analysis.segments))
+        ok &= check("et la destination d'export",
+                    work.export.get("dir") == "test/_smoke_export")
+    shutil.rmtree(scratch, ignore_errors=True)
+
     print("\n" + ("TOUT PASSE" if ok else "DES TESTS ECHOUENT"))
     return 0 if ok else 1
 

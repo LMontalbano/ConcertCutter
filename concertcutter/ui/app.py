@@ -31,6 +31,7 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
+from .. import project
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
@@ -61,6 +62,15 @@ MIN_PIECE_S = 0.5
 # section précédente : sans ce jeu, la touche resterait bloquée sur place dès
 # que la lecture aurait franchi le début d'un cheveu.
 BACK_STEP_S = 1.5
+
+# Délai avant d'écrire le travail en cours. Assez long pour regrouper la rafale
+# d'un « tout décocher », assez court pour qu'une fermeture brutale ne coûte
+# qu'un geste.
+SAVE_DELAY_MS = 2000
+
+# Longueur d'un nom de concert dans un libellé de bouton. Au-delà, la barre
+# d'outils se déforme au gré du fichier ouvert.
+SHORT_NAME = 28
 
 TITLE_COLUMN = "#1"
 START_COLUMN = "#2"
@@ -116,6 +126,13 @@ class App(tk.Tk):
         self.source: Path | None = None
         self.analysis: Analysis | None = None
         self.features: SpectralFeatures | None = None
+        # Niveaux du tracé, déjà ramenés entre 0 et 1. Tenus à part des
+        # descripteurs : ceux-ci ne sortent que d'une analyse complète, alors
+        # que la silhouette du tableau et la forme d'onde doivent s'afficher
+        # dès l'ouverture du fichier — et à la reprise d'un projet, où l'on ne
+        # réanalyse pas.
+        self.levels: np.ndarray | None = None
+        self.levels_fps = 4.0
         self.duration = 0.0
         self.player = Player()
         self._events: queue.Queue = queue.Queue()
@@ -134,6 +151,8 @@ class App(tk.Tk):
         self._bulk_kind = GAP
         self._followed_row: str | None = None
         self._loop_position: int | None = None
+        self.project_path: Path | None = None
+        self._save_timer: str | None = None
         # Retenus d'un export à l'autre : on réexporte le plus souvent
         # au même endroit, sous la même forme et sur la même image.
         self.export_full = True
@@ -167,6 +186,7 @@ class App(tk.Tk):
         self._build_log().grid(row=4, column=0, sticky="ew")
         self.settings_holder.grid_remove()   # replié au démarrage
         self._refresh_settings_button()
+        self._refresh_resume_button()
         self._bind_keys()
 
     def _build_panes(self) -> ttk.Frame:
@@ -279,6 +299,17 @@ class App(tk.Tk):
         self.settings_button = ttk.Button(bar, text="Réglages", style="Ghost.TButton",
                                           compound="left", command=self._toggle_settings)
         self.settings_button.pack(side="left", padx=(18, 0))
+
+        # Le travail de la dernière séance, à portée du premier clic : c'est
+        # là qu'on le cherche en rouvrant l'application, et non dans un
+        # sélecteur de fichiers.
+        self.resume_button = ttk.Button(bar, text="Reprendre",
+                                        style="Ghost.TButton",
+                                        command=self.resume_last)
+        tooltip.attach(self.resume_button,
+                       "Rouvre le découpage de la dernière séance : "
+                       "frontières, titres, réglages et destination d'export. "
+                       "Rien n'est réanalysé.")
 
         # Pas de bouton « Chercher les enchaînements » : sur du matériel réel il
         # ne produisait que des faux positifs, pour un cas de figure rare. La
@@ -662,18 +693,93 @@ class App(tk.Tk):
 
     def open_file(self) -> None:
         chosen = filedialog.askopenfilename(
-            title="Choisir un concert", filetypes=[("Fichiers WAV", "*.wav *.WAV")]
+            title="Ouvrir un concert ou un travail en cours",
+            filetypes=[("Concert ou projet", "*.wav *.WAV *.json"),
+                       ("Fichiers WAV", "*.wav *.WAV"),
+                       ("Projets ConcertCutter", "*.json")],
         )
         if chosen:
-            self.load_source(Path(chosen))
+            self.open_path(Path(chosen))
 
-    def load_source(self, path: Path) -> None:
+    def open_path(self, path: Path) -> None:
+        """Ouvre un enregistrement ou un travail en cours, selon le fichier.
+
+        Un seul bouton pour les deux : au moment d'ouvrir, on cherche « le
+        concert d'hier », sans avoir à décider d'abord s'il est représenté par
+        son WAV ou par son point de reprise.
+        """
+        path = Path(path)
+        if project.is_project(path):
+            self.load_project(path)
+        else:
+            self.load_source(path)
+
+    def load_project(self, path: Path) -> None:
+        """Reprend un travail : segments, titres, réglages et destination.
+
+        Rien n'est réanalysé — c'est tout l'intérêt. Les niveaux du tracé, eux,
+        se recalculent depuis le WAV en quelques secondes, comme à l'ouverture
+        d'un fichier neuf.
+        """
+        try:
+            saved = project.read(path)
+        except project.Unreadable as error:
+            messagebox.showerror("Projet illisible", str(error))
+            return
+
+        source = self._locate(saved.source)
+        if source is None:
+            return
+
+        saved.analysis.source = str(source)
+        self._apply_settings(saved.settings)
+        self._apply_export(saved.export)
+        self.load_source(source, analysis=saved.analysis)
+        share = saved.view.get("listen_share")
+        if isinstance(share, (int, float)):
+            self.after_idle(lambda: self._apply_sash(float(share)))
+        self.project_path = path
+        when = f" (enregistré le {saved.saved[:16].replace('T', ' à ')})" if saved.saved else ""
+        self._set_status(f"Travail repris : {len(saved.analysis.tracks)} morceaux"
+                         f"{when}.", log=True)
+
+    def _locate(self, source: Path) -> Path | None:
+        """Retrouve l'enregistrement d'un projet, quitte à le demander.
+
+        Un disque externe débranché, un dossier rangé autrement, et le chemin
+        noté dans le projet ne désigne plus rien. Le travail, lui, est intact :
+        le perdre pour cette raison serait absurde.
+        """
+        if source.exists():
+            return source
+        keep = messagebox.askokcancel(
+            "Enregistrement introuvable",
+            f"Le projet renvoie à :\n{source}\n\n"
+            "Ce fichier n'est plus là. Le découpage est intact — indiquez où "
+            "se trouve l'enregistrement pour reprendre le travail.")
+        if not keep:
+            return None
+        chosen = filedialog.askopenfilename(
+            title=f"Où se trouve « {source.name} » ?",
+            initialfile=source.name,
+            filetypes=[("Fichiers WAV", "*.wav *.WAV")])
+        return Path(chosen) if chosen else None
+
+    def load_source(self, path: Path, analysis: Analysis | None = None) -> None:
         """Charge un WAV. Séparé du sélecteur pour permettre l'ouverture
-        directe d'un fichier passé en argument ou déposé sur l'application."""
+        directe d'un fichier passé en argument ou déposé sur l'application.
+
+        `analysis` reprend un découpage déjà fait plutôt que de repartir d'une
+        page blanche : c'est ce qui distingue la reprise d'un projet de
+        l'ouverture d'un enregistrement neuf.
+        """
         self.stop_playback()
         self.source = Path(path)
         self.analysis = None
         self.features = None
+        self.levels = None
+        self.project_path = None
+        self.history.clear()
         try:
             info = probe(self.source)
         except (FileNotFoundError, RuntimeError) as exc:
@@ -690,10 +796,24 @@ class App(tk.Tk):
             f"{info.channels} canaux",
         ])
         self.analyze_button.configure(state="normal")
-        self.render_button.configure(state="disabled")
+
+        if analysis is not None:
+            # Les frontières du projet valent sur ce fichier-ci : si sa durée
+            # ne concorde pas, ce n'est pas le même enregistrement, et les
+            # placer dessus donnerait un découpage faux sans rien dire.
+            if abs(analysis.duration - info.duration) > 1.0:
+                messagebox.showwarning(
+                    "Durées différentes",
+                    f"Le projet a été fait sur un enregistrement de "
+                    f"{_hms(analysis.duration)}, celui-ci dure "
+                    f"{_hms(info.duration)}.\n\nLes frontières risquent de "
+                    f"ne pas tomber au bon endroit.")
+            analysis.samplerate = info.samplerate
+            analysis.channels = info.channels
+            self.analysis = analysis
 
         self.wave.set_source(str(self.source))
-        self.wave.set_segments([])
+        self.wave.set_segments(analysis.segments if analysis else [])
         self.wave.set_envelope(np.zeros(0), 4.0, info.duration)
         self.wave.set_placeholder("Chargement de la forme d'onde…")
         self._refresh_table()
@@ -726,7 +846,13 @@ class App(tk.Tk):
         if source != self.source:  # un autre fichier a été ouvert entre-temps
             return
         self._set_progress(False)
+        self._set_levels(levels, fps)
         self.wave.set_envelope(levels, fps, self.duration)
+        # Un projet rouvert a déjà ses segments : le tableau les affiche depuis
+        # le début, et n'attendait que les niveaux pour dessiner leurs
+        # silhouettes.
+        if self.analysis is not None:
+            self._refresh_table()
         self._set_status("Prêt. Écoute possible ; analyser pour découper.", log=True)
 
     def _set_chips(self, values: list[str]) -> None:
@@ -911,6 +1037,7 @@ class App(tk.Tk):
         self._set_progress(False)
         self._set_busy(False)
 
+        self._set_levels(features.rms_db, features.fps)
         self.wave.set_source(str(self.source) if self.source else None)
         self.wave.set_envelope(features.rms_db, features.fps, analysis.duration)
         self.wave.set_segments(analysis.segments)
@@ -1136,8 +1263,112 @@ class App(tk.Tk):
         self.after(120, self._tick)
 
     def _on_close(self) -> None:
+        # Sans attendre le différé : la fenêtre se ferme parfois deux secondes
+        # après la dernière correction, et c'est celle-là qu'on retrouverait
+        # manquante en rouvrant.
+        self.save_project()
         self.player.close()
         self.destroy()
+
+    # -- travail en cours --------------------------------------------------
+
+    def _touch_project(self) -> None:
+        """Programme une sauvegarde, en repoussant celle déjà prévue.
+
+        Écrire à chaque geste enregistrerait vingt-cinq fois pendant qu'on
+        décoche une liste. Le délai regroupe la rafale en une seule écriture,
+        et l'utilisateur n'a jamais à penser à enregistrer — c'est un point de
+        reprise, pas un document.
+        """
+        if self.analysis is None:
+            return
+        if self._save_timer is not None:
+            self.after_cancel(self._save_timer)
+        self._save_timer = self.after(SAVE_DELAY_MS, self.save_project)
+
+    def save_project(self) -> Path | None:
+        """Écrit le travail en cours. Silencieuse : elle ne doit jamais gêner."""
+        if self._save_timer is not None:
+            self.after_cancel(self._save_timer)
+            self._save_timer = None
+        if self.analysis is None or self.source is None:
+            return None
+        work = project.Project(
+            analysis=self.analysis,
+            settings=self._collect_settings(),
+            export=self._collect_export(),
+            view={"listen_share": round(self.listen_share, 3)},
+        )
+        path = self.project_path or project.path_for(self.source)
+        try:
+            work.write(path)
+            project.prune()
+        except OSError as error:
+            # Un disque plein ou un dossier en lecture seule ne doit pas
+            # interrompre le découpage : on le dit au journal, et on continue.
+            self._write_log(f"[!] Travail non enregistré : {error}")
+            return None
+        self.project_path = path
+        return path
+
+    def _collect_settings(self) -> dict:
+        """Les champs tels qu'ils sont, y compris à moitié remplis."""
+        return {name: variable.get() for name, variable in self._settings().items()}
+
+    def _apply_settings(self, saved: dict) -> None:
+        for name, variable in self._settings().items():
+            if isinstance(saved.get(name), str):
+                variable.set(saved[name])
+
+    def _settings(self) -> dict:
+        return {
+            "min_gap": self.min_gap, "min_song": self.min_song,
+            "pad_start": self.pad_start, "pad_end": self.pad_end,
+            "fade_ms": self.fade_ms, "expected": self.expected,
+        }
+
+    def _collect_export(self) -> dict:
+        return {
+            "dir": self.export_dir, "image": self.export_image,
+            "full": self.export_full, "tracks": self.export_tracks,
+            "video_full": self.export_video_full,
+            "video_tracks": self.export_video_tracks,
+        }
+
+    def _apply_export(self, saved: dict) -> None:
+        """Retrouve la destination et la forme du dernier export.
+
+        C'est la moitié du travail de reprise : refaire le même export au même
+        endroit est le geste qui suit presque toujours la reprise.
+        """
+        if isinstance(saved.get("dir"), str):
+            self.export_dir = saved["dir"]
+        if isinstance(saved.get("image"), str):
+            self.export_image = saved["image"]
+        for name in ("full", "tracks", "video_full", "video_tracks"):
+            if isinstance(saved.get(name), bool):
+                setattr(self, f"export_{name}", saved[name])
+
+    def resume_last(self) -> None:
+        """Rouvre le travail le plus récent."""
+        found = project.recent()
+        if found:
+            self.open_path(found[0])
+
+    def _refresh_resume_button(self) -> None:
+        """Le bouton n'existe que s'il y a quelque chose à reprendre.
+
+        Proposé en permanence, il resterait gris à la première ouverture — un
+        bouton mort au milieu de ceux qui marchent, qu'on finit par ne plus
+        voir du tout.
+        """
+        found = project.recent()
+        if not found or self.analysis is not None:
+            self.resume_button.pack_forget()
+            return
+        name = found[0].name[:-len(project.SUFFIX)]
+        self.resume_button.configure(text=f"Reprendre « {_short(name)} »")
+        self.resume_button.pack(side="left", padx=(18, 0))
 
     # -- édition -----------------------------------------------------------
 
@@ -1436,6 +1667,10 @@ class App(tk.Tk):
                  f"Source : {_hms(self.analysis.duration)}     "
                  f"({100 * kept / max(self.analysis.duration, 1e-9):.1f} % conservé)")
         self._refresh_bulk_buttons()
+        self._refresh_resume_button()
+        # Toute édition finit par repasser ici : un seul point d'accroche
+        # suffit donc à ne jamais rater une modification.
+        self._touch_project()
 
     def _refresh_bulk_buttons(self) -> None:
         """Le bouton annonce le geste qui reste à faire.
@@ -1449,6 +1684,7 @@ class App(tk.Tk):
         if not segments:
             self.bulk_button.configure(state="disabled")
             self.invert_button.configure(state="disabled")
+            self._refresh_resume_button()
             return
         kept = sum(1 for segment in segments if segment.kind == MUSIC)
         self._bulk_kind = GAP if kept else MUSIC
@@ -1467,20 +1703,29 @@ class App(tk.Tk):
         exportable = bool(self.analysis and self.analysis.tracks and not self._busy)
         self.render_button.configure(state="normal" if exportable else "disabled")
 
-    def _segment_track(self, segment) -> str:
-        """Silhouette du segment, tirée de l'enveloppe déjà calculée.
+    def _set_levels(self, rms_db, fps: float) -> None:
+        """Fixe les niveaux servant à la fois au tracé et aux silhouettes.
 
-        Rien à relire sur le disque : `features` porte le niveau image par
-        image, le même que celui sur lequel la détection a tranché. La ligne du
-        tableau montre donc exactement ce que la forme d'onde montre plus haut.
+        Ramenés une fois pour toutes entre 0 et 1 : la conversion se refaisait
+        sur le tableau entier à chaque changement de largeur de colonne, sur un
+        tableau qui porte deux heures de niveaux.
         """
-        if self.features is None:
+        self.levels = np.clip((np.asarray(rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        self.levels_fps = fps
+
+    def _segment_track(self, segment) -> str:
+        """Silhouette du segment, tirée des niveaux déjà calculés.
+
+        Rien à relire sur le disque : les niveaux sont ceux du tracé affiché
+        au-dessus, donc la ligne du tableau montre exactement la même chose que
+        la forme d'onde.
+        """
+        if self.levels is None:
             return ""
-        fps = self.features.fps
-        levels = np.clip((np.asarray(self.features.rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        fps = self.levels_fps
         first = max(0, int(segment.start * fps))
-        last = min(levels.size, int(segment.end * fps))
-        return _sparkline(levels[first:last], self._track_columns())
+        last = min(self.levels.size, int(segment.end * fps))
+        return _sparkline(self.levels[first:last], self._track_columns())
 
     def _track_columns(self) -> int:
         """Nombre de blocs qui tiennent dans la colonne, à sa largeur du moment.
@@ -1955,6 +2200,14 @@ def _within(widget, ancestor) -> bool:
     return path == root or path.startswith(root + ".")
 
 
+def _short(name: str) -> str:
+    """Nom de concert raccourci par le milieu, pour tenir dans un bouton."""
+    if len(name) <= SHORT_NAME:
+        return name
+    keep = (SHORT_NAME - 1) // 2
+    return f"{name[:keep]}…{name[-keep:]}"
+
+
 def _percent(confidence: float) -> str:
     """Confiance en pourcentage : « 0.70 » ne parle pas, « 70 % » si."""
     return f"{max(0.0, min(1.0, confidence)) * 100:.0f} %"
@@ -2007,14 +2260,15 @@ def _hms(seconds: float) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Lance l'interface. Un chemin en argument ouvre directement ce fichier.
 
-    C'est ce qui permet de déposer un WAV sur l'exécutable pour l'ouvrir.
+    C'est ce qui permet de déposer un WAV — ou un travail en cours — sur
+    l'exécutable pour l'ouvrir.
     """
     argv = sys.argv[1:] if argv is None else argv
     app = App()
     if argv:
         candidate = _source_from(argv)
         if candidate is not None:
-            app.after(120, lambda: app.load_source(candidate))
+            app.after(120, lambda: app.open_path(candidate))
         else:
             app._set_status(f"Fichier introuvable : {' '.join(argv)}", log=True)
     app.mainloop()
@@ -2022,7 +2276,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _source_from(argv: list[str]) -> Path | None:
-    """Chemin du WAV à ouvrir, à partir des arguments reçus.
+    """Chemin du fichier à ouvrir — WAV ou projet — d'après les arguments reçus.
 
     Les noms de concerts contiennent presque toujours des espaces. Un chemin
     passé sans guillemets arrive donc découpé en plusieurs arguments : on tente
