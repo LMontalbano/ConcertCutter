@@ -31,7 +31,7 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
-from .. import project
+from .. import project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
@@ -167,6 +167,8 @@ class App(tk.Tk):
         # pas dans une liste écrite la veille.
         self.export_selection: tuple[int, ...] | None = None
         self.export_images: tuple[str, ...] = ()
+        self.export_crossfade = 0.0
+        self.export_slide_fade = video.SLIDE_FADE_S
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -492,12 +494,9 @@ class App(tk.Tk):
         self.pad_start = self._field(editing, "Amorce avant (s)", "0.5")
         self.pad_end = self._field(editing, "Queue après (s)", "0.6")
         self.fade_ms = self._field(editing, "Fondus (ms)", "40")
-        # Distinct des « Fondus (ms) », qui sont l'anti-clic de chaque bout de
-        # piste : celui-ci fait se recouvrir deux morceaux dans l'album
-        # continu. À zéro par défaut — bout à bout est ce que fait un disque,
-        # et un concert qui s'enchaînerait tout seul sans qu'on l'ait demandé
-        # serait une surprise.
-        self.crossfade = self._field(editing, "Fondu enchaîné (s)", "0")
+        # Pas de fondu enchaîné ici : il ne se décide qu'au moment d'exporter,
+        # et il n'agit que sur un seul des fichiers produits. Il vit donc dans
+        # la fenêtre d'export, sous les deux cases audio.
         return holder
 
     def _field(self, parent, label: str, default: str) -> tk.StringVar:
@@ -893,7 +892,8 @@ class App(tk.Tk):
                             self.export_dir, self.export_image,
                             video_images=self.export_images,
                             pieces=self._pieces(),
-                            selection=self.export_selection)
+                            selection=self.export_selection,
+                            crossfade_s=self.export_crossfade)
         if chosen is None:
             return
         # Par leur nom et non par leur rang : la fenêtre a gagné des réponses
@@ -912,12 +912,14 @@ class App(tk.Tk):
         self.export_image = image
         self.export_selection = selection
         self.export_images = chosen.video_images
+        self.export_crossfade = chosen.crossfade_s
+        self.export_slide_fade = chosen.slide_fade_s
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
                 pad_start_s=float(self.pad_start.get()),
                 pad_end_s=float(self.pad_end.get()),
-                crossfade_s=float(self.crossfade.get() or 0),
+                crossfade_s=chosen.crossfade_s,
                 write_full=full,
                 write_tracks=tracks,
                 video_full=video_full,
@@ -1336,7 +1338,6 @@ class App(tk.Tk):
             "min_gap": self.min_gap, "min_song": self.min_song,
             "pad_start": self.pad_start, "pad_end": self.pad_end,
             "fade_ms": self.fade_ms, "expected": self.expected,
-            "crossfade": self.crossfade,
         }
 
     def _pieces(self) -> list[tuple[int, str, float]]:
@@ -1355,6 +1356,8 @@ class App(tk.Tk):
         return {
             "dir": self.export_dir, "image": self.export_image,
             "images": list(self.export_images),
+            "crossfade": self.export_crossfade,
+            "slide_fade": self.export_slide_fade,
             "selection": (list(self.export_selection)
                           if self.export_selection is not None else None),
             "full": self.export_full, "tracks": self.export_tracks,
@@ -1374,6 +1377,9 @@ class App(tk.Tk):
             self.export_image = saved["image"]
         if isinstance(saved.get("images"), list):
             self.export_images = tuple(str(path) for path in saved["images"])
+        for name in ("crossfade", "slide_fade"):
+            if isinstance(saved.get(name), (int, float)):
+                setattr(self, f"export_{name}", float(saved[name]))
         for name in ("full", "tracks", "video_full", "video_tracks"):
             if isinstance(saved.get(name), bool):
                 setattr(self, f"export_{name}", saved[name])

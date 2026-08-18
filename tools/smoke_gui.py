@@ -54,6 +54,13 @@ def _clock(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
 
+def _descendants(widget):
+    """Tous les widgets sous celui-ci, en profondeur."""
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 def _face(button) -> str:
     """Ce que le bouton montre : son image si elle existe, sinon son texte."""
     return str(button.cget("image")) or str(button.cget("text"))
@@ -883,6 +890,50 @@ def main(wav: Path) -> int:
     ok &= check("un concert d'un seul morceau n'affiche pas de liste",
                 seul._picker is None and seul.selected() is None)
     seul.cancel()
+
+    print("\nFenetre d'export : trois questions dans l'ordre")
+    # Les morceaux d'abord : c'est la seule decision qui porte sur le concert,
+    # les deux autres portent sur des fichiers.
+    ordered = ExportDialog(app, directory="test/_smoke_export", pieces=pieces,
+                           crossfade_s=2.0)
+    app.update()
+    etapes = [w for w in _descendants(ordered)
+              if str(w.cget("style") if "style" in w.keys() else "") == "Step.TLabel"]
+    ok &= check(f"trois etapes numerotees ({[str(w.cget('text')) for w in etapes]})",
+                [str(w.cget("text")) for w in etapes] == ["1", "2", "3"])
+    ok &= check("les morceaux passent en premier",
+                ordered._picker.winfo_rooty() < ordered._full_check.winfo_rooty())
+    ok &= check("la destination passe en dernier",
+                ordered._path.winfo_rooty() > ordered._full_check.winfo_rooty())
+
+    ok &= check("libelles parlants sous Audio",
+                str(ordered._full_check.cget("text")) == "Le concert en un seul fichier"
+                and str(ordered._tracks_check.cget("text")) == "Un fichier par morceau")
+    ok &= check("et sous Video",
+                str(ordered._video_full_check.cget("text"))
+                == "Le concert en une seule video".replace("video", "vidéo")
+                and str(ordered._video_tracks_check.cget("text"))
+                == "Une vidéo par morceau")
+
+    # Le fondu enchaine a quitte les reglages de la fenetre principale : il ne
+    # se decide qu'au moment d'exporter, et n'agit que sur un seul fichier.
+    ok &= check(f"fondu enchaine repris ({ordered.crossfade_s.get()} s)",
+                ordered.crossfade_s.get() == "2")
+    ok &= check("le rang du fondu est actif tant que l'album est coche",
+                str(ordered._crossfade_row.winfo_children()[1]["state"]) != "disabled")
+    ordered.want_full.set(False)
+    ordered._refresh()
+    app.update()
+    ok &= check("album decoche : le fondu s'eteint, il ne disparait pas",
+                str(ordered._crossfade_row.winfo_children()[1]["state"]) == "disabled"
+                and ordered._crossfade_row.winfo_ismapped())
+    ordered.want_full.set(True)
+    ordered._refresh()
+    ordered.validate()
+    app.update()
+    ok &= check("le fondu voyage dans le resultat",
+                ordered.result is not None
+                and abs(ordered.result.crossfade_s - 2.0) < 1e-6)
 
     print("\nDossier d'export")
     from concertcutter.render import RenderParams

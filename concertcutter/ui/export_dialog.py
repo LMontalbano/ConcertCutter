@@ -9,15 +9,27 @@ l'aveugle, puis on validait un dossier sans plus voir ce qu'on allait y écrire.
 Les réunir dans une fenêtre ouverte au clic sur « Exporter… » remet les deux
 choix sous les yeux au seul moment où ils comptent.
 
-**Quatre cases, une par fichier possible** : album continu et pistes séparées,
-en audio et en vidéo. Une première question « audio, vidéo, ou les deux ? » les
-a précédées un temps, mais elle ne demandait rien de plus : cocher « Album
-continu » sous Vidéo dit déjà qu'on veut de la vidéo. Elle obligeait seulement à
-répondre deux fois.
+**Trois questions numérotées, dans l'ordre où on se les pose** : quels
+morceaux, sous quelle forme, où. Elles étaient mêlées — les cases de sortie en
+tête, la liste des morceaux au milieu, la destination en bas — et rien ne disait
+qu'on avait fini de répondre à l'une avant d'attaquer la suivante. Les numéros
+ne décorent pas : ils donnent un sens de lecture qu'on peut interrompre et
+reprendre.
 
-Des cases à cocher, pas des boutons radio : « album continu ou pistes séparées
-ou les deux » est en réalité deux questions oui/non, et l'écrire ainsi supprime
-le troisième choix qui ne faisait que répéter les deux premiers.
+**Les morceaux d'abord**, parce que c'est la seule décision qui porte sur le
+concert ; les deux autres portent sur des fichiers.
+
+**Les libellés disent ce qu'on obtient, pas comment ça s'appelle.** « Album
+continu » et « Pistes séparées » nommaient une forme sans dire ce qu'elle
+produit ; « Le concert en un seul fichier » et « Un fichier par morceau » le
+disent. Des cases à cocher et non des boutons radio : « l'un, l'autre, ou les
+deux » est en réalité deux questions oui/non.
+
+**Chaque réglage est sous ce qu'il modifie.** Le fondu enchaîné vivait dans les
+réglages de la fenêtre principale, rangé avec les amorces et les anti-clics
+alors qu'il ne se décide qu'au moment d'exporter et n'agit que sur un seul des
+fichiers ; il est maintenant sous les deux cases audio. Le fondu entre images
+est sous les images.
 
 **La section vidéo répare elle-même ce qui lui manque.** Elle était grisée sous
 une phrase — « ffmpeg est introuvable, installez-le » — qui suppose de savoir ce
@@ -41,16 +53,19 @@ from typing import NamedTuple
 from .. import ffmpeg_install, video
 from . import assets, theme, tooltip
 
-VIDEO_DESC = ("Titre du morceau intégré à la vidéo, sur l'image que vous "
-              "joignez. Sur l'album continu, il suit le morceau en cours.")
+VIDEO_DESC = ("Le titre du morceau est incrusté sur l'image que vous joignez. "
+              "Sur la vidéo du concert entier, il suit le morceau en cours.")
+
+PICK_DESC = ("Décocher n'enlève rien au découpage : le morceau garde son numéro "
+             "et sa place, il n'est simplement pas écrit.")
 
 # Ce que chaque case produit vraiment. Les libellés disent la forme du fichier,
 # pas ce qu'on en fait : « Album continu » ne dit pas qu'une cue sheet
 # l'accompagne, ni que c'est le fichier qu'on grave. Quatre phrases valaient
 # mieux que quatre libellés rallongés.
-HELP_FULL = ("Un seul WAV : le concert entier, blancs retirés. Une cue sheet "
-             "l'accompagne dans « infos », pour retrouver les morceaux à la "
-             "lecture ou à la gravure.")
+HELP_FULL = ("Un seul WAV : le concert entier, blancs retirés, les morceaux "
+             "bout à bout. Une cue sheet l'accompagne dans « infos », pour "
+             "retrouver les morceaux à la lecture ou à la gravure.")
 HELP_TRACKS = ("Un WAV par morceau, numéroté et nommé d'après le titre saisi "
                "dans le tableau. C'est ce qu'attend un lecteur ou une clé USB.")
 HELP_VIDEO_FULL = ("Un MP4 du concert entier, sur l'image de fond. Le titre "
@@ -63,12 +78,13 @@ HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. On peut "
               "en choisir plusieurs d'un coup — elles défilent alors en "
               "diaporama. Chacune garde ses proportions et se centre sur du "
               "noir, elle n'est jamais déformée pour remplir le cadre.")
-HELP_SLIDE = ("Temps d'affichage de chaque image avant de passer à la "
-              "suivante. Le diaporama repart au début tant que le morceau "
-              "dure.")
 HELP_SLIDE_FADE = ("Durée du fondu d'une image à la suivante. À zéro, elles se "
-                   "remplacent d'un coup. Le passage du cycle au suivant est "
-                   "fondu lui aussi, pour que la boucle ne se voie pas.")
+                   "remplacent d'un coup. Les images se répartissent seules "
+                   "sur la durée : sur la vidéo du concert entier, le "
+                   "changement d'image tombe sur le changement de morceau.")
+HELP_CROSSFADE = ("N'agit que sur le concert en un seul fichier : la fin d'un "
+                  "morceau se fond dans le début du suivant. À zéro, ils se "
+                  "suivent bout à bout, comme sur un disque.")
 HELP_DIR = ("Le concert reçoit son propre dossier ici, nommé d'après "
             "l'enregistrement. Un export déjà présent n'est jamais écrasé "
             "sans qu'on le demande.")
@@ -98,6 +114,10 @@ MISSING_IMAGE = "Choisir l'image de fond des vidéos."
 MISSING_DIR = "Choisir la destination."
 MISSING_PIECE = "Cocher au moins un morceau à exporter."
 _MESSAGES = (MISSING_OUTPUT, MISSING_IMAGE, MISSING_DIR, MISSING_PIECE)
+
+# Largeur de référence du corps de la fenêtre. Les phrases s'y replient, ce qui
+# fixe la largeur d'ensemble : sans elle, c'est la plus longue qui décidait.
+BODY_WIDTH = 430
 
 # Lignes visibles de la liste des morceaux avant qu'elle ne défile. Huit tient
 # dans la fenêtre sans la faire déborder d'un écran de portable.
@@ -131,6 +151,8 @@ class ExportChoice(NamedTuple):
     # attend qu'une continue de marcher.
     video_images: tuple[str, ...] = ()
     slide_fade_s: float = video.SLIDE_FADE_S
+    # Recouvrement entre morceaux du fichier d'un seul tenant, en secondes.
+    crossfade_s: float = 0.0
     # Numéros des morceaux retenus, ou None quand ils y sont tous. None plutôt
     # qu'une liste complète : le rendu n'a alors rien à filtrer, et un projet
     # rouvert après l'ajout d'un morceau l'exporte au lieu de l'oublier parce
@@ -149,7 +171,8 @@ class ExportDialog(tk.Toplevel):
                  directory: str = "", video_image: str = "",
                  video_images: tuple[str, ...] = (),
                  pieces: list[tuple[int, str, float]] | None = None,
-                 selection: tuple[int, ...] | None = None):
+                 selection: tuple[int, ...] | None = None,
+                 crossfade_s: float = 0.0):
         super().__init__(master)
         self.title("Exporter le concert")
         self.resizable(False, False)
@@ -169,7 +192,9 @@ class ExportDialog(tk.Toplevel):
         self.video_images: tuple[str, ...] = (
             tuple(video_images) or ((video_image,) if video_image else ()))
         self.slide_fade_s = tk.StringVar(value=f"{video.SLIDE_FADE_S:.1f}")
+        self.crossfade_s = tk.StringVar(value=f"{crossfade_s:g}")
         self.pieces = list(pieces or [])
+        self._wanted = selection
         # Interrogé une fois : la réponse ne changera pas pendant que la
         # fenêtre est ouverte — sauf si l'on installe ffmpeg d'ici, seul cas où
         # c'est réinterrogé — et chaque appel lance un sous-processus.
@@ -179,89 +204,99 @@ class ExportDialog(tk.Toplevel):
         self._install_step: tuple[str, int, int] = ("", 0, 0)
         self._install_done: str | None = None
 
-        body = ttk.Frame(self, padding=(20, 18))
+        # Trois questions, dans l'ordre où on se les pose : *quoi*, *sous
+        # quelle forme*, *où*. Elles étaient mêlées — les cases de sortie en
+        # tête, la liste des morceaux au milieu, la destination en bas —, et
+        # rien ne disait qu'on avait fini de répondre à l'une avant d'attaquer
+        # la suivante. Les numéros ne décorent pas : ils donnent à la fenêtre
+        # un sens de lecture, de haut en bas, qu'on peut interrompre et
+        # reprendre.
+        body = ttk.Frame(self, padding=(22, 18))
         body.pack(fill="both", expand=True)
 
-        ttk.Label(body, text="Audio — fichiers WAV",
-                  style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            body, text="Le concert d'un seul tenant, découpé en morceaux, "
-                       "ou les deux.",
-            style="Muted.TLabel", wraplength=400, justify="left").pack(
-                anchor="w", pady=(2, 8))
-        self._full_check = self._box(body, "Album continu", self.want_full,
-                                     HELP_FULL)
-        self._tracks_check = self._box(body, "Pistes séparées", self.want_tracks,
-                                       HELP_TRACKS)
-
-        # La liste n'apparaît que s'il y a un choix à faire : sur un concert
-        # d'un seul morceau, une case unique ne demanderait rien.
+        # 1 — les morceaux, en premier. C'est la seule décision qui porte sur
+        # le concert lui-même ; les autres portent sur des fichiers.
         self._picker = None
         if len(self.pieces) > 1:
-            ttk.Separator(body).pack(fill="x", pady=16)
-            self._build_picker(body, selection)
+            self._build_picker(self._section(body, "1", "Quels morceaux"))
+        else:
+            self._picked = {}
 
-        ttk.Separator(body).pack(fill="x", pady=16)
+        # 2 — la forme des fichiers.
+        files = self._section(body, "2" if self._picker else "1",
+                              "Sous quelle forme")
 
-        self._video_title = ttk.Label(body, text="Vidéo — fichiers MP4",
-                                      style="Title.TLabel")
+        audio = ttk.Frame(files)
+        audio.pack(fill="x")
+        ttk.Label(audio, text="Audio", style="AppLegend.TLabel").pack(anchor="w")
+        self._full_check = self._box(audio, "Le concert en un seul fichier",
+                                     self.want_full, HELP_FULL)
+        self._tracks_check = self._box(audio, "Un fichier par morceau",
+                                       self.want_tracks, HELP_TRACKS)
+        # Le fondu enchaîné vivait dans les réglages de la fenêtre principale,
+        # à côté des amorces et des anti-clics : trois réglages de montage
+        # rangés ensemble, mais dont un seul se décide au moment d'exporter.
+        # Il est ici, sous les deux cases audio, parce qu'il n'agit que sur la
+        # première — et la phrase le dit.
+        self._crossfade_row = self._number_row(
+            audio, "Fondu enchaîné entre morceaux", self.crossfade_s, HELP_CROSSFADE)
+
+        video_box = ttk.Frame(files)
+        video_box.pack(fill="x", pady=(14, 0))
+        self._video_title = ttk.Label(video_box, text="Vidéo",
+                                      style="AppLegend.TLabel")
         self._video_title.pack(anchor="w")
-        self._video_desc = ttk.Label(body, text=VIDEO_DESC, style="Muted.TLabel",
-                                     wraplength=400, justify="left")
-        self._video_desc.pack(anchor="w", pady=(2, 8))
+        self._video_desc = ttk.Label(video_box, text=VIDEO_DESC,
+                                     style="Muted.TLabel", wraplength=BODY_WIDTH,
+                                     justify="left")
+        self._video_desc.pack(anchor="w", pady=(2, 6))
 
         # Le rang d'installation n'existe que quand il a une raison d'être :
         # créé absent, il ne prend aucune place chez qui a déjà ffmpeg, et la
         # fenêtre garde la taille qu'elle a toujours eue.
-        self._install_row = self._build_install_row(body)
+        self._install_row = self._build_install_row(video_box)
         if self._can_install():
             self._install_row.pack(anchor="w", fill="x", pady=(0, 10))
 
-        self._video_full_check = self._box(body, "Album continu",
-                                           self.want_video_full,
-                                           HELP_VIDEO_FULL)
-        self._video_tracks_check = self._box(body, "Pistes séparées",
+        self._video_full_check = self._box(video_box,
+                                           "Le concert en une seule vidéo",
+                                           self.want_video_full, HELP_VIDEO_FULL)
+        self._video_tracks_check = self._box(video_box, "Une vidéo par morceau",
                                              self.want_video_tracks,
                                              HELP_VIDEO_TRACKS)
 
-        image_row = ttk.Frame(body)
-        image_row.pack(fill="x", pady=(8, 0))
+        image_row = ttk.Frame(video_box)
+        image_row.pack(fill="x", pady=(6, 0))
         self._image = ttk.Entry(image_row, textvariable=self.image_shown,
-                                width=44, state="readonly")
+                                width=40, state="readonly")
         self._image.pack(side="left", fill="x", expand=True)
-        self._image_button = ttk.Button(image_row, text="Image…",
+        self._image_button = ttk.Button(image_row, text="Images…",
                                         command=self.browse_image)
         self._image_button.pack(side="left", padx=(8, 0))
         tooltip.attach(self._image_button, HELP_IMAGE)
 
-        # Le fondu n'apparaît qu'à partir de deux images : il n'y a rien à
-        # enchaîner avec une seule.
-        self._slide_row = ttk.Frame(body)
-        ttk.Label(self._slide_row, text="Fondu entre images",
-                  style="Muted.TLabel").pack(side="left")
-        fade = ttk.Entry(self._slide_row, textvariable=self.slide_fade_s, width=5)
-        fade.pack(side="left", padx=(7, 4))
-        ttk.Label(self._slide_row, text="s", style="Muted.TLabel").pack(side="left")
-        tooltip.attach(fade, HELP_SLIDE_FADE)
+        # Le fondu des images suit les images, comme celui de l'audio suit les
+        # cases audio : chaque réglage est sous ce qu'il modifie, et non dans
+        # un coin « réglages » où il faudrait deviner sur quoi il agit.
+        self._slide_row = self._number_row(
+            video_box, "Fondu entre images", self.slide_fade_s, HELP_SLIDE_FADE)
 
-        ttk.Separator(body).pack(fill="x", pady=16)
-
-        destination = ttk.Label(body, text="Destination", style="Title.TLabel")
-        destination.pack(anchor="w")
-        tooltip.attach(destination, HELP_DIR)
-        ttk.Label(body, text="Le concert recevra son propre dossier à cet endroit.",
-                  style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
-
-        picker = ttk.Frame(body)
+        # 3 — la destination.
+        where = self._section(body, "3" if self._picker else "2", "Où")
+        ttk.Label(where, text="Le concert recevra son propre dossier à cet "
+                              "endroit.", style="Muted.TLabel").pack(anchor="w",
+                                                                     pady=(0, 6))
+        picker = ttk.Frame(where)
         picker.pack(fill="x")
         # En lecture seule : le chemin se choisit au sélecteur, on ne le tape
         # pas. Un chemin saisi à la main serait faux une fois sur deux, et il
         # faudrait le valider avant de s'en servir.
         self._path = ttk.Entry(picker, textvariable=self.directory,
-                               width=44, state="readonly")
+                               width=40, state="readonly")
         self._path.pack(side="left", fill="x", expand=True)
-        ttk.Button(picker, text="Parcourir…", command=self.browse).pack(
-            side="left", padx=(8, 0))
+        browse = ttk.Button(picker, text="Parcourir…", command=self.browse)
+        browse.pack(side="left", padx=(8, 0))
+        tooltip.attach(browse, HELP_DIR)
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=(20, 0))
@@ -296,9 +331,41 @@ class ExportDialog(tk.Toplevel):
         self.bind("<Return>", lambda _e: self.validate())
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
+    # -- disposition -------------------------------------------------------
+
+    def _section(self, parent, number: str, title: str) -> ttk.Frame:
+        """Une question numérotée, et le cadre où l'on y répond.
+
+        Le numéro est détaché du titre : il se lit comme un repère dans une
+        marche à suivre, pas comme le premier mot d'une phrase.
+        """
+        if parent.winfo_children():
+            ttk.Separator(parent).pack(fill="x", pady=14)
+        head = ttk.Frame(parent)
+        head.pack(fill="x")
+        ttk.Label(head, text=number, style="Step.TLabel").pack(side="left",
+                                                               padx=(0, 10))
+        ttk.Label(head, text=title, style="Title.TLabel").pack(side="left")
+        holder = ttk.Frame(parent)
+        holder.pack(fill="x", pady=(8, 0))
+        return holder
+
+    def _number_row(self, parent, label: str, variable: tk.StringVar,
+                    help_text: str) -> ttk.Frame:
+        """Un réglage en secondes, posé sous ce qu'il modifie."""
+        row = ttk.Frame(parent)
+        row.pack(anchor="w", fill="x", pady=(6, 0))
+        ttk.Label(row, text=label, style="Muted.TLabel").pack(side="left")
+        field = ttk.Entry(row, textvariable=variable, width=5)
+        field.pack(side="left", padx=(8, 4))
+        ttk.Label(row, text="s", style="Muted.TLabel").pack(side="left")
+        tooltip.attach(field, help_text)
+        tooltip.attach(row, help_text)
+        return row
+
     # -- morceaux ----------------------------------------------------------
 
-    def _build_picker(self, body, selection) -> None:
+    def _build_picker(self, body) -> None:
         """Un morceau par ligne, une case chacune.
 
         Un `Treeview` plutôt qu'une pile de `Checkbutton` : il défile tout seul
@@ -308,16 +375,15 @@ class ExportDialog(tk.Toplevel):
         """
         header = ttk.Frame(body)
         header.pack(fill="x")
-        title = ttk.Label(header, text="Morceaux", style="Title.TLabel")
-        title.pack(side="left")
-        tooltip.attach(title, HELP_PICK)
+        note = ttk.Label(header, text=PICK_DESC, style="Muted.TLabel",
+                         wraplength=BODY_WIDTH - 120, justify="left")
+        note.pack(side="left")
+        tooltip.attach(note, HELP_PICK)
         ttk.Button(header, text="Aucun", style="Ghost.TButton",
                    command=lambda: self.check_all(False)).pack(side="right")
         ttk.Button(header, text="Tous", style="Ghost.TButton",
                    command=lambda: self.check_all(True)).pack(side="right",
                                                               padx=(0, 6))
-        self._picked_label = ttk.Label(body, text="", style="Muted.TLabel")
-        self._picked_label.pack(anchor="w", pady=(2, 8))
 
         holder = ttk.Frame(body)
         holder.pack(fill="x")
@@ -332,7 +398,10 @@ class ExportDialog(tk.Toplevel):
             bar.pack(side="right", fill="y")
             self._picker.configure(yscrollcommand=bar.set)
 
-        wanted = set(selection) if selection is not None else None
+        self._picked_label = ttk.Label(body, text="", style="Muted.TLabel")
+        self._picked_label.pack(anchor="w", pady=(6, 0))
+
+        wanted = set(self._wanted) if self._wanted is not None else None
         self._picked = {}
         for number, label, duration in self.pieces:
             self._picked[number] = wanted is None or number in wanted
@@ -571,6 +640,7 @@ class ExportDialog(tk.Toplevel):
             video_image=self.video_image.get() if vid else "",
             video_images=self.video_images if vid else (),
             slide_fade_s=_number(self.slide_fade_s.get(), video.SLIDE_FADE_S),
+            crossfade_s=_number(self.crossfade_s.get(), 0.0),
             selection=self.selected(),
         )
         self.destroy()
@@ -654,10 +724,14 @@ class ExportDialog(tk.Toplevel):
         # n'irait nulle part.
         self._image_button.configure(
             state="normal" if self._video_on() else "disabled")
-        if len(self.video_images) > 1 and self._video_on():
-            self._slide_row.pack(anchor="w", fill="x", pady=(8, 0))
-        else:
-            self._slide_row.pack_forget()
+        # Un réglage sans prise s'éteint, il ne disparaît pas : escamoté, il
+        # faisait sauter la fenêtre sous la main à chaque case cochée — le
+        # défaut que tout le reste de cette fenêtre évite. Éteint, il dit en
+        # plus ce qu'une seconde image ou le fichier d'un seul tenant
+        # débloqueraient.
+        _enable_row(self._slide_row,
+                    len(self.video_images) > 1 and self._video_on())
+        _enable_row(self._crossfade_row, bool(self.want_full.get()))
 
         missing = self._missing()
         self._hint.configure(text=missing)
@@ -673,6 +747,11 @@ class ExportDialog(tk.Toplevel):
         x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
         y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 3
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+
+def _enable_row(row, on: bool) -> None:
+    """Éteint ou rallume tout un rang, intitulé compris."""
+    _enable(on, *row.winfo_children())
 
 
 def _enable(on: bool, *widgets) -> None:
@@ -705,13 +784,15 @@ def ask_export(master, full: bool, tracks: bool, video_full: bool,
                video_tracks: bool, directory: str, video_image: str = "",
                video_images: tuple[str, ...] = (),
                pieces: list[tuple[int, str, float]] | None = None,
-               selection: tuple[int, ...] | None = None) -> ExportChoice | None:
+               selection: tuple[int, ...] | None = None,
+               crossfade_s: float = 0.0) -> ExportChoice | None:
     """Ouvre la fenêtre et attend. Retourne le choix, ou None si l'on annule."""
     dialog = ExportDialog(master, full=full, tracks=tracks,
                           video_full=video_full, video_tracks=video_tracks,
                           directory=directory, video_image=video_image,
                           video_images=video_images,
-                          pieces=pieces, selection=selection)
+                          pieces=pieces, selection=selection,
+                          crossfade_s=crossfade_s)
     dialog.center_on(master)
     dialog.transient(master)
     dialog.grab_set()
