@@ -27,7 +27,7 @@ from . import theme
 
 HANDLE_PX = 7           # tolérance de saisie d'une frontière
 DRAG_PX = 3             # au-delà, on considère qu'il s'agit d'un déplacement
-OVERVIEW_HEIGHT = 46
+OVERVIEW_HEIGHT = 36
 RULER_HEIGHT = 20
 DETAIL_MAX_S = 90.0     # au-delà, l'enveloppe grossière suffit
 MIN_VIEW_S = 4.0

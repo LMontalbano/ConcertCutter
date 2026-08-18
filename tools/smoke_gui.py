@@ -142,9 +142,71 @@ def main(wav: Path) -> int:
         app.redo()
         app.update()
 
+    print("\nUn blanc se nomme aussi, et garde son nom")
+    # On reconnaît un morceau à l'oreille avant de décider s'il ira dans
+    # l'export : refuser le titre tant que la case n'est pas cochée imposait
+    # l'ordre des deux gestes. Et le nom doit survivre à la bascule — il vivait
+    # déjà sur le segment, c'est l'affichage qui l'effaçait.
     gap_row = next(r for r in app.tree.get_children() if not app._is_track_start(r))
     app.edit_title(gap_row)
-    ok &= check("blanc non éditable", app._title_editor is None)
+    app.update()
+    ok &= check("blanc éditable", app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "Rappel")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check("titre du blanc retenu",
+                analysis.segments[int(gap_row)].title == "Rappel")
+    ok &= check("titre du blanc affiché malgré la case décochée",
+                "Rappel" in app.tree.set(gap_row, "index"))
+
+    app.set_segment_kind(int(gap_row), "music")
+    app.update()
+    ok &= check("titre conservé une fois coché",
+                analysis.segments[int(gap_row)].title == "Rappel")
+    suite = next((r for r in app.tree.get_children()
+                  if app.tree.set(r, "index").strip() == "↳"), None)
+    if suite is not None:
+        app.edit_title(suite)
+        ok &= check("suite rattachée non éditable", app._title_editor is None)
+    app.set_segment_kind(int(gap_row), "gap")
+    app.update()
+    ok &= check("titre toujours là une fois redécoché",
+                "Rappel" in app.tree.set(gap_row, "index"))
+    analysis.segments[int(gap_row)].title = ""
+    app._refresh_table()
+    app.update()
+
+    print("\nTout cocher, tout décocher, inverser")
+    kinds_before = [s.kind for s in analysis.segments]
+    depth = app.history.can_undo
+    app.toggle_all()
+    app.update()
+    ok &= check("tout décoché en un clic",
+                all(s.kind == "gap" for s in analysis.segments))
+    ok &= check("aucune frontière perdue",
+                len(analysis.segments) == len(kinds_before))
+    ok &= check("export refusé sans piste",
+                str(app.render_button["state"]) == "disabled")
+    ok &= check("le bouton propose maintenant de tout cocher",
+                str(app.bulk_button["text"]) == "Tout cocher")
+    app.undo()
+    app.update()
+    ok &= check("une seule annulation suffit à tout remettre",
+                [s.kind for s in analysis.segments] == kinds_before)
+    ok &= check("export à nouveau possible",
+                str(app.render_button["state"]) == "normal")
+    app.invert_all()
+    app.update()
+    ok &= check("inversion appliquée",
+                [s.kind for s in analysis.segments]
+                == ["gap" if k == "music" else "music" for k in kinds_before])
+    app.undo()
+    app.update()
+    ok &= check("inversion annulable d'un coup",
+                [s.kind for s in analysis.segments] == kinds_before)
+    del depth
 
     print("\nRaccourcis neutralisés pendant une saisie")
     app.edit_title(start_row)
