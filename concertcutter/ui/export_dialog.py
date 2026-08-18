@@ -130,7 +130,6 @@ class ExportChoice(NamedTuple):
     # sous le son. `video_image` reste la première, pour que tout ce qui n'en
     # attend qu'une continue de marcher.
     video_images: tuple[str, ...] = ()
-    slide_s: float = video.SLIDE_S
     slide_fade_s: float = video.SLIDE_FADE_S
     # Numéros des morceaux retenus, ou None quand ils y sont tous. None plutôt
     # qu'une liste complète : le rendu n'a alors rien à filtrer, et un projet
@@ -169,7 +168,6 @@ class ExportDialog(tk.Toplevel):
         self.image_shown = tk.StringVar(value=video_image)
         self.video_images: tuple[str, ...] = (
             tuple(video_images) or ((video_image,) if video_image else ()))
-        self.slide_s = tk.StringVar(value=f"{video.SLIDE_S:.0f}")
         self.slide_fade_s = tk.StringVar(value=f"{video.SLIDE_FADE_S:.1f}")
         self.pieces = list(pieces or [])
         # Interrogé une fois : la réponse ne changera pas pendant que la
@@ -236,19 +234,14 @@ class ExportDialog(tk.Toplevel):
         self._image_button.pack(side="left", padx=(8, 0))
         tooltip.attach(self._image_button, HELP_IMAGE)
 
-        # Les réglages du diaporama n'apparaissent qu'à partir de deux images :
-        # une durée d'affichage pour une seule photo ne veut rien dire.
+        # Le fondu n'apparaît qu'à partir de deux images : il n'y a rien à
+        # enchaîner avec une seule.
         self._slide_row = ttk.Frame(body)
-        ttk.Label(self._slide_row, text="Chaque image",
-                  style="Muted.TLabel").pack(side="left")
-        slide = ttk.Entry(self._slide_row, textvariable=self.slide_s, width=5)
-        slide.pack(side="left", padx=(7, 4))
-        ttk.Label(self._slide_row, text="s     Fondu",
+        ttk.Label(self._slide_row, text="Fondu entre images",
                   style="Muted.TLabel").pack(side="left")
         fade = ttk.Entry(self._slide_row, textvariable=self.slide_fade_s, width=5)
         fade.pack(side="left", padx=(7, 4))
         ttk.Label(self._slide_row, text="s", style="Muted.TLabel").pack(side="left")
-        tooltip.attach(slide, HELP_SLIDE)
         tooltip.attach(fade, HELP_SLIDE_FADE)
 
         ttk.Separator(body).pack(fill="x", pady=16)
@@ -577,7 +570,6 @@ class ExportDialog(tk.Toplevel):
             directory=self.directory.get(),
             video_image=self.video_image.get() if vid else "",
             video_images=self.video_images if vid else (),
-            slide_s=_number(self.slide_s.get(), video.SLIDE_S),
             slide_fade_s=_number(self.slide_fade_s.get(), video.SLIDE_FADE_S),
             selection=self.selected(),
         )

@@ -112,7 +112,7 @@ def main(segments_path: Path, root: Path) -> int:
         video.write_video(sound, "Piste 01", target,
                           video.VideoParams(image=stills[0],
                                             images=tuple(stills),
-                                            slide_s=3.0, slide_fade_s=fade))
+                                            slide_fade_s=fade))
         duration, width, height = _probe(target)
         ok &= _check(f"{label} : cadre {width}x{height}",
                      (width, height) == (video.WIDTH, video.HEIGHT))
@@ -124,6 +124,43 @@ def main(segments_path: Path, root: Path) -> int:
                       video.VideoParams(image=stills[0]))
     duration, width, height = _probe(lone)
     ok &= _check(f"une image seule marche toujours ({duration:.1f} s)",
+                 abs(duration - 14.0) < 0.3)
+
+    print("\nLes images changent avec les morceaux")
+    # C'est tout l'intérêt du calage : le passage d'un titre au suivant se voit,
+    # là où un défilement à intervalle fixe dérivait et tombait au milieu d'un
+    # morceau une fois sur deux.
+    marks = [3.0, 7.0, 11.0]
+    captions = [video.Caption(f"M{index}", start, end) for index, (start, end)
+                in enumerate(zip([0.0] + marks, marks + [14.0]))]
+    for label, count in (("moins d'images que de morceaux", 2),
+                         ("autant", 4), ("plus d'images que de morceaux", 6)):
+        pool = [stills[index % len(stills)] for index in range(count)]
+        # Des chemins distincts, sinon deux créneaux voisins tomberaient sur le
+        # même fichier et l'on ne saurait pas si l'image a changé.
+        pool = [_png(root / f"p{count}_{index}.png",
+                     (30 + 40 * index, 60, 200 - 20 * index), 900, 600)
+                for index in range(count)]
+        slots = video.plan_slides(pool, captions, 14.0)
+        clock, changes = 0.0, []
+        for still, span in slots[:-1]:
+            clock += span
+            changes.append(round(clock, 3))
+        ok &= _check(f"{label} ({count}) : chaque morceau change d'image",
+                     all(any(abs(change - mark) < 1e-6 for change in changes)
+                         for mark in marks))
+        ok &= _check(f"  et deux créneaux voisins ne sont jamais la même image",
+                     all(a[0] != b[0] for a, b in zip(slots, slots[1:])))
+        ok &= _check(f"  la somme des créneaux couvre la vidéo "
+                     f"({sum(span for _still, span in slots):.1f} s)",
+                     abs(sum(span for _still, span in slots) - 14.0) < 1e-6)
+
+    whole = root / "concert.mp4"
+    video.write_video(sound, captions, whole,
+                      video.VideoParams(image=stills[0], images=tuple(stills),
+                                        slide_fade_s=0.4))
+    duration, _width, _height = _probe(whole)
+    ok &= _check(f"la vidéo du concert entier tient la durée ({duration:.1f} s)",
                  abs(duration - 14.0) < 0.3)
 
     shutil.rmtree(root, ignore_errors=True)

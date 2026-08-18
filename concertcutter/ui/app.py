@@ -924,7 +924,6 @@ class App(tk.Tk):
                 video_tracks=video_tracks,
                 video_image=image or None,
                 video_images=chosen.video_images,
-                video_slide_s=chosen.slide_s,
                 video_slide_fade_s=chosen.slide_fade_s,
                 selection=selection,
             )

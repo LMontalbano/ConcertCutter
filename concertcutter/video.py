@@ -44,10 +44,11 @@ FPS = 10
 KEYFRAME_S = 5      # une image-clé toutes les 5 s : déplacement fluide
 AUDIO_BITRATE = "192k"
 
-# Diaporama : durée d'affichage d'une image, et durée du fondu vers la
-# suivante. Huit secondes est le temps qu'on regarde une photo sans s'ennuyer
-# ni avoir le sentiment qu'elle défile.
-SLIDE_S = 8.0
+# Fondu d'une image à la suivante, en secondes. La durée d'affichage, elle, ne
+# se règle plus : les images se répartissent d'elles-mêmes sur la durée à
+# couvrir. Un nombre de secondes à saisir obligeait à faire une division pour
+# savoir si le diaporama tomberait juste, et à la refaire à chaque image
+# ajoutée ou retirée.
 SLIDE_FADE_S = 1.0
 
 # Polices cherchées dans l'ordre, la première trouvée gagne. drawtext exige un
@@ -84,15 +85,14 @@ class Caption:
 class VideoParams:
     """Réglages du rendu vidéo. `image` est le seul indispensable.
 
-    `images` ajoute un diaporama : les images défilent en boucle sous le son
-    au lieu d'une seule photo tenue deux heures. `image` reste la première
-    d'entre elles, pour que tout ce qui n'en demande qu'une continue de
-    marcher sans rien changer.
+    `images` ajoute un diaporama : les images se répartissent sur la durée à
+    couvrir, au lieu d'une seule photo tenue deux heures. `image` reste la
+    première d'entre elles, pour que tout ce qui n'en demande qu'une continue
+    de marcher sans rien changer.
     """
 
     image: str
     images: tuple[str, ...] = ()
-    slide_s: float = SLIDE_S        # durée d'affichage d'une image
     slide_fade_s: float = 0.0       # fondu vers la suivante ; 0 = coupe franche
     width: int = WIDTH
     height: int = HEIGHT
@@ -256,22 +256,32 @@ def write_video(audio: str | Path, captions: str | list[Caption],
     # deux-points ou un pourcent auraient chacun leur règle d'échappement, et un
     # titre en contient tôt ou tard. Un dossier temporaire les emporte tous
     # d'un coup, quel que soit le nombre de morceaux.
+    duration = _seconds(audio)
+    slots = plan_slides(stills, captions, duration)
+    fade = max(0.0, params.slide_fade_s) if len(slots) > 1 else 0.0
+
     with tempfile.TemporaryDirectory(prefix="cc-titres-") as texts:
-        # Un diaporama se fabrique d'abord à part, en un cycle qu'on rejoue en
-        # boucle. L'alternative — dérouler les images sur toute la durée du
-        # concert — demanderait neuf cents entrées pour deux heures.
-        if len(stills) > 1:
-            background = ["-stream_loop", "-1", "-i",
-                          str(_slideshow(stills, params, Path(texts)))]
-        else:
-            background = ["-loop", "1", "-framerate", str(params.fps),
-                          "-i", stills[0]]
+        # Une entrée par créneau, et non une image bouclée : c'est ce qui
+        # permet à chaque image de durer ce qu'elle doit durer et au changement
+        # de tomber sur le changement de morceau. Le nombre d'entrées reste
+        # borné par le nombre de morceaux — aucun créneau n'est plus court
+        # qu'un morceau, donc vingt-cinq et non neuf cents.
+        #
+        # Les créneaux qui seront enchaînés en fondu durent la longueur du
+        # fondu en plus : `xfade` consomme ce recouvrement, et sans ce
+        # supplément la vidéo raccourcirait à chaque transition.
+        background = []
+        for index, (still, span) in enumerate(slots):
+            hold = span + (fade if index < len(slots) - 1 else 0.0)
+            background += ["-loop", "1", "-t", f"{hold:.3f}",
+                           "-framerate", str(params.fps), "-i", still]
         _run([
             find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
             *background,
             "-i", str(audio),
-            "-filter_complex", _filter(captions, Path(texts), params),
-            "-map", "[v]", "-map", "1:a",
+            "-filter_complex", _filter(captions, Path(texts), params,
+                                       [span for _still, span in slots], fade),
+            "-map", "[v]", "-map", f"{len(slots)}:a",
             *codec,
             "-r", str(params.fps),
             "-g", str(params.fps * KEYFRAME_S),
@@ -295,71 +305,6 @@ def write_video(audio: str | Path, captions: str | list[Caption],
     return out_path
 
 
-def _slideshow(stills: list[str], params: VideoParams, folder: Path) -> Path:
-    """Un cycle du diaporama, encodé à part, à rejouer en boucle.
-
-    Deux raisons de passer par un fichier plutôt que par un graphe unique :
-
-    - dérouler les images sur la durée du concert demanderait une entrée toutes
-      les huit secondes, soit neuf cents pour deux heures ;
-    - chaque image est mise au cadre *avant* d'être enchaînée, donc un lot de
-      photos de tailles différentes passe sans que ffmpeg bute sur un
-      changement de format en cours de flux.
-
-    Avec un fondu, la première image est reprise en queue de cycle puis le tout
-    est coupé à la longueur d'un cycle : la fin se retrouve ainsi en plein
-    fondu vers l'image qui ouvre le cycle suivant, et la boucle ne se voit pas.
-    Sans ce rattrapage, chaque tour se signalerait par une coupe franche au
-    milieu d'une vidéo qui n'en a aucune autre.
-    """
-    hold = max(1.0, params.slide_s)
-    fade = max(0.0, min(params.slide_fade_s, hold / 2))
-    ordered = stills + ([stills[0]] if fade else [])
-
-    inputs: list[str] = []
-    for still in ordered:
-        inputs += ["-loop", "1", "-t", f"{hold:.3f}",
-                   "-framerate", str(params.fps), "-i", still]
-
-    chain = [
-        f"[{index}:v]scale={params.width}:{params.height}"
-        f":force_original_aspect_ratio=decrease,"
-        f"pad={params.width}:{params.height}:-1:-1:color=black,"
-        f"setsar=1,format=yuv420p[s{index}]"
-        for index in range(len(ordered))
-    ]
-    if fade:
-        previous = "[s0]"
-        for index in range(1, len(ordered)):
-            label = f"[x{index}]"
-            chain.append(f"{previous}[s{index}]xfade=transition=fade"
-                         f":duration={fade:.3f}:offset={index * (hold - fade):.3f}"
-                         f"{label}")
-            previous = label
-        last = previous
-    else:
-        joined = "".join(f"[s{index}]" for index in range(len(ordered)))
-        chain.append(f"{joined}concat=n={len(ordered)}:v=1:a=0[x]")
-        last = "[x]"
-
-    cycle = len(stills) * (hold - fade) if fade else len(stills) * hold
-    out_path = folder / "diaporama.mp4"
-    _run([
-        find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-        *inputs,
-        "-filter_complex", ";".join(chain),
-        "-map", last,
-        "-t", f"{cycle:.3f}",
-        # Une image-clé par image affichée : la boucle repart proprement, et
-        # sans elles ffmpeg réinterpole depuis le début du cycle à chaque tour.
-        "-c:v", _video_encoder(), "-crf", str(params.crf),
-        "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
-        str(out_path),
-    ])
-    return out_path
-
-
 def _seconds(audio: str | Path) -> float:
     """Durée du WAV, ou 0 si elle ne se lit pas.
 
@@ -372,29 +317,127 @@ def _seconds(audio: str | Path) -> float:
         return 0.0
 
 
-def _filter(captions: list[Caption], texts: Path, params: VideoParams) -> str:
-    """Chaîne de filtres : cadrer l'image, puis écrire les titres en bas.
+def plan_slides(stills: list[str], captions: list[Caption],
+                duration: float) -> list[tuple[str, float]]:
+    """Répartit les images sur la durée : (image, secondes) dans l'ordre.
+
+    Deux règles, une par situation, et aucune seconde à saisir.
+
+    **Sur la vidéo d'un seul morceau**, il n'y a rien à caler : les images se
+    partagent la durée en parts égales.
+
+    **Sur la vidéo du concert entier**, le changement d'image tombe sur le
+    changement de morceau. C'est ce qui donne au passage d'un titre au suivant
+    un repère visuel, là où un défilement à intervalle fixe dérivait et tombait
+    n'importe où — au milieu d'un morceau une fois sur deux. Plus d'images que
+    de morceaux : elles se répartissent à l'intérieur des morceaux, toutes
+    servies. Moins d'images que de morceaux : elles tournent, et chaque
+    changement de morceau amène quand même la suivante.
+    """
+    if not stills or duration <= 0:
+        return [(stills[0], max(duration, 0.0))] if stills else []
+    if len(stills) == 1:
+        return [(stills[0], duration)]
+
+    spans = _spans(captions, duration)
+    if len(spans) < 2:
+        return _share(stills, 0.0, duration)
+
+    slots: list[tuple[str, float]] = []
+    count = len(stills)
+    # Une règle ou l'autre, jamais les deux mêlées : en panachant, deux
+    # morceaux voisins retombaient sur la même image et le changement ne se
+    # voyait pas — ce qui est précisément ce qu'on cherche à obtenir.
+    for index, (start, end) in enumerate(spans):
+        if count >= len(spans):
+            first = index * count // len(spans)
+            last = (index + 1) * count // len(spans)
+            mine = stills[first:last]
+        else:
+            # Moins d'images que de morceaux : elles tournent, et chaque
+            # changement de morceau amène quand même la suivante.
+            mine = [stills[index % count]]
+        slots += _share(mine, start, end)
+    return slots
+
+
+def _spans(captions: list[Caption], duration: float) -> list[tuple[float, float]]:
+    """Bornes des morceaux, telles que les titres les décrivent déjà.
+
+    Les `Caption` de la vidéo du concert entier portent le passage de chaque
+    morceau : inutile de recalculer une chronologie qui existe, et qui est par
+    construction celle du fichier rendu.
+    """
+    bounded = [caption for caption in captions if caption.start is not None]
+    if len(bounded) < 2:
+        return [(0.0, duration)]
+    spans = []
+    for index, caption in enumerate(bounded):
+        start = max(0.0, caption.start or 0.0)
+        following = (bounded[index + 1].start if index + 1 < len(bounded)
+                     else caption.end)
+        end = min(duration, following if following is not None else duration)
+        if end > start:
+            spans.append((start, end))
+    return spans
+
+
+def _share(stills: list[str], start: float, end: float) -> list[tuple[str, float]]:
+    """Les images se partagent l'intervalle en parts égales."""
+    span = max(0.0, end - start) / len(stills)
+    return [(still, span) for still in stills]
+
+
+def _filter(captions: list[Caption], texts: Path, params: VideoParams,
+            spans: list[float], fade: float) -> str:
+    """Chaîne de filtres : cadrer les images, les enchaîner, écrire les titres.
 
     Les titres s'empilent en autant de `drawtext`, chacun borné à son passage.
     Ils se recouvriraient si les bornes se chevauchaient — elles viennent du
     découpage, donc elles ne se chevauchent pas.
     """
-    # L'image garde ses proportions et se centre sur un fond noir : la
-    # déformer pour remplir le cadre serait pire que des bandes. Réappliqué
-    # même sur un diaporama déjà cadré : c'est ce qui garantit la taille du
-    # cadre quoi qu'on ait reçu en entrée, et l'opération ne coûte rien
-    # lorsqu'il n'y a rien à changer.
-    chain = [
-        f"[0:v]scale={params.width}:{params.height}"
-        ":force_original_aspect_ratio=decrease",
-        f"pad={params.width}:{params.height}:-1:-1:color=black",
-        "setsar=1",
+    # Chaque image garde ses proportions et se centre sur un fond noir : la
+    # déformer pour remplir le cadre serait pire que des bandes. Elle est mise
+    # au cadre *avant* d'être enchaînée, ce qui laisse mêler des photos de
+    # tailles différentes sans que ffmpeg bute sur un changement de format en
+    # cours de flux.
+    count = len(spans)
+    chains = [
+        f"[{index}:v]scale={params.width}:{params.height}"
+        f":force_original_aspect_ratio=decrease,"
+        f"pad={params.width}:{params.height}:-1:-1:color=black,"
+        f"setsar=1,format=yuv420p[s{index}]"
+        for index in range(count)
     ]
+
+    if count == 1:
+        background = "[s0]"
+    elif fade > 0:
+        # Le fondu commence à la seconde où l'image devait changer : le
+        # décalage cumulé des créneaux déjà enchaînés vaut exactement la somme
+        # de leurs durées visibles, puisque chacun porte le recouvrement en
+        # plus.
+        previous, clock = "[s0]", 0.0
+        for index in range(1, count):
+            clock += spans[index - 1]
+            label = f"[x{index}]"
+            chains.append(f"{previous}[s{index}]xfade=transition=fade"
+                          f":duration={fade:.3f}:offset={clock:.3f}{label}")
+            previous = label
+        background = previous
+    else:
+        joined = "".join(f"[s{index}]" for index in range(count))
+        chains.append(f"{joined}concat=n={count}:v=1:a=0[bg]")
+        background = "[bg]"
+
+    titles = []
     for index, caption in enumerate(captions):
         text_file = texts / f"{index:04d}.txt"
         text_file.write_text(caption.text, encoding="utf-8")
-        chain.append(_drawtext(caption, text_file, params))
-    return ",".join(chain) + "[v]"
+        titles.append(_drawtext(caption, text_file, params))
+    chains.append(background + ",".join(titles) + "[v]" if titles
+                  else f"{background}null[v]")
+    return ";".join(chains)
 
 
 def _drawtext(caption: Caption, text_file: Path, params: VideoParams) -> str:

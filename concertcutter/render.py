@@ -108,7 +108,6 @@ class RenderParams:
     # Diaporama : plusieurs fonds qui défilent, au lieu d'une photo tenue deux
     # heures. Vide, `video_image` fait seule le fond, comme avant.
     video_images: tuple[str, ...] = ()
-    video_slide_s: float = video.SLIDE_S
     video_slide_fade_s: float = 0.0
     # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
     # toujours à sortir en entier — trois titres pour une maquette, le rappel
@@ -362,7 +361,6 @@ def _video_params(params: RenderParams) -> video.VideoParams:
     return video.VideoParams(
         image=str(params.video_image or ""),
         images=tuple(str(path) for path in params.video_images),
-        slide_s=params.video_slide_s,
         slide_fade_s=params.video_slide_fade_s,
     )
 
