@@ -44,6 +44,13 @@ class _Click:
         self.widget = widget
 
 
+def _clock(seconds: float) -> str:
+    """Horaire tel qu'on le tape : mm:ss, ou h:mm:ss au-delà de l'heure."""
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
 def _face(button) -> str:
     """Ce que le bouton montre : son image si elle existe, sinon son texte."""
     return str(button.cget("image")) or str(button.cget("text"))
@@ -314,7 +321,7 @@ def main(wav: Path) -> int:
                 len(app.tree.get_children()) == len(analysis.segments))
     ok &= check("segments contigus", _contiguous(analysis.segments))
 
-    print("\nAjout d'une coupe")
+    print("\nCoupe simple : une frontière, rien de plus")
     target = analysis.tracks[0]
     middle = (target.start + target.end) / 2
     app.wave.set_cursor(middle)
@@ -322,21 +329,169 @@ def main(wav: Path) -> int:
     segments_before = len(analysis.segments)
     app.split_here()
     app.update()
-    # Scinder un morceau insère musique / blanc / musique à la place d'un seul
-    # segment : deux segments de plus, un morceau de plus.
+    # Une frontière posée, aucun blanc inséré : rien n'est retiré du son. Deux
+    # verts voisins restent un seul morceau — c'est ce que « Séparer » corrige,
+    # et c'est pourquoi les deux gestes existent séparément.
+    ok &= check("segments +1", len(analysis.segments) == segments_before + 1)
+    ok &= check("aucun morceau créé : deux verts voisins n'en font qu'un",
+                len(analysis.tracks) == tracks_before)
+    ok &= check("segments contigus après coupe", _contiguous(analysis.segments))
+    app.undo()
+    app.update()
+    ok &= check("coupe annulée", len(analysis.segments) == segments_before)
+
+    print("\nCoupe dans un blanc : le retour du bêta-test")
+    gap = next(s for s in analysis.segments if s.kind == "gap" and s.duration > 5)
+    gap_middle = (gap.start + gap.end) / 2
+    app.wave.set_cursor(gap_middle)
+    count = len(analysis.segments)
+    app.split_here()
+    app.update()
+    ok &= check("blanc scindé", len(analysis.segments) == count + 1)
+    left = next((i for i, s in enumerate(analysis.segments)
+                 if s.kind == "gap" and abs(s.end - gap_middle) < 1e-6), None)
+    ok &= check("coupé à l'instant visé", left is not None)
+    ok &= check("segments contigus après coupe dans le blanc",
+                _contiguous(analysis.segments))
+    if left is not None:
+        app.set_segment_kind(left + 1, "music")
+        app.update()
+        ok &= check("la moitié qu'on coche devient un morceau",
+                    analysis.segments[left + 1].kind == "music")
+        app.undo()
+        app.update()
+    app.undo()
+    app.update()
+    ok &= check("retour à l'état d'avant la coupe",
+                len(analysis.segments) == count)
+
+    print("\nSéparer en deux morceaux : le blanc reste nécessaire")
+    app.wave.set_cursor(middle)
+    tracks_before = len(analysis.tracks)
+    segments_before = len(analysis.segments)
+    app.split_track()
+    app.update()
     ok &= check("segments +2", len(analysis.segments) == segments_before + 2)
     ok &= check(f"morceaux {tracks_before} -> {len(analysis.tracks)}",
                 len(analysis.tracks) == tracks_before + 1)
-    ok &= check("segments contigus après coupe", _contiguous(analysis.segments))
     ok &= check("blanc bien inséré entre les deux moitiés",
                 _alternating(analysis.segments))
-
-    print("\nCoupe refusée dans un blanc")
-    gap = next(s for s in analysis.segments if s.kind == "gap" and s.duration > 5)
-    app.wave.set_cursor((gap.start + gap.end) / 2)
+    app.wave.set_cursor(gap_middle)
     count = len(analysis.segments)
-    app.split_here()
-    ok &= check("blanc non scindé", len(analysis.segments) == count)
+    app.split_track()
+    app.update()
+    ok &= check("séparer un blanc en morceaux : refusé",
+                len(analysis.segments) == count)
+
+    print("\nHoraires saisis au clavier")
+    # La fin d'un segment est le début du suivant : saisir un horaire déplace
+    # cette frontière-là, à la seconde près — ce que six secondes par pixel
+    # interdisaient à la souris.
+    row = app.tree.get_children()[0]
+    index = int(row)
+    before, after = analysis.segments[index], analysis.segments[index + 1]
+    wanted = (before.start + before.end) / 2
+    app.edit_time(row, "end")
+    app.update()
+    ok &= check("éditeur ouvert sur la colonne Fin", app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, _clock(wanted))
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check(f"frontière posée à {_clock(wanted)}",
+                abs(before.end - wanted) < 1.0)
+    ok &= check("le segment suivant a suivi", abs(after.start - before.end) < 1e-6)
+    ok &= check("segments toujours contigus", _contiguous(analysis.segments))
+    app.undo()
+    app.update()
+    ok &= check("saisie annulable", abs(after.start - before.end) < 1e-6)
+
+    # Un horaire hors des bornes ne doit rien écrire, et surtout pas se perdre :
+    # celui qu'on vient de relever dans la forme d'onde n'est pas de ceux qu'on
+    # retient par cœur.
+    keep = before.end
+    app.edit_time(row, "end")
+    app.update()
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "9:59:59")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check("horaire hors bornes refusé", abs(before.end - keep) < 1e-6)
+    ok &= check("la saisie reste ouverte pour être corrigée",
+                app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.event_generate("<Escape>")
+        app.update()
+    app.edit_time(row, "end")
+    app.update()
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "trois heures")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+        ok &= check("horaire illisible refusé", abs(before.end - keep) < 1e-6)
+        app._title_editor.event_generate("<Escape>")
+        app.update()
+
+    editors = app._title_editor
+    app.edit_time(row, "start")
+    ok &= check("le début du concert ne se déplace pas",
+                app._title_editor is editors)
+
+    print("\nLe curseur se pose sans réveiller le son")
+    app.stop_playback()
+    app.update()
+    quiet = (analysis.segments[1].start + analysis.segments[1].end) / 2
+    app._place_playhead(quiet)
+    app.update()
+    ok &= check("curseur posé", abs((app.wave.cursor or -1) - quiet) < 0.5)
+    ok &= check("le son n'est pas parti tout seul", app.player.state != "playing")
+
+    print("\nAller au début d'une section, et de frontière en frontière")
+    app.go_section_start()
+    app.update()
+    ok &= check("revenu au début de la section",
+                abs((app.wave.cursor or -1) - analysis.segments[1].start) < 0.01)
+    app.go_section_start()
+    app.update()
+    ok &= check("deux fois de suite : la section précédente",
+                (app.wave.cursor or 0) < analysis.segments[1].start + 1e-6)
+    app.go_boundary(True)
+    app.update()
+    ok &= check("frontière suivante atteinte",
+                (app.wave.cursor or 0) >= analysis.segments[1].start - 1e-6)
+
+    print("\nBoucle sur un segment")
+    # Caler une frontière demande de réentendre le même passage dix fois : la
+    # boucle doit tenir toute seule, et surtout lâcher prise à l'arrêt — sinon
+    # le battement d'horloge la relance aussitôt.
+    app.wave.set_cursor((analysis.segments[1].start + analysis.segments[1].end) / 2)
+    app.toggle_loop()
+    app.update()
+    ok &= check("boucle armée", app._loop_position == 1)
+    app.toggle_loop()
+    app.update()
+    ok &= check("second appui : boucle désarmée", app._loop_position is None)
+    app.toggle_loop()
+    app.update()
+    app.stop_playback()
+    app.update()
+    ok &= check("l'arrêt désarme la boucle", app._loop_position is None)
+
+    print("\nSuivi de la ligne écoutée")
+    ok &= check("suivi actif par défaut", app.follow_play.get())
+    app._stop_following()
+    ok &= check("un défilement à la main le suspend", not app.follow_play.get())
+    app.follow_play.set(True)
+    played = app.tree.get_children()[1]
+    app._follow_row(played)
+    ok &= check("la ligne écoutée est teintée",
+                app.tree.item(played, "tags")[0].endswith("_playing"))
+    app._follow_row(None)
+    ok &= check("la teinte repart avec la lecture",
+                not app.tree.item(played, "tags")[0].endswith("_playing"))
 
     print("\nDéplacement d'une frontière")
     # Une frontière entre deux segments assez longs : le déplacement est borné

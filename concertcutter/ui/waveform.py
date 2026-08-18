@@ -26,6 +26,7 @@ from ..audio import probe, read_span
 from . import theme
 
 HANDLE_PX = 7           # tolérance de saisie d'une frontière
+GRAB_PX = 8             # tolérance de saisie de la tête de lecture
 DRAG_PX = 3             # au-delà, on considère qu'il s'agit d'un déplacement
 OVERVIEW_HEIGHT = 36
 RULER_HEIGHT = 20
@@ -81,12 +82,20 @@ class WaveformView(ttk.Frame):
         self.on_boundary_moved: Callable[[int, float], None] | None = None
         self.on_boundary_clicked: Callable[[int], None] | None = None
         self.on_seek: Callable[[float], None] | None = None
+        # La tête de lecture se saisit et se promène, comme une frontière. Le
+        # glissé ne fait bouger que l'affichage ; c'est le relâchement qui
+        # demande au lecteur de rejoindre la position, sinon on lui réclamerait
+        # un saut par pixel parcouru.
+        self.on_cursor_scrub: Callable[[float], None] | None = None
+        self.on_cursor_moved: Callable[[float], None] | None = None
+        self.on_seek_play: Callable[[float], None] | None = None
         self.on_view_changed: Callable[[], None] | None = None
 
         self.main.bind("<Configure>", lambda _e: self.redraw())
         self.main.bind("<Button-1>", self._on_press)
         self.main.bind("<B1-Motion>", self._on_drag)
         self.main.bind("<ButtonRelease-1>", self._on_release)
+        self.main.bind("<Double-Button-1>", self._on_double_click)
         self.main.bind("<Shift-Button-1>", self._on_pan_start)
         self.main.bind("<Shift-B1-Motion>", self._on_pan_move)
         self.main.bind("<Button-2>", self._on_pan_start)
@@ -218,12 +227,40 @@ class WaveformView(ttk.Frame):
             self._boundary_moved = False
             self.select(index)
             return
+        if self._on_cursor(event.x):
+            # La frontière l'emporte quand les deux se superposent : elle ne se
+            # replace qu'ici, alors que la tête de lecture s'atteint aussi par
+            # la barre de progression et par le tableau.
+            self._drag_mode = "cursor"
+            self._press_x = event.x
+            return
         self._drag_mode = None
         self.select(None)
         if self.on_seek:
             self.on_seek(self._seconds(event.x))
 
+    def _on_cursor(self, x: float) -> bool:
+        """Vrai si l'abscisse tombe sur la tête de lecture."""
+        if self._cursor is None:
+            return False
+        return abs(self._x(self._cursor) - x) <= GRAB_PX
+
+    def _on_double_click(self, event) -> None:
+        """Double clic : placer *et* écouter.
+
+        Le clic simple ne fait plus démarrer le son — on prépare une coupe sans
+        vouloir l'entendre. Le geste qui le veut vraiment reste à portée.
+        """
+        if self.on_seek_play:
+            self.on_seek_play(self._seconds(event.x))
+
     def _on_drag(self, event) -> None:
+        if self._drag_mode == "cursor":
+            seconds = max(0.0, min(self._duration, self._seconds(event.x)))
+            self.set_cursor(seconds)
+            if self.on_cursor_scrub:
+                self.on_cursor_scrub(seconds)
+            return
         if self._drag_mode != "boundary" or self._selected is None:
             return
         # Sous le seuil, c'est le tremblement d'un clic, pas une intention de
@@ -239,6 +276,10 @@ class WaveformView(ttk.Frame):
         self._preview_move(self._seconds(event.x))
 
     def _on_release(self, event) -> None:
+        if self._drag_mode == "cursor":
+            seconds = max(0.0, min(self._duration, self._seconds(event.x)))
+            if self.on_cursor_moved:
+                self.on_cursor_moved(seconds)
         if self._drag_mode == "boundary" and self._selected is not None:
             if self._boundary_moved:
                 if self.on_boundary_moved:
@@ -263,8 +304,13 @@ class WaveformView(ttk.Frame):
         self.zoom(0.8 if event.delta > 0 else 1.25, self._seconds(event.x))
 
     def _on_hover(self, event) -> None:
-        near = self._nearest_boundary(event.x)
-        self.main.configure(cursor="sb_h_double_arrow" if near is not None else "")
+        if self._nearest_boundary(event.x) is not None:
+            shape = "sb_h_double_arrow"
+        elif self._on_cursor(event.x):
+            shape = "hand2"      # la tête se prend, elle ne s'étire pas
+        else:
+            shape = ""
+        self.main.configure(cursor=shape)
         self._set_hint(_hms(self._seconds(event.x)))
 
     def _set_hint(self, text: str) -> None:

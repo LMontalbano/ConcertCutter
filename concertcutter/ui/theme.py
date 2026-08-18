@@ -134,6 +134,11 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.configure("Chip.TLabel", background=PANEL_BG, foreground=TEXT_MUTED,
                     font=FONT_SMALL, padding=(9, 4), relief="solid", borderwidth=1)
 
+    # Bulle d'aide : fond clair et texte plein, pas le gris du second plan —
+    # on la lit une fois, et c'est le seul endroit où la phrase se trouve.
+    style.configure("Tooltip.TLabel", background=PANEL_BG, foreground=TEXT,
+                    font=FONT_SMALL, padding=(10, 7))
+
     # En-tête d'une section repliable : le titre lui-même sert de cible.
     style.configure("Section.TLabel", background=APP_BG, foreground=TEXT_MUTED,
                     font=FONT_BOLD, padding=(0, 4))
