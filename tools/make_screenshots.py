@@ -46,6 +46,9 @@ TITRE_H = 32
 # image publiée sur une page publique.
 DEST = r"D:\Concerts"
 IMAGE = r"D:\Concerts\pochette.jpg"
+# Plusieurs fonds, parce que c'est le cas courant : la liste ne montre son
+# intérêt — l'ordre, le retrait — qu'avec de quoi la remplir.
+IMAGES = [IMAGE, r"D:\Concerts\scene.jpg", r"D:\Concerts\rappel.jpg"]
 
 
 def main(wav: Path, out_dir: Path, cache: Path | None) -> int:
@@ -116,7 +119,7 @@ def _shot_dialog(app: App, path: Path, ffmpeg: bool) -> None:
     dialog = export_dialog.ExportDialog(app, video_tracks=ffmpeg)
     dialog.set_directory(DEST)
     if ffmpeg:
-        dialog.video_image.set(IMAGE)
+        dialog.set_images(IMAGES)
     dialog.center_on(app)
     dialog.update()
     _shot(dialog, path)

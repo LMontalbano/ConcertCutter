@@ -46,7 +46,7 @@ au prix d'un empaquetage MSIX et d'un passage en revue.
 
 ## Les trois gestes
 
-**Ouvrir** un enregistrement WAV : la forme d'onde s'affiche immédiatement et le
+**Importer** un enregistrement WAV : la forme d'onde s'affiche immédiatement et le
 fichier est écoutable, **avant même d'analyser**. Le tracé d'un concert de 2 h
 apparaît en 5 s.
 
@@ -56,27 +56,59 @@ par frontière, et une vue d'ensemble sous le tracé.
 **Exporter** : choisir où poser le dossier du concert. C'est tout — la suite de
 cette section ne sert qu'à corriger ce que la détection aurait manqué.
 
-Les actions qui portent sur le fichier entier — Analyser, Exporter, tracklist —
-sont groupées en haut avec le sélecteur de fichier. Les commandes d'édition sont
-contre la forme d'onde sur laquelle elles agissent.
+Les actions qui portent sur le fichier entier — Importer, Analyser, Exporter —
+sont groupées en haut. Les commandes d'édition sont contre la forme d'onde sur
+laquelle elles agissent, et la poignée entre le tracé et le tableau laisse
+donner à chacun la place que ce concert-là réclame.
+
+**Rien à enregistrer.** Le travail en cours s'écrit tout seul, deux secondes
+après le dernier geste et à la fermeture. À la séance suivante, « Reprendre »
+rouvre le découpage, les titres, les réglages et la destination du dernier
+export — sans réanalyser. Découper un concert de deux heures ne se fait pas
+d'une traite.
 
 ## Corriger à la souris
 
 | Action | Comment |
 |---|---|
 | Lire / mettre en pause | Bouton du transport, ou Espace |
-| Écouter un segment | Colonne ▶ de sa ligne — un second clic met en pause |
+| Placer la tête de lecture | Clic dans le tracé — le son ne démarre pas pour autant |
+| Placer *et* écouter | Double clic dans le tracé |
+| Promener la tête de lecture | La saisir et la glisser |
+| Revenir au début d'une section | Origine (Début) — deux fois de suite, la section précédente |
+| Aller de frontière en frontière | Flèches ← et → |
+| Répéter un passage | B, pour caler une coupe en le réécoutant |
+| Écouter à partir d'un segment | Colonne ▶ de sa ligne — la lecture continue au-delà ; un second clic met en pause |
 | Se déplacer dans le concert | Clic n'importe où sur la barre de progression |
 | Zoomer | Molette sur la forme d'onde |
 | Naviguer | Maj+glisser, ou cliquer dans la vue d'ensemble |
 | Écouter une coupe | Cliquer la frontière sans la bouger — lecture 5 s avant |
 | Déplacer une frontière | La saisir et la glisser (n'enclenche pas la lecture) |
-| Supprimer une frontière | La sélectionner, puis Suppr |
-| Scinder un morceau | Cliquer dans le tracé, puis « Couper ici » (C) |
-| Garder / Supprimer un passage | Cliquer la colonne Action, ou clic droit sur la ligne |
+| Saisir un horaire | Cliquer la colonne Début ou Fin et taper `12:34` |
+| Fusionner deux segments | Sélectionner leur frontière, puis Suppr |
+| Poser une frontière | Cliquer dans le tracé, puis « Couper » (C) — vert ou rouge |
+| Séparer un morceau en deux pistes | « Séparer » (Maj+C), qui insère le blanc nécessaire |
+| Garder / Supprimer un passage | Cliquer la colonne Action de la ligne |
+| Avancer dans un morceau | Cliquer dans sa silhouette, colonne Piste |
 | Nommer un morceau | Cliquer son nom dans la colonne Morceau et saisir |
+| Choisir les morceaux à exporter | La liste « Morceaux » de la fenêtre d'export |
 | Exporter en vidéo | Cocher une case sous « Vidéo » dans la fenêtre d'export |
-| Annuler / Rétablir | Ctrl+Z / Ctrl+Y, ou les boutons ↶ ↷ |
+| Annuler / Rétablir | Ctrl+Z / Ctrl+Y, ou les boutons Annuler / Rétablir |
+
+**Couper marche partout.** « Couper » pose une frontière au curseur, dans un
+morceau comme dans un blanc, sans rien retirer du son : les deux moitiés gardent
+leur couleur, et la case décide ensuite du sort de chacune. C'est ce qu'il faut
+pour marquer, dans un long passage rouge, l'entrée que la détection a manquée.
+« Séparer » est l'autre geste : deux segments verts voisins forment *un* seul
+morceau au rendu, donc obtenir deux pistes distinctes d'une même improvisation
+demande un blanc entre elles — deux secondes, d'où deux commandes plutôt qu'une
+qui trancherait à notre place.
+
+**La fin d'un segment est le début du suivant.** Saisir un horaire dans la
+colonne Début ou Fin déplace donc cette frontière-là, à la seconde près — ce que
+six secondes par pixel interdisent à la souris. `12:34`, `1:02:14` et `754` se
+lisent tous. Un horaire hors des bornes laisse la saisie ouverte plutôt que de
+la perdre.
 
 Toutes les éditions sont annulables : bascule, déplacement de frontière,
 suppression, découpe. L'historique retient les cinquante derniers états et
@@ -91,7 +123,24 @@ Cette bascule ne détruit rien. Les segments restent des entités distinctes mê
 quand plusieurs se suivent en « Garder » ; le regroupement en morceaux est
 *calculé* au moment du rendu. Marquer un blanc comme conservé réunit donc bien
 ses deux voisins en une seule piste, mais un second clic défait l'opération. Les
-segments ainsi rattachés apparaissent avec un `↳` dans la colonne Morceau.
+segments ainsi rattachés portent le nom du morceau suivi de `(suite)`.
+
+**Le numéro d'un morceau est posé à l'analyse et ne bouge plus.** Il bougeait :
+décocher le morceau 4 faisait remonter tous les suivants d'un cran, si bien
+qu'on ne pouvait plus désigner un morceau par son numéro d'un bout à l'autre
+d'une séance, ni retrouver dans un dossier d'export le « 12 » qu'on avait sous
+les yeux en travaillant. Un morceau écarté laisse maintenant un trou dans la
+suite — 01, 02, 04, 05 —, ce qui est exactement l'information utile : il manque
+quelque chose, et on sait quoi. Il garde son numéro et son nom dans le tableau,
+suivis de la mention « retiré », et les retrouve si on le recoche.
+
+Le numéro affiché est celui du **morceau**, pas du segment. Cocher le blanc
+entre les morceaux 1 et 2 les réunit : la suite entière s'annonce alors « 1 »,
+puisque c'est là qu'elle commence. Le 2 n'est pas perdu pour autant — il dort
+sur son segment et réapparaît au décochage. Il était auparavant réécrit sur
+place : le second morceau restait « 1 » une fois séparé, deux morceaux
+distincts finissaient par porter le même numéro, l'export leur donnait le même
+nom de fichier, et la fenêtre d'export refusait de s'ouvrir sur cette liste.
 
 **Si tu connais le nombre de morceaux, donne-le** dans le champ « Morceaux
 attendus ». C'est la seule information qui vienne de l'extérieur du signal, donc
@@ -105,6 +154,9 @@ Cliquer sur le nom d'un morceau dans la colonne Morceau ouvre un champ, Entrée
 valide, Échap annule. Sans titre, les fichiers sortent en `Piste 01`,
 `Piste 02`…
 
+Un segment décoché se nomme aussi, et garde son nom : on reconnaît un morceau à
+l'oreille avant de décider s'il ira dans l'export.
+
 Le titre est attaché au segment qui ouvre le morceau, pas à un numéro de piste :
 une numérotation se décale dès qu'on ajoute ou retire une frontière, et les
 titres suivraient le mauvais morceau. Le renommage est annulable comme les
@@ -114,9 +166,24 @@ autres éditions.
 
 <img src="docs/export.png" alt="La fenêtre d'export" width="420">
 
+La fenêtre pose **trois questions numérotées**, dans l'ordre où on se les pose :
+quels morceaux, sous quelle forme, où. Les morceaux passent en premier — c'est
+la seule décision qui porte sur le concert, les deux autres portent sur des
+fichiers. Chaque réglage est rangé sous ce qu'il modifie : le fondu enchaîné
+sous les deux cases audio, puisqu'il n'agit que sur le fichier d'un seul tenant,
+et le fondu entre images sous les images.
+
 On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
 propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
 n'y a que de l'audio ; tout le reste va dans `infos/`.
+
+**Un concert n'a pas toujours à sortir en entier** — trois titres pour une
+maquette, le rappel seul pour l'envoyer à quelqu'un. La première question de la
+fenêtre permet de n'en cocher qu'une partie. Décocher là ne touche ni au
+découpage ni à la numérotation : la piste 7 s'appelle `07` même si elle part
+seule, sans quoi le dossier ne correspondrait plus ni au concert ni à un export
+complet du même enregistrement. Pour retirer un passage du concert lui-même,
+c'est la case du tableau.
 
 ```
 <emplacement choisi>/
@@ -150,7 +217,22 @@ dans le dossier n'est jamais touché.
 ## Export vidéo
 
 Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
-**une image fixe, fournie par toi, et le titre du morceau écrit dessus**.
+**une image fournie par toi, et le titre du morceau écrit dessus**. Plusieurs
+images défilent en diaporama, avec un fondu de l'une à l'autre — une seule photo
+tenue deux heures finit par peser.
+
+**Rien à régler en secondes.** Une image toutes les huit secondes, puis le cycle
+recommence, aussi longtemps que dure le son : trois photos suffisent donc à
+animer un concert de deux heures. Les images ont un temps été étalées sur la
+durée à couvrir, une par morceau — et c'était le contraire d'un diaporama :
+l'image changeait toutes les trois minutes et rien ne bougeait entre-temps. Un
+cycle qui tourne, quitte à repasser plusieurs fois dans un même morceau, est ce
+qui fait qu'il se passe quelque chose à l'écran.
+
+**Les images se tiennent en liste, pas en champ.** Le bouton *Ajouter* ajoute à
+la suite sans effacer ce qui est déjà choisi — on revient presque toujours pour
+ajouter, rarement pour tout remplacer —, *Retirer* enlève la ligne choisie, et
+les flèches ↑ ↓ décident de l'ordre du défilement.
 
 La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
 continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
@@ -176,6 +258,10 @@ que rien. Le corps du texte s'ajuste à la longueur du titre pour qu'il tienne
 dans la largeur, sur un bandeau sombre qui le garde lisible quelle que soit
 l'image dessous. L'image garde ses proportions et se centre : elle n'est jamais
 déformée pour remplir le cadre.
+
+Les images d'un diaporama peuvent avoir des tailles différentes : chacune est
+mise au cadre avant d'être enchaînée, ce qui évite à ffmpeg de buter sur un
+changement de format en cours de flux.
 
 **Sur la vidéo de l'album continu, le titre suit le morceau en cours** : il
 change à chaque frontière, comme des chapitres. Une seule mention figée pendant
@@ -349,6 +435,8 @@ trouvés est inférieur à celui attendu.
 | `--pad-start` | 0.5 s | Amorce conservée avant chaque morceau |
 | `--pad-end` | 0.6 s | Queue d'applaudissements conservée après |
 | `--fade-ms` | 40 | Fondus d'entrée et de sortie |
+| `--crossfade` | 0 s | Fondu enchaîné entre morceaux, dans l'album continu |
+| `--only N,N` | — | N'écrire que ces morceaux (`1,4,7` ou `3-9`), numéros conservés |
 | `--video-image F` | — | Écrit aussi des MP4, sur cette image de fond |
 | `--video` | `pistes` | Quelles vidéos : `pistes`, `album`, ou `les-deux` |
 | `--no-wav` | — | Avec `--video-image` : les vidéos seules, sans les WAV |

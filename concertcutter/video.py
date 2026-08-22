@@ -24,8 +24,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+import soundfile as sf
 
 # Extensions proposées au sélecteur de fichier. ffmpeg en décode d'autres, mais
 # ces cinq-là couvrent ce qui sort d'un appareil photo ou d'un éditeur d'image.
@@ -42,6 +45,20 @@ FPS = 10
 KEYFRAME_S = 5      # une image-clé toutes les 5 s : déplacement fluide
 AUDIO_BITRATE = "192k"
 
+# Diaporama : durée d'affichage d'une image, et durée du fondu vers la
+# suivante. Huit secondes est le temps qu'on regarde une photo sans s'ennuyer
+# ni avoir le sentiment qu'elle défile.
+#
+# Une constante, et non un réglage : le rythme d'un diaporama n'a pas à se
+# calculer. Il a un temps été déduit de la durée à couvrir — les images se
+# répartissaient sur le concert, une par morceau — et c'était le contraire d'un
+# diaporama : sur deux heures, l'image changeait toutes les trois minutes et
+# rien ne bougeait entre-temps. Le rythme est donc fixe et les images tournent
+# aussi longtemps qu'il faut, quitte à repasser plusieurs fois dans un même
+# morceau.
+SLIDE_S = 8.0
+SLIDE_FADE_S = 1.0
+
 # Polices cherchées dans l'ordre, la première trouvée gagne. drawtext exige un
 # fichier de police : il ne sait pas résoudre un nom de famille tout seul.
 _FONTS = (
@@ -55,6 +72,19 @@ _FONTS = (
 )
 
 _probe_cache: dict[str, object] = {}
+
+# Cycles de diaporama déjà encodés, par jeu d'images et de réglages. Les vidéos
+# d'un export partagent le même fond : sans ce cache, un concert de vingt-cinq
+# morceaux réencoderait vingt-cinq fois le même cycle — et les encodages
+# partent en parallèle, d'où le verrou.
+#
+# Le dossier vit aussi longtemps que le processus, et part avec lui : les
+# fichiers survivent d'un export à l'autre, ce qui est précisément l'intérêt,
+# et ne laissent rien derrière eux à la fermeture. Ouvert au premier diaporama
+# seulement — qui n'exporte jamais de vidéo ne laisse rien dans %TEMP%.
+_cycle_dir: tempfile.TemporaryDirectory | None = None
+_cycle_lock = threading.Lock()
+_cycles: dict[tuple, Path] = {}
 
 
 @dataclass
@@ -74,15 +104,29 @@ class Caption:
 
 @dataclass
 class VideoParams:
-    """Réglages du rendu vidéo. `image` est le seul indispensable."""
+    """Réglages du rendu vidéo. `image` est le seul indispensable.
+
+    `images` ajoute un diaporama : les images tournent en boucle sous le son,
+    au lieu d'une seule photo tenue deux heures. `image` reste la première
+    d'entre elles, pour que tout ce qui n'en demande qu'une continue de marcher
+    sans rien changer.
+    """
 
     image: str
+    images: tuple[str, ...] = ()
+    slide_s: float = SLIDE_S        # durée d'affichage d'une image
+    slide_fade_s: float = 0.0       # fondu vers la suivante ; 0 = coupe franche
     width: int = WIDTH
     height: int = HEIGHT
     fps: int = FPS
     crf: int = 20               # qualité H.264 ; plus bas = plus gros
     audio_bitrate: str = AUDIO_BITRATE
     margin_ratio: float = 0.08  # marge basse du titre, en fraction de hauteur
+
+    def stills(self) -> list[str]:
+        """Les images du fond, dans l'ordre. Toujours au moins une."""
+        found = [str(path) for path in (self.images or ()) if str(path).strip()]
+        return found or ([str(self.image)] if self.image else [])
 
 
 # -- disponibilité ---------------------------------------------------------
@@ -191,6 +235,8 @@ def _list(kind: str) -> str:
 def forget_probe() -> None:
     """Oublie ce qui a été détecté. Pour les tests, et après une installation."""
     _probe_cache.clear()
+    with _cycle_lock:
+        _cycles.clear()
 
 
 # -- rendu -----------------------------------------------------------------
@@ -210,9 +256,12 @@ def write_video(audio: str | Path, captions: str | list[Caption],
     if isinstance(captions, str):
         captions = [Caption(captions)]
 
-    image = Path(params.image)
-    if not image.exists():
-        raise FileNotFoundError(f"Image de fond introuvable : {image}")
+    stills = params.stills()
+    if not stills:
+        raise ValueError("Choisir l'image de fond des vidéos.")
+    for still in stills:
+        if not Path(still).exists():
+            raise FileNotFoundError(f"Image de fond introuvable : {still}")
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,9 +281,18 @@ def write_video(audio: str | Path, captions: str | list[Caption],
     # titre en contient tôt ou tard. Un dossier temporaire les emporte tous
     # d'un coup, quel que soit le nombre de morceaux.
     with tempfile.TemporaryDirectory(prefix="cc-titres-") as texts:
+        # Un diaporama se fabrique d'abord à part, en un cycle qu'on rejoue en
+        # boucle. Le dérouler d'un bout à l'autre du concert demanderait neuf
+        # cents entrées ffmpeg pour deux heures — et la ligne de commande de
+        # Windows lâche bien avant, vers la centième.
+        if len(stills) > 1:
+            background = ["-stream_loop", "-1", "-i", str(_slideshow(params))]
+        else:
+            background = ["-loop", "1", "-framerate", str(params.fps),
+                          "-i", stills[0]]
         _run([
             find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            "-loop", "1", "-framerate", str(params.fps), "-i", str(image),
+            *background,
             "-i", str(audio),
             "-filter_complex", _filter(captions, Path(texts), params),
             "-map", "[v]", "-map", "1:a",
@@ -244,6 +302,13 @@ def write_video(audio: str | Path, captions: str | list[Caption],
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", params.audio_bitrate,
             # L'image bouclerait sans fin : la piste audio fixe la durée.
+            #
+            # `-shortest` seul n'y suffit pas. Mesuré : une piste de 14 s
+            # donnait une vidéo de 18 s, quatre secondes d'image fixe sur du
+            # silence à la fin de chaque morceau exporté. ffmpeg arrête bien
+            # l'entrée bouclée, mais seulement au bloc suivant. La durée exacte
+            # se lit dans le WAV qu'on vient d'écrire — autant la lui donner.
+            *(["-t", f"{_seconds(audio):.3f}"] if _seconds(audio) else []),
             "-shortest",
             # L'index en tête du fichier : la lecture démarre sans avoir à
             # télécharger la fin, ce qu'attendent les plateformes vidéo.
@@ -254,21 +319,122 @@ def write_video(audio: str | Path, captions: str | list[Caption],
     return out_path
 
 
+def _seconds(audio: str | Path) -> float:
+    """Durée du WAV, ou 0 si elle ne se lit pas.
+
+    Zéro plutôt qu'une exception : la durée n'est qu'un garde-fou de plus, et
+    `-shortest` reste là pour empêcher une vidéo sans fin.
+    """
+    try:
+        return float(sf.info(str(audio)).duration)
+    except (RuntimeError, OSError):
+        return 0.0
+
+
+def _slideshow(params: VideoParams) -> Path:
+    """Un cycle du diaporama, encodé à part, à rejouer en boucle.
+
+    Trois raisons de passer par un fichier plutôt que par un graphe unique :
+
+    - dérouler les images sur la durée du concert demanderait une entrée toutes
+      les huit secondes, soit neuf cents pour deux heures — et sous Windows la
+      ligne de commande déborde vers la centième, l'export échouant alors sur
+      un « nom de fichier trop long » qui ne dit rien de la cause ;
+    - chaque image est mise au cadre *avant* d'être enchaînée, donc un lot de
+      photos de tailles différentes passe sans que ffmpeg bute sur un
+      changement de format en cours de flux ;
+    - le cycle ne dépend que des images : les vingt-cinq vidéos d'un export le
+      partagent, et il n'est encodé qu'une fois.
+
+    Avec un fondu, la première image est reprise en queue de cycle et le tout
+    est coupé une fois ce dernier fondu terminé : la boucle repart donc sur
+    cette même image, déjà pleinement affichée, et la jointure ne se voit pas.
+    Sans ce rattrapage, chaque tour se signalerait par une coupe franche au
+    milieu d'une vidéo qui n'en a aucune autre.
+    """
+    global _cycle_dir
+    stills = params.stills()
+    hold = max(1.0, params.slide_s)
+    fade = max(0.0, min(params.slide_fade_s, hold / 2))
+    signature = (tuple(stills), hold, fade, params.width, params.height,
+                 params.fps, params.crf)
+
+    with _cycle_lock:
+        known = _cycles.get(signature)
+        if known is not None and known.exists():
+            return known
+        if _cycle_dir is None:
+            _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
+
+        ordered = stills + ([stills[0]] if fade else [])
+        inputs: list[str] = []
+        for index, still in enumerate(ordered):
+            # La reprise de queue ne dure que le fondu : c'est tout ce qu'on
+            # lui demande, et une seconde de plus rallongerait le cycle d'autant.
+            span = fade if fade and index == len(ordered) - 1 else hold
+            inputs += ["-loop", "1", "-t", f"{span:.3f}",
+                       "-framerate", str(params.fps), "-i", still]
+
+        chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
+                 for index in range(len(ordered))]
+        if fade:
+            previous = "[s0]"
+            for index in range(1, len(ordered)):
+                label = f"[x{index}]"
+                chain.append(f"{previous}[s{index}]xfade=transition=fade"
+                             f":duration={fade:.3f}"
+                             f":offset={index * (hold - fade):.3f}{label}")
+                previous = label
+            last = previous
+        else:
+            joined = "".join(f"[s{index}]" for index in range(len(ordered)))
+            chain.append(f"{joined}concat=n={len(ordered)}:v=1:a=0[x]")
+            last = "[x]"
+
+        # Le dernier fondu compris : le cycle se termine sur la première image
+        # pleinement revenue, exactement là où le tour suivant la reprend.
+        cycle = len(stills) * (hold - fade) + fade if fade else len(stills) * hold
+        out_path = Path(_cycle_dir.name) / f"diaporama{len(_cycles)}.mp4"
+        _run([
+            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            *inputs,
+            "-filter_complex", ";".join(chain),
+            "-map", last,
+            "-t", f"{cycle:.3f}",
+            # Une image-clé régulière : la boucle repart proprement, et sans
+            # elles ffmpeg réinterpole depuis le début du cycle à chaque tour.
+            "-c:v", _video_encoder(), "-crf", str(params.crf),
+            "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
+            str(out_path),
+        ])
+        _cycles[signature] = out_path
+        return out_path
+
+
+def _framed(source: str, label: str, params: VideoParams) -> str:
+    """Met une entrée au cadre : proportions gardées, centrée sur du noir.
+
+    Déformer l'image pour remplir le cadre serait pire que des bandes.
+    """
+    return (f"{source}scale={params.width}:{params.height}"
+            f":force_original_aspect_ratio=decrease,"
+            f"pad={params.width}:{params.height}:-1:-1:color=black,"
+            f"setsar=1,format=yuv420p{label}")
+
+
 def _filter(captions: list[Caption], texts: Path, params: VideoParams) -> str:
-    """Chaîne de filtres : cadrer l'image, puis écrire les titres en bas.
+    """Chaîne de filtres : cadrer le fond, puis écrire les titres en bas.
 
     Les titres s'empilent en autant de `drawtext`, chacun borné à son passage.
     Ils se recouvriraient si les bornes se chevauchaient — elles viennent du
     découpage, donc elles ne se chevauchent pas.
+
+    Le cadrage est réappliqué même sur un diaporama déjà cadré : c'est ce qui
+    garantit la taille du cadre quoi qu'on ait reçu en entrée, et l'opération ne
+    coûte rien lorsqu'il n'y a rien à changer.
     """
-    # L'image garde ses proportions et se centre sur un fond noir : la
-    # déformer pour remplir le cadre serait pire que des bandes.
-    chain = [
-        f"[0:v]scale={params.width}:{params.height}"
-        ":force_original_aspect_ratio=decrease",
-        f"pad={params.width}:{params.height}:-1:-1:color=black",
-        "setsar=1",
-    ]
+    chain = [_framed("[0:v]", "", params)]
     for index, caption in enumerate(captions):
         text_file = texts / f"{index:04d}.txt"
         text_file.write_text(caption.text, encoding="utf-8")

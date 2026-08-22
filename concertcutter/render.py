@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +42,26 @@ DATA_DIR = "infos"
 # mêlées aux WAV à la racine on ne saurait plus lequel des deux on écoute.
 VIDEO_DIR = "video"
 MANIFEST = ".concertcutter-export.json"
+
+# Encodages vidéo menés de front.
+#
+# Un bêta-testeur a remarqué que l'export ne prend qu'environ 30 % du
+# processeur. C'est exact, et ce n'est pas un défaut de l'application : ffmpeg
+# encodant une image fixe à dix images par seconde n'a presque rien à
+# paralléliser, et occupe quatre ou cinq unités sur seize. La mémoire est au
+# même régime pour une raison voulue — le rendu lit une piste à la fois plutôt
+# que de charger les deux gigaoctets du concert.
+#
+# Ce qu'on peut récupérer, c'est le temps où un ffmpeg attend pendant qu'un
+# autre pourrait travailler. Mesuré sur le concert de 2 h 05 : x1,4 en menant
+# plusieurs encodages de front, et — c'est le point — deux suffisent. Au-delà,
+# la courbe est plate : ce n'est pas x264 qui limite mais l'encodage audio et
+# les entrées-sorties, que multiplier les fils ne divise pas.
+#
+# Deux, donc, et non « autant que d'unités » : saturer la machine pendant les
+# deux minutes d'un export rendrait tout le reste inutilisable pour un gain
+# nul.
+VIDEO_WORKERS = 2
 
 
 class ExportConflict(Exception):
@@ -66,6 +88,12 @@ class RenderParams:
     # coût nul en applaudissements : elle mord sur la fin du blanc précédent.
     pad_start_s: float = 0.5   # amorce conservée avant le morceau
     pad_end_s: float = 0.6     # queue d'applaudissements conservée après
+    # Recouvrement entre deux morceaux de l'album continu. Zéro par défaut :
+    # bout à bout est ce que fait un disque, et personne n'a demandé qu'un
+    # concert s'enchaîne tout seul sans le dire. Au-delà de zéro, la fin d'un
+    # morceau se fond dans le début du suivant — utile quand on veut de
+    # l'album continu une écoute sans couture plutôt qu'un document.
+    crossfade_s: float = 0.0
     full_name: str = "concert_clean.wav"
     write_full: bool = True    # l'album continu
     write_tracks: bool = True  # un fichier par morceau
@@ -77,6 +105,16 @@ class RenderParams:
     video_full: bool = False   # un MP4 pour tout le concert
     video_tracks: bool = False  # un MP4 par morceau
     video_image: str | None = None  # fond des vidéos, fourni par l'utilisateur
+    # Diaporama : plusieurs fonds qui défilent, au lieu d'une photo tenue deux
+    # heures. Vide, `video_image` fait seule le fond, comme avant.
+    video_images: tuple[str, ...] = ()
+    video_slide_fade_s: float = 0.0
+    # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
+    # toujours à sortir en entier — trois titres pour une maquette, le rappel
+    # seul pour l'envoyer à quelqu'un. Décocher les autres dans le tableau
+    # aurait marché, mais au prix de la numérotation et du montage de l'album
+    # continu, qu'on ne voulait pas toucher pour autant.
+    selection: tuple[int, ...] | None = None
 
     @property
     def write_video(self) -> bool:
@@ -115,6 +153,8 @@ def render(
     if not (params.write_full or params.write_tracks or params.write_video):
         raise ValueError(
             "Choisir au moins une sortie : album continu, pistes ou vidéos.")
+    if params.selection is not None and not params.selection:
+        raise ValueError("Choisir au moins un morceau à exporter.")
     # Contrôlé avant d'écrire quoi que ce soit : découvrir à la vingtième piste
     # que ffmpeg manque laisserait un export à moitié fait.
     if params.write_video:
@@ -122,13 +162,33 @@ def render(
 
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
     fade_len = int(round(params.fade_ms / 1000.0 * info.samplerate))
-    names = _planned_names(spans, titles, params)
+    names = _planned_names(spans, titles, params, tracks)
 
     _guard_output(out_dir, names, replace)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[dict] = []
     videos: list[str] = []
+
+    # Queue du morceau précédent, retenue le temps de la mêler au début du
+    # suivant. Sans fondu, elle reste vide et l'album s'écrit bout à bout comme
+    # avant.
+    overlap = max(0, int(round(params.crossfade_s * info.samplerate)))
+    tail: np.ndarray | None = None
+
+    # La progression est rapportée depuis plusieurs fils : le compteur passe
+    # sous verrou, et les étapes n'arrivent plus dans l'ordre. C'est sans
+    # conséquence — la barre montre une avance, pas une place dans la file.
+    progress_lock = threading.Lock()
+    counter = {"done": 0}
+
+    def step(label: str) -> None:
+        if on_progress is None:
+            return
+        with progress_lock:
+            counter["done"] += 1
+            done_now = counter["done"]
+        on_progress(done_now, steps, label)
 
     # Un dossier de travail dès qu'une vidéo doit partir d'un audio qu'on ne
     # garde pas : ffmpeg lit un fichier, pas un tableau numpy, donc le WAV
@@ -151,26 +211,41 @@ def render(
     # comme une étape à part, sinon la progression resterait figée entre deux
     # morceaux sans qu'on sache si quelque chose avance.
     steps = len(spans) * (2 if params.video_tracks else 1) + int(params.video_full)
-    done = 0
+
+    # Les encodages partent au fil de l'eau : le premier tourne pendant que la
+    # deuxième piste se lit encore. Les enchaîner après coup laisserait le
+    # disque inoccupé la moitié du temps, puis le processeur l'autre moitié.
+    pool = (ThreadPoolExecutor(max_workers=VIDEO_WORKERS,
+                               thread_name_prefix="concertcutter-video")
+            if params.video_tracks else None)
+    jobs = []
+
+    def encode(track_path: Path, label: str, target: str, temporary: bool) -> None:
+        video.write_video(track_path, label, out_dir / target,
+                          _video_params(params))
+        if temporary:
+            track_path.unlink(missing_ok=True)
+        step(target)
 
     try:
-        for index, (start, stop) in enumerate(spans, start=1):
+        for rank, number, start, stop in spans:
             audio = read_span(analysis.source, start, stop)
             audio = _apply_fades(audio, fade_len)
 
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            name = _track_filename(index, title)
+            title = _title_for(titles, rank, tracks)
+            name = _track_filename(number, title)
             track_path = out_dir / name
             if params.write_tracks:
                 sf.write(
                     str(track_path), audio, info.samplerate, subtype=info.subtype
                 )
             if full is not None:
-                full.write(audio)
+                body, tail = _crossfade(tail, audio, overlap)
+                full.write(body)
 
             written.append(
                 {
-                    "index": index,
+                    "index": number,
                     "file": name,
                     "title": title,
                     "peak": round(float(np.max(np.abs(audio))) if len(audio) else 0.0, 4),
@@ -179,33 +254,33 @@ def render(
                     "duration": round((stop - start) / info.samplerate, 3),
                 }
             )
-            video_name = (f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}"
+            video_name = (f"{VIDEO_DIR}/{_track_filename(number, title, '.mp4')}"
                           if params.video_tracks else None)
-            done += 1
-            if on_progress:
-                # Annonce ce que l'étape produit vraiment : sans les WAV, la
-                # piste n'est qu'un intermédiaire vers la vidéo.
-                on_progress(done, steps,
-                            name if params.write_tracks else video_name or name)
+            # Annonce ce que l'étape produit vraiment : sans les WAV, la
+            # piste n'est qu'un intermédiaire vers la vidéo.
+            step(name if params.write_tracks else video_name or name)
 
             if params.video_tracks:
-                if not params.write_tracks:
+                temporary = not params.write_tracks
+                if temporary:
                     track_path = Path(scratch.name) / name
                     sf.write(str(track_path), audio, info.samplerate,
                              subtype=info.subtype)
-                video.write_video(
-                    track_path, _track_label(index, title), out_dir / video_name,
-                    video.VideoParams(image=str(params.video_image)),
-                )
                 videos.append(video_name)
                 written[-1]["video"] = video_name
-                if not params.write_tracks:
-                    track_path.unlink(missing_ok=True)
-                done += 1
-                if on_progress:
-                    on_progress(done, steps, video_name)
+                jobs.append(pool.submit(encode, track_path,
+                                        _track_label(number, title),
+                                        video_name, temporary))
+
+        # Les vidéos des pistes finissent ici : la vidéo du concert entier a
+        # besoin de l'album continu refermé, et une exception d'un fil doit
+        # remonter avant qu'on n'annonce l'export terminé.
+        for job in jobs:
+            job.result()
 
         if full is not None:
+            if tail is not None:
+                full.write(tail)     # la queue du dernier morceau n'attend rien
             full.close()
             full = None
 
@@ -214,17 +289,20 @@ def render(
             # les blancs retirés ont décalé tout ce qui suit.
             captions = video.captions_from_durations(
                 [_track_label(item["index"], item["title"]) for item in written],
-                [item["duration"] for item in written],
+                _album_durations(written, params.crossfade_s),
             )
             if on_progress:
-                on_progress(done, steps, params.video_name)
+                on_progress(counter["done"], steps, params.video_name)
             video.write_video(full_path, captions, out_dir / params.video_name,
-                              video.VideoParams(image=str(params.video_image)))
+                              _video_params(params))
             videos.append(params.video_name)
-            done += 1
-            if on_progress:
-                on_progress(done, steps, params.video_name)
+            step(params.video_name)
     finally:
+        if pool is not None:
+            # `cancel_futures` : après une erreur, les encodages qui n'ont pas
+            # commencé n'ont plus lieu d'être — et ceux qui tournent tiennent
+            # encore le dossier de travail qu'on s'apprête à effacer.
+            pool.shutdown(wait=True, cancel_futures=True)
         if full is not None:
             full.close()
         if scratch is not None:
@@ -239,7 +317,11 @@ def render(
         # La cue vit à côté des autres fichiers techniques, mais elle doit
         # continuer à désigner l'audio resté à la racine : d'où le chemin
         # relatif, que les lecteurs résolvent depuis l'emplacement de la cue.
-        write_cue(written, f"../{params.full_name}", cue_path)
+        # Les temps de la cue suivent l'album, pas la source : un fondu
+        # enchaîné raccourcit le fichier d'autant, et une cue calculée sur les
+        # durées d'origine ferait dériver tous les repères après le premier.
+        write_cue(_on_album(written, params.crossfade_s),
+                  f"../{params.full_name}", cue_path)
 
     if params.write_sidecars:
         write_audacity_labels(analysis, data_dir / "reperes.txt")
@@ -257,15 +339,45 @@ def render(
 
 
 def _check_video(params: RenderParams) -> None:
-    """Refuse tout de suite un export vidéo qui ne pourrait pas aboutir."""
-    if not params.video_image:
+    """Refuse tout de suite un export vidéo qui ne pourrait pas aboutir.
+
+    Toutes les images sont vérifiées, pas seulement la première : découvrir à
+    la vingtième piste que la troisième photo a été déplacée laisserait un
+    export à moitié fait.
+    """
+    stills = _video_params(params).stills()
+    if not stills:
         raise ValueError("Choisir l'image de fond des vidéos.")
-    if not Path(params.video_image).exists():
-        raise FileNotFoundError(
-            f"Image de fond introuvable : {params.video_image}")
+    for still in stills:
+        if not Path(still).exists():
+            raise FileNotFoundError(f"Image de fond introuvable : {still}")
     reason = video.unavailable_reason()
     if reason:
         raise ValueError(reason)
+
+
+def _video_params(params: RenderParams) -> video.VideoParams:
+    """Traduit les réglages d'export en réglages de rendu vidéo."""
+    return video.VideoParams(
+        image=str(params.video_image or ""),
+        images=tuple(str(path) for path in params.video_images),
+        slide_fade_s=params.video_slide_fade_s,
+    )
+
+
+def _title_for(titles: list[str] | None, rank: int, tracks=None) -> str | None:
+    """Titre du morceau de rang `rank` dans la liste complète des morceaux.
+
+    Par le rang et non par le numéro : les numéros sont figés à l'analyse et
+    peuvent donc sauter — décocher le quatrième morceau laisse 3, 5, 6 — alors
+    qu'une tracklist se lit ligne à ligne, dans l'ordre des morceaux restants.
+    Le titre porté par le morceau lui-même sert de repli.
+    """
+    if titles and 0 <= rank < len(titles):
+        return titles[rank]
+    if tracks and 0 <= rank < len(tracks):
+        return tracks[rank].title or None
+    return None
 
 
 def _track_label(index: int, title: str | None) -> str:
@@ -290,25 +402,27 @@ def concert_dir(parent: str | Path, analysis: Analysis) -> Path:
     return Path(parent) / safe
 
 
-def _planned_names(spans, titles, params: RenderParams) -> list[str]:
+def _planned_names(spans, titles, params: RenderParams, tracks=None) -> list[str]:
     """Tous les fichiers que ce rendu va écrire, avant d'en écrire un seul.
 
     Chemins relatifs au dossier du concert. Les connaître à l'avance est ce qui
     permet de détecter un conflit *avant* d'avoir détruit quoi que ce soit.
     """
     names: list[str] = []
+    numbers = [(rank, number) for rank, number, _start, _stop in spans]
     if params.write_full:
         names.append(params.full_name)
     if params.write_tracks:
-        for index in range(1, len(spans) + 1):
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            names.append(_track_filename(index, title))
+        names += [_track_filename(number, _title_for(titles, rank, tracks))
+                  for rank, number in numbers]
     if params.video_full:
         names.append(params.video_name)
     if params.video_tracks:
-        for index in range(1, len(spans) + 1):
-            title = titles[index - 1] if titles and index <= len(titles) else None
-            names.append(f"{VIDEO_DIR}/{_track_filename(index, title, '.mp4')}")
+        names += [
+            f"{VIDEO_DIR}/"
+            f"{_track_filename(number, _title_for(titles, rank, tracks), '.mp4')}"
+            for rank, number in numbers
+        ]
     if params.write_full:
         names.append(f"{DATA_DIR}/{Path(params.full_name).stem}.cue")
     if params.write_sidecars:
@@ -330,7 +444,9 @@ def check_output(
     params = params or RenderParams()
     info = probe(analysis.source)
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
-    _guard_output(Path(out_dir), _planned_names(spans, titles, params), replace=False)
+    _guard_output(Path(out_dir),
+                  _planned_names(spans, titles, params, analysis.tracks),
+                  replace=False)
 
 
 def previous_export(out_dir: str | Path) -> list[str]:
@@ -392,19 +508,33 @@ def unique_dir(path: str | Path) -> Path:
 
 def _padded_spans(
     analysis: Analysis, params: RenderParams, samplerate: int, total_frames: int
-) -> list[tuple[int, int]]:
+) -> list[tuple[int, int, int]]:
     """Étend chaque morceau de son amorce et de sa queue, en échantillons.
+
+    Rend des triplets (numéro de piste, premier échantillon, dernier). Le
+    numéro voyage avec la plage plutôt que d'être recompté à l'arrivée :
+    exporter les morceaux 3, 7 et 12 doit donner « 03 », « 07 » et « 12 », et
+    non « 01 », « 02 », « 03 » — un dossier renuméroté ne correspondrait plus
+    ni au concert ni à un export précédent du même concert.
 
     Le débord est borné par les morceaux voisins : il puise dans le blanc
     adjacent, jamais dans la piste d'à côté, et les morceaux enchaînés sans
-    blanc ne se recouvrent donc pas.
+    blanc ne se recouvrent donc pas. Le calcul se fait sur *tous* les morceaux,
+    y compris ceux qu'on n'écrit pas : c'est la position du voisin qui borne,
+    qu'il parte à l'export ou non.
     """
     tracks = analysis.tracks
     pad_start = params.pad_start_s
     pad_end = params.pad_end_s
+    wanted = set(params.selection) if params.selection is not None else None
 
     spans = []
     for index, track in enumerate(tracks):
+        # Le numéro vient du morceau, pas de son rang : il a été posé à
+        # l'analyse et ne bouge plus, si bien qu'un concert dont on a décoché
+        # le quatrième morceau sort en 01, 02, 03, 05 — un trou plutôt qu'un
+        # décalage silencieux de tout ce qui suit.
+        number = track.number or index + 1
         prev_end = tracks[index - 1].end if index > 0 else 0.0
         next_start = tracks[index + 1].start if index + 1 < len(tracks) else analysis.duration
 
@@ -413,9 +543,64 @@ def _padded_spans(
 
         start_frame = max(0, int(round(start * samplerate)))
         end_frame = min(total_frames, int(round(end * samplerate)))
-        if end_frame > start_frame:
-            spans.append((start_frame, end_frame))
+        if end_frame > start_frame and (wanted is None or number in wanted):
+            spans.append((index, number, start_frame, end_frame))
     return spans
+
+
+def _album_durations(written: list[dict], crossfade_s: float) -> list[float]:
+    """Durées telles qu'elles se suivent dans l'album continu.
+
+    Chaque fondu mange `crossfade_s` : le morceau suivant commence pendant que
+    le précédent s'éteint. La place occupée par un morceau dans l'album est
+    donc sa durée moins un fondu — sauf le dernier, que rien ne recouvre.
+    """
+    durations = [item["duration"] for item in written]
+    if crossfade_s <= 0 or len(durations) < 2:
+        return durations
+    return [max(0.0, duration - crossfade_s) for duration in durations[:-1]] \
+        + [durations[-1]]
+
+
+def _on_album(written: list[dict], crossfade_s: float) -> list[dict]:
+    """Les mêmes pistes, mais avec la durée qu'elles occupent dans l'album."""
+    if crossfade_s <= 0:
+        return written
+    return [dict(item, duration=duration)
+            for item, duration in zip(written,
+                                      _album_durations(written, crossfade_s))]
+
+
+def _crossfade(tail: np.ndarray | None, audio: np.ndarray, overlap: int):
+    """Mêle la queue retenue au début du morceau suivant.
+
+    Rend deux choses : ce qui peut partir dans l'album tout de suite, et ce
+    qu'on retient pour le morceau d'après. Sans recouvrement il n'y a rien à
+    retenir, le morceau part entier, et c'est exactement le chemin d'avant.
+
+    Courbes en cosinus et non linéaires : deux rampes droites qui se croisent
+    laissent au milieu du fondu une somme de puissances plus faible qu'à ses
+    extrémités, et l'on entend le creux au passage. En cosinus, la somme des
+    carrés reste constante — c'est le fondu qu'on ne remarque pas.
+    """
+    if overlap <= 0:
+        return audio, None
+
+    if tail is not None:
+        if len(audio) <= len(tail):
+            # Un morceau plus court que le fondu lui-même : le fondre
+            # reviendrait à l'effacer. On pose les deux bout à bout et on
+            # repart à zéro.
+            return np.concatenate([tail, audio]), None
+        span = len(tail)
+        ramp = np.linspace(0.0, np.pi / 2, span, dtype=np.float32)[:, None]
+        audio = audio.copy()
+        audio[:span] = tail * np.cos(ramp) + audio[:span] * np.sin(ramp)
+
+    keep = min(overlap, len(audio) // 2)
+    if keep == 0:
+        return audio, None
+    return audio[:-keep], audio[-keep:].copy()
 
 
 def _apply_fades(audio: np.ndarray, fade_len: int) -> np.ndarray:

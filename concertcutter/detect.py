@@ -48,7 +48,7 @@ def analyze(path: str | Path, params: DetectParams | None = None) -> Analysis:
     mask, threshold = _music_mask(feats, params)
     segments = _mask_to_segments(mask, feats, threshold, params)
 
-    return Analysis(
+    found = Analysis(
         source=str(Path(path).resolve()),
         samplerate=info.samplerate,
         channels=info.channels,
@@ -56,6 +56,8 @@ def analyze(path: str | Path, params: DetectParams | None = None) -> Analysis:
         segments=segments,
         params={**asdict(params), "method": "energy-v0", "threshold_db": threshold},
     )
+    found.assign_numbers()
+    return found
 
 
 def _music_mask(feats: Features, params: DetectParams) -> tuple[np.ndarray, float]:

@@ -91,7 +91,7 @@ def analyze(
             "ne suffit probablement pas sur cet enregistrement."
         )
 
-    return Analysis(
+    found = Analysis(
         source=str(Path(path).resolve()),
         samplerate=info.samplerate,
         channels=info.channels,
@@ -106,6 +106,8 @@ def analyze(
             "warnings": warnings,
         },
     )
+    found.assign_numbers()
+    return found
 
 
 def _refine_boundaries(runs, level, modes, fps, params):

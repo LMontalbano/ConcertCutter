@@ -31,26 +31,51 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
+from .. import project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
     DATA_DIR, VIDEO_DIR, ExportConflict, RenderParams, check_output,
     concert_dir, render, unique_dir,
 )
+from ..excerpts import parse_time
 from ..segment import GAP, MUSIC, Analysis, Segment
 from ..spectral import SpectralFeatures, extract
-from . import assets, theme
+from . import assets, theme, tooltip
 from .card import Card
 from .collapsible import CHEVRON_OPEN, CHEVRON_SHUT, Section
 from .export_dialog import ask_export
 from .history import History
-from .player import PAUSED, PLAYING, Player
+from .player import PAUSED, PLAYING, STOPPED, Player
 from .seekbar import SeekBar
 from .waveform import WaveformView
 
 PREVIEW_LEAD_S = 5.0
 SPLIT_GAP_S = 2.0
+
+# Ce qu'une coupe doit laisser de part et d'autre. Aligné sur la marge du
+# glissé de frontière : au-dessous, le segment produit ne serait plus
+# saisissable à la souris et il faudrait annuler pour s'en défaire.
+MIN_PIECE_S = 0.5
+
+# En deçà, « début de section » considère qu'on y est déjà et remonte à la
+# section précédente : sans ce jeu, la touche resterait bloquée sur place dès
+# que la lecture aurait franchi le début d'un cheveu.
+BACK_STEP_S = 1.5
+
+# Délai avant d'écrire le travail en cours. Assez long pour regrouper la rafale
+# d'un « tout décocher », assez court pour qu'une fermeture brutale ne coûte
+# qu'un geste.
+SAVE_DELAY_MS = 2000
+
+# Longueur d'un nom de concert dans un libellé de bouton. Au-delà, la barre
+# d'outils se déforme au gré du fichier ouvert.
+SHORT_NAME = 28
+
 TITLE_COLUMN = "#1"
+START_COLUMN = "#2"
+END_COLUMN = "#3"
+TRACK_COLUMN = "#6"
 PLAY_COLUMN = "#7"
 ACTION_COLUMN = "#0"
 
@@ -61,10 +86,17 @@ ACTION_COLUMN = "#0"
 TRACK_CHARS = "▁▂▃▄▅▆▇█"
 TRACK_HEAD = "│"     # tête de lecture
 
-# Largeur commune aux deux boutons de tête, en caractères : « Parcourir… » et
+# Largeur commune aux deux boutons de tête, en caractères : « Importer… » et
 # « ✂ Exporter… » se superposent au bord droit de la fenêtre, et deux largeurs
 # différentes s'y voyaient immédiatement.
 HEAD_BUTTON_W = 13
+
+# Part de la hauteur laissée à l'écoute au démarrage. La forme d'onde tenait
+# les trois cinquièmes de la fenêtre pour ne montrer qu'un tracé qu'on ne lit
+# que par instants, pendant que le tableau — où se prennent toutes les
+# décisions — n'affichait que six lignes sur vingt-cinq. La poignée reste
+# déplaçable : le bon partage dépend du concert et de l'écran.
+LISTEN_SHARE = 0.40
 
 # Le titre s'arrête là, et une colonne muette absorbe le reste : le tableau
 # occupe toute la largeur, mais ses colonnes restent groupées assez près pour
@@ -95,6 +127,13 @@ class App(tk.Tk):
         self.source: Path | None = None
         self.analysis: Analysis | None = None
         self.features: SpectralFeatures | None = None
+        # Niveaux du tracé, déjà ramenés entre 0 et 1. Tenus à part des
+        # descripteurs : ceux-ci ne sortent que d'une analyse complète, alors
+        # que la silhouette du tableau et la forme d'onde doivent s'afficher
+        # dès l'ouverture du fichier — et à la reprise d'un projet, où l'on ne
+        # réanalyse pas.
+        self.levels: np.ndarray | None = None
+        self.levels_fps = 4.0
         self.duration = 0.0
         self.player = Player()
         self._events: queue.Queue = queue.Queue()
@@ -110,6 +149,10 @@ class App(tk.Tk):
         self._title_commit = None
         self._title_guard: str | None = None
         self._settings_open = False
+        self._followed_row: str | None = None
+        self._loop_position: int | None = None
+        self.project_path: Path | None = None
+        self._save_timer: str | None = None
         # Retenus d'un export à l'autre : on réexporte le plus souvent
         # au même endroit, sous la même forme et sur la même image.
         self.export_full = True
@@ -118,6 +161,14 @@ class App(tk.Tk):
         self.export_video_tracks = False
         self.export_dir = ""
         self.export_image = ""
+        # Aucun filtrage tant qu'on n'en demande pas : None n'est pas la liste
+        # complète, c'est l'absence de choix — un morceau ajouté après coup
+        # part donc à l'export au lieu d'être oublié parce qu'il ne figurait
+        # pas dans une liste écrite la veille.
+        self.export_selection: tuple[int, ...] | None = None
+        self.export_images: tuple[str, ...] = ()
+        self.export_crossfade = 0.0
+        self.export_slide_fade = video.SLIDE_FADE_S
         self.history = History(on_change=self._refresh_history_buttons)
 
         self._build()
@@ -130,29 +181,95 @@ class App(tk.Tk):
     def _build(self) -> None:
         # Grille plutôt qu'empilement : `pack` répartit l'espace excédentaire à
         # parts égales entre les zones extensibles, ce qui écrasait le panneau
-        # de réglages. Les poids donnent ici le partage voulu entre la forme
-        # d'onde et le tableau, les barres gardant leur hauteur naturelle.
+        # de réglages. Les barres gardent leur hauteur naturelle ; tout le
+        # reste de la hauteur va au volet central, qui la partage lui-même.
         self.columnconfigure(0, weight=1)
-        for row, weight in enumerate((0, 0, 0, 3, 0, 2, 0)):
+        for row, weight in enumerate((0, 0, 0, 1, 0)):
             self.rowconfigure(row, weight=weight)
 
         self._build_header().grid(row=0, column=0, sticky="ew")
         self._build_toolbar().grid(row=1, column=0, sticky="ew")
         self._build_settings().grid(row=2, column=0, sticky="ew")
-        self._build_waveform().grid(row=3, column=0, sticky="nsew")
-        self._build_transport().grid(row=4, column=0, sticky="ew")
-        self._build_table().grid(row=5, column=0, sticky="nsew")
-        self._build_log().grid(row=6, column=0, sticky="ew")
+        self._build_panes().grid(row=3, column=0, sticky="nsew")
+        self._build_log().grid(row=4, column=0, sticky="ew")
         self.settings_holder.grid_remove()   # replié au démarrage
         self._refresh_settings_button()
+        self._refresh_resume_button()
         self._bind_keys()
+
+    def _build_panes(self) -> ttk.Frame:
+        """Écoute au-dessus, décision en dessous, poignée entre les deux.
+
+        Le partage était figé — trois cinquièmes à la forme d'onde, deux au
+        tableau — et il se trompait dans les deux sens : sur un concert de
+        vingt-cinq morceaux le tableau n'en montrait que six, et sur un
+        enregistrement de six morceaux le tracé n'avait pas besoin de tout cet
+        espace. Une poignée règle le cas particulier mieux qu'une constante ;
+        sa position se retient avec le projet.
+
+        La barre de transport voyage avec la forme d'onde : elle commande la
+        même chose. Les séparer laisserait les boutons de lecture collés au
+        tableau des segments, dont ils ne décident rien.
+        """
+        holder = ttk.Frame(self)
+        holder.columnconfigure(0, weight=1)
+        holder.rowconfigure(0, weight=1)
+
+        self.panes = ttk.PanedWindow(holder, orient="vertical")
+        self.panes.grid(row=0, column=0, sticky="nsew")
+
+        listening = ttk.Frame(self.panes)
+        listening.columnconfigure(0, weight=1)
+        listening.rowconfigure(0, weight=1)
+        self._build_waveform(listening).grid(row=0, column=0, sticky="nsew")
+        self._build_transport(listening).grid(row=1, column=0, sticky="ew")
+
+        self.panes.add(listening, weight=2)
+        self.panes.add(self._build_table(self.panes), weight=3)
+        # La poignée ne se place qu'une fois la fenêtre dessinée : avant, le
+        # volet ne connaît pas encore sa hauteur et l'ordre est sans effet.
+        self.panes.bind("<Map>", self._place_sash_once, add="+")
+        return holder
+
+    def _place_sash_once(self, _event=None) -> None:
+        """Pose le partage initial, une seule fois.
+
+        Rejoué à chaque `<Map>`, il ramènerait la poignée à sa place d'origine
+        chaque fois que la fenêtre est réduite puis rouverte, en effaçant le
+        réglage de l'utilisateur.
+        """
+        self.panes.unbind("<Map>")
+        self.after_idle(self._apply_sash)
+
+    def _apply_sash(self, share: float | None = None) -> None:
+        height = self.panes.winfo_height()
+        if height < 100:        # pas encore de disposition : rien à partager
+            return
+        share = LISTEN_SHARE if share is None else share
+        self.panes.sashpos(0, int(height * share))
+
+    @property
+    def listen_share(self) -> float:
+        """Part de la hauteur occupée par l'écoute, entre 0 et 1.
+
+        Lue plutôt que retenue : la poignée se déplace à la souris, sans
+        prévenir personne.
+        """
+        height = self.panes.winfo_height()
+        if height < 100:
+            return LISTEN_SHARE
+        return max(0.1, min(0.9, self.panes.sashpos(0) / height))
 
     def _build_header(self) -> ttk.Frame:
         header = ttk.Frame(self, style="Panel.TFrame", padding=(18, 14))
         self.file_label = ttk.Label(header, text="Aucun fichier",
                                     style="FileName.TLabel")
         self.file_label.pack(side="left")
-        ttk.Button(header, text="Parcourir…", command=self.open_file,
+        # « Importer » et non « Parcourir » : le bouton ne fait pas que fouiller
+        # le disque, il fait entrer un enregistrement dans l'application. Le
+        # « Parcourir… » de la fenêtre d'export, lui, désigne bien un dossier
+        # où l'on va poser quelque chose, et garde donc son nom.
+        ttk.Button(header, text="Importer…", command=self.open_file,
                    width=HEAD_BUTTON_W, style="Accent.TButton").pack(side="right")
         self.chips = ttk.Frame(header, style="Panel.TFrame")
         self.chips.pack(side="right", padx=14)
@@ -191,6 +308,17 @@ class App(tk.Tk):
                                           compound="left", command=self._toggle_settings)
         self.settings_button.pack(side="left", padx=(18, 0))
 
+        # Le travail de la dernière séance, à portée du premier clic : c'est
+        # là qu'on le cherche en rouvrant l'application, et non dans un
+        # sélecteur de fichiers.
+        self.resume_button = ttk.Button(bar, text="Reprendre",
+                                        style="Ghost.TButton",
+                                        command=self.resume_last)
+        tooltip.attach(self.resume_button,
+                       "Rouvre le découpage de la dernière séance : "
+                       "frontières, titres, réglages et destination d'export. "
+                       "Rien n'est réanalysé.")
+
         # Pas de bouton « Chercher les enchaînements » : sur du matériel réel il
         # ne produisait que des faux positifs, pour un cas de figure rare. La
         # fonction reste disponible en ligne de commande (`concertcutter segues`).
@@ -214,21 +342,27 @@ class App(tk.Tk):
             self.progress.stop()
             self.progress.pack_forget()
 
-    def _build_waveform(self) -> ttk.Frame:
-        holder = ttk.Frame(self, padding=(18, 10, 18, 0))
+    def _build_waveform(self, parent) -> ttk.Frame:
+        holder = ttk.Frame(parent, padding=(18, 10, 18, 0))
         card = Card(holder, padding=10)
         card.pack(fill="both", expand=True)
         self.wave = WaveformView(card.body, on_select=self._on_boundary_selected,
                                  framed=False)
         self.wave.pack(fill="both", expand=True)
-        self.wave.main.configure(height=210)
+        # Hauteur demandée, pas hauteur imposée : c'est le plancher sous lequel
+        # la poignée ne descend pas. Le tracé prend au-delà tout ce que le
+        # partage lui laisse.
+        self.wave.main.configure(height=130)
         self.wave.on_boundary_press = self._on_boundary_press
         self.wave.on_boundary_moved = self._on_boundary_moved
         self.wave.on_boundary_clicked = self._on_boundary_clicked
         self.wave.on_seek = self._on_wave_click
+        self.wave.on_seek_play = self._on_wave_double_click
+        self.wave.on_cursor_scrub = self._sync_slider
+        self.wave.on_cursor_moved = self._place_playhead
         return holder
 
-    def _build_transport(self) -> ttk.Frame:
+    def _build_transport(self, parent) -> ttk.Frame:
         """Écoute à gauche, édition à droite, séparées par des filets.
 
         Six commandes sans rapport se suivaient sur une seule ligne : sur un
@@ -236,12 +370,12 @@ class App(tk.Tk):
         ne dise lesquelles allaient ensemble. Les filets verticaux marquent les
         trois groupes — annuler, découper, zoomer.
         """
-        bar = ttk.Frame(self, padding=(18, 10))
+        bar = ttk.Frame(parent, padding=(18, 10))
         # En grille, et la barre de lecture seule extensible : en `pack`, dès
         # que la fenêtre manquait de largeur, Tk rognait le dernier widget posé
         # et « Annuler » se réduisait à un trait de trois pixels. C'est la barre
         # de lecture qui doit céder, jamais les boutons.
-        bar.columnconfigure(2, weight=1, minsize=160)
+        bar.columnconfigure(3, weight=1, minsize=160)
 
         # Pas de bouton d'arrêt : il fonctionne, mais son effet est visuellement
         # identique à la pause — le son cesse, la position se fige. Deux boutons
@@ -250,20 +384,38 @@ class App(tk.Tk):
                                          self.toggle_play, style="Icon.Go.TButton",
                                          state="disabled")
         self.play_button.grid(row=0, column=0)
+        tooltip.attach(self.play_button, "Lecture ou pause, depuis le curseur. "
+                                         "Barre d'espace.")
+
+        # Revenir au début d'une section est le geste qu'on répète en calant
+        # une coupe. Il n'existait qu'en cliquant la ligne du tableau, ce qui
+        # oblige à quitter la forme d'onde des yeux.
+        steps = ttk.Frame(bar)
+        steps.grid(row=0, column=1, padx=(10, 0))
+        back = ttk.Button(steps, text="◀◀", width=4,
+                          command=self.go_section_start)
+        back.pack(side="left")
+        tooltip.attach(back, "Début de la section écoutée. Deux fois de suite, "
+                             "la section précédente. Touche Origine (Début).")
+        forward = ttk.Button(steps, text="▶▶", width=4,
+                             command=lambda: self.go_boundary(True))
+        forward.pack(side="left", padx=(4, 0))
+        tooltip.attach(forward, "Frontière suivante. Flèches ← et → pour "
+                                "parcourir les frontières une à une.")
 
         self.position_label = ttk.Label(bar, text="00:00", style="Muted.TLabel",
                                         width=8, anchor="e")
-        self.position_label.grid(row=0, column=1, padx=(14, 6))
+        self.position_label.grid(row=0, column=2, padx=(14, 6))
 
         self.seek = SeekBar(bar, on_seek=self._on_seek_bar, on_scrub=self._on_scrub)
-        self.seek.grid(row=0, column=2, sticky="ew", padx=6)
+        self.seek.grid(row=0, column=3, sticky="ew", padx=6)
 
         self.duration_label = ttk.Label(bar, text="00:00", style="Muted.TLabel",
                                         width=8)
-        self.duration_label.grid(row=0, column=3, padx=(6, 18))
+        self.duration_label.grid(row=0, column=4, padx=(6, 18))
 
         tools = ttk.Frame(bar)
-        tools.grid(row=0, column=4, sticky="e")
+        tools.grid(row=0, column=5, sticky="e")
 
         # En toutes lettres plutôt qu'en flèches : Segoe UI dessine U+21B6 et
         # U+21B7 comme deux arcs sans pointe, rigoureusement identiques à
@@ -277,11 +429,30 @@ class App(tk.Tk):
         self.redo_button.pack(side="left", padx=(8, 0))
         self._rule(tools)
 
-        self.delete_button = ttk.Button(tools, text="Supprimer la frontière (Suppr)",
+        self.delete_button = ttk.Button(tools, text="Fusionner (Suppr)",
                                         command=self.delete_boundary, state="disabled")
         self.delete_button.pack(side="left")
-        ttk.Button(tools, text="Couper ici (C)", command=self.split_here).pack(
-            side="left", padx=(8, 0))
+        tooltip.attach(self.delete_button,
+                       "Efface la frontière choisie dans la forme d'onde, et "
+                       "réunit les deux segments qu'elle séparait.")
+
+        cut_button = ttk.Button(tools, text="Couper (C)", command=self.split_here)
+        cut_button.pack(side="left", padx=(8, 0))
+        tooltip.attach(cut_button,
+                       "Pose une frontière au curseur, dans un morceau comme "
+                       "dans un blanc. Les deux moitiés gardent leur couleur ; "
+                       "la case décide ensuite du sort de chacune.")
+
+        # Deux boutons voisins pour deux gestes proches : leurs libellés ne
+        # suffisent pas à les distinguer, les bulles s'en chargent.
+        split_button = ttk.Button(tools, text="Séparer (Maj+C)",
+                                  command=self.split_track)
+        split_button.pack(side="left", padx=(8, 0))
+        tooltip.attach(split_button,
+                       "Sépare le morceau sous le curseur en deux pistes "
+                       f"distinctes, en insérant un blanc de {SPLIT_GAP_S:.0f} s. "
+                       "Sans ce blanc, les deux moitiés resteraient un seul "
+                       "morceau à l'export.")
         self._rule(tools)
 
         ttk.Label(tools, text="Zoom", style="Muted.TLabel").pack(side="left", padx=(0, 8))
@@ -323,6 +494,9 @@ class App(tk.Tk):
         self.pad_start = self._field(editing, "Amorce avant (s)", "0.5")
         self.pad_end = self._field(editing, "Queue après (s)", "0.6")
         self.fade_ms = self._field(editing, "Fondus (ms)", "40")
+        # Pas de fondu enchaîné ici : il ne se décide qu'au moment d'exporter,
+        # et il n'agit que sur un seul des fichiers produits. Il vit donc dans
+        # la fenêtre d'export, sous les deux cases audio.
         return holder
 
     def _field(self, parent, label: str, default: str) -> tk.StringVar:
@@ -352,12 +526,19 @@ class App(tk.Tk):
             glyph = CHEVRON_OPEN if self._settings_open else CHEVRON_SHUT
             self.settings_button.configure(text=f"{glyph}  Réglages")
 
-    def _build_table(self) -> ttk.Frame:
-        holder = ttk.Frame(self, padding=(18, 0))
+    def _build_table(self, parent) -> ttk.Frame:
+        holder = ttk.Frame(parent, padding=(18, 8, 18, 0))
 
         head = ttk.Frame(holder)
         head.pack(fill="x", pady=(0, 8))
         ttk.Label(head, text="Segments détectés", style="Title.TLabel").pack(side="left")
+
+        # Pas de « Tout décocher » ni d'« Inverser » : ils servaient à ne
+        # garder que deux morceaux sur vingt-cinq, ce que la liste de la
+        # fenêtre d'export fait maintenant sans toucher au montage. Les cases
+        # de ce tableau-ci décident de ce qui est *un morceau*, question qui ne
+        # se règle pas en bloc.
+
         self.count_label = ttk.Label(head, text="", style="Muted.TLabel")
         self.count_label.pack(side="right")
 
@@ -416,6 +597,13 @@ class App(tk.Tk):
 
         self.tree.tag_configure("music", background="#E4EDD9", foreground=theme.TEXT)
         self.tree.tag_configure("gap", background="#F6E3E4", foreground=theme.TEXT)
+        # Même teinte, plus dense : la ligne écoutée doit se repérer sans faire
+        # oublier si le segment est conservé ou jeté. Une couleur étrangère aux
+        # deux aurait remplacé l'information au lieu de s'y ajouter.
+        self.tree.tag_configure("music_playing", background="#CBE0AF",
+                                foreground=theme.TEXT)
+        self.tree.tag_configure("gap_playing", background="#F0C9CB",
+                                foreground=theme.TEXT)
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_row_selected)
         self.tree.bind("<Button-1>", self._on_table_click)
@@ -452,6 +640,11 @@ class App(tk.Tk):
         self._shortcut("<Delete>", self.delete_boundary)
         self._shortcut("<space>", self.toggle_play)
         self._shortcut("<c>", self.split_here)
+        self._shortcut("<Shift-C>", self.split_track)
+        self._shortcut("<b>", self.toggle_loop)
+        self._shortcut("<Home>", self.go_section_start)
+        self._shortcut("<Left>", lambda: self.go_boundary(False))
+        self._shortcut("<Right>", lambda: self.go_boundary(True))
         self._shortcut("<Escape>", self.stop_playback)
         self._shortcut("<Control-z>", self.undo)
         self._shortcut("<Control-y>", self.redo)
@@ -487,18 +680,93 @@ class App(tk.Tk):
 
     def open_file(self) -> None:
         chosen = filedialog.askopenfilename(
-            title="Choisir un concert", filetypes=[("Fichiers WAV", "*.wav *.WAV")]
+            title="Ouvrir un concert ou un travail en cours",
+            filetypes=[("Concert ou projet", "*.wav *.WAV *.json"),
+                       ("Fichiers WAV", "*.wav *.WAV"),
+                       ("Projets ConcertCutter", "*.json")],
         )
         if chosen:
-            self.load_source(Path(chosen))
+            self.open_path(Path(chosen))
 
-    def load_source(self, path: Path) -> None:
+    def open_path(self, path: Path) -> None:
+        """Ouvre un enregistrement ou un travail en cours, selon le fichier.
+
+        Un seul bouton pour les deux : au moment d'ouvrir, on cherche « le
+        concert d'hier », sans avoir à décider d'abord s'il est représenté par
+        son WAV ou par son point de reprise.
+        """
+        path = Path(path)
+        if project.is_project(path):
+            self.load_project(path)
+        else:
+            self.load_source(path)
+
+    def load_project(self, path: Path) -> None:
+        """Reprend un travail : segments, titres, réglages et destination.
+
+        Rien n'est réanalysé — c'est tout l'intérêt. Les niveaux du tracé, eux,
+        se recalculent depuis le WAV en quelques secondes, comme à l'ouverture
+        d'un fichier neuf.
+        """
+        try:
+            saved = project.read(path)
+        except project.Unreadable as error:
+            messagebox.showerror("Projet illisible", str(error))
+            return
+
+        source = self._locate(saved.source)
+        if source is None:
+            return
+
+        saved.analysis.source = str(source)
+        self._apply_settings(saved.settings)
+        self._apply_export(saved.export)
+        self.load_source(source, analysis=saved.analysis)
+        share = saved.view.get("listen_share")
+        if isinstance(share, (int, float)):
+            self.after_idle(lambda: self._apply_sash(float(share)))
+        self.project_path = path
+        when = f" (enregistré le {saved.saved[:16].replace('T', ' à ')})" if saved.saved else ""
+        self._set_status(f"Travail repris : {len(saved.analysis.tracks)} morceaux"
+                         f"{when}.", log=True)
+
+    def _locate(self, source: Path) -> Path | None:
+        """Retrouve l'enregistrement d'un projet, quitte à le demander.
+
+        Un disque externe débranché, un dossier rangé autrement, et le chemin
+        noté dans le projet ne désigne plus rien. Le travail, lui, est intact :
+        le perdre pour cette raison serait absurde.
+        """
+        if source.exists():
+            return source
+        keep = messagebox.askokcancel(
+            "Enregistrement introuvable",
+            f"Le projet renvoie à :\n{source}\n\n"
+            "Ce fichier n'est plus là. Le découpage est intact — indiquez où "
+            "se trouve l'enregistrement pour reprendre le travail.")
+        if not keep:
+            return None
+        chosen = filedialog.askopenfilename(
+            title=f"Où se trouve « {source.name} » ?",
+            initialfile=source.name,
+            filetypes=[("Fichiers WAV", "*.wav *.WAV")])
+        return Path(chosen) if chosen else None
+
+    def load_source(self, path: Path, analysis: Analysis | None = None) -> None:
         """Charge un WAV. Séparé du sélecteur pour permettre l'ouverture
-        directe d'un fichier passé en argument ou déposé sur l'application."""
+        directe d'un fichier passé en argument ou déposé sur l'application.
+
+        `analysis` reprend un découpage déjà fait plutôt que de repartir d'une
+        page blanche : c'est ce qui distingue la reprise d'un projet de
+        l'ouverture d'un enregistrement neuf.
+        """
         self.stop_playback()
         self.source = Path(path)
         self.analysis = None
         self.features = None
+        self.levels = None
+        self.project_path = None
+        self.history.clear()
         try:
             info = probe(self.source)
         except (FileNotFoundError, RuntimeError) as exc:
@@ -515,10 +783,24 @@ class App(tk.Tk):
             f"{info.channels} canaux",
         ])
         self.analyze_button.configure(state="normal")
-        self.render_button.configure(state="disabled")
+
+        if analysis is not None:
+            # Les frontières du projet valent sur ce fichier-ci : si sa durée
+            # ne concorde pas, ce n'est pas le même enregistrement, et les
+            # placer dessus donnerait un découpage faux sans rien dire.
+            if abs(analysis.duration - info.duration) > 1.0:
+                messagebox.showwarning(
+                    "Durées différentes",
+                    f"Le projet a été fait sur un enregistrement de "
+                    f"{_hms(analysis.duration)}, celui-ci dure "
+                    f"{_hms(info.duration)}.\n\nLes frontières risquent de "
+                    f"ne pas tomber au bon endroit.")
+            analysis.samplerate = info.samplerate
+            analysis.channels = info.channels
+            self.analysis = analysis
 
         self.wave.set_source(str(self.source))
-        self.wave.set_segments([])
+        self.wave.set_segments(analysis.segments if analysis else [])
         self.wave.set_envelope(np.zeros(0), 4.0, info.duration)
         self.wave.set_placeholder("Chargement de la forme d'onde…")
         self._refresh_table()
@@ -551,7 +833,13 @@ class App(tk.Tk):
         if source != self.source:  # un autre fichier a été ouvert entre-temps
             return
         self._set_progress(False)
+        self._set_levels(levels, fps)
         self.wave.set_envelope(levels, fps, self.duration)
+        # Un projet rouvert a déjà ses segments : le tableau les affiche depuis
+        # le début, et n'attendait que les niveaux pour dessiner leurs
+        # silhouettes.
+        if self.analysis is not None:
+            self._refresh_table()
         self._set_status("Prêt. Écoute possible ; analyser pour découper.", log=True)
 
     def _set_chips(self, values: list[str]) -> None:
@@ -601,26 +889,45 @@ class App(tk.Tk):
         # Sorties et destination se choisissent ensemble, au moment d'exporter.
         chosen = ask_export(self, self.export_full, self.export_tracks,
                             self.export_video_full, self.export_video_tracks,
-                            self.export_dir, self.export_image)
+                            self.export_dir, self.export_image,
+                            video_images=self.export_images,
+                            pieces=self._pieces(),
+                            selection=self.export_selection,
+                            crossfade_s=self.export_crossfade)
         if chosen is None:
             return
-        full, tracks, video_full, video_tracks, out_dir, image = chosen
+        # Par leur nom et non par leur rang : la fenêtre a gagné des réponses
+        # — les images du diaporama, ses durées — et un déballage positionnel
+        # se serait décalé en silence, en donnant la sélection de morceaux pour
+        # une liste d'images.
+        full, tracks = chosen.full, chosen.tracks
+        video_full, video_tracks = chosen.video_full, chosen.video_tracks
+        out_dir, image, selection = (chosen.directory, chosen.video_image,
+                                     chosen.selection)
         self.export_full = full
         self.export_tracks = tracks
         self.export_video_full = video_full
         self.export_video_tracks = video_tracks
         self.export_dir = out_dir
         self.export_image = image
+        self.export_selection = selection
+        self.export_images = chosen.video_images
+        self.export_crossfade = chosen.crossfade_s
+        self.export_slide_fade = chosen.slide_fade_s
         try:
             params = RenderParams(
                 fade_ms=float(self.fade_ms.get()),
                 pad_start_s=float(self.pad_start.get()),
                 pad_end_s=float(self.pad_end.get()),
+                crossfade_s=chosen.crossfade_s,
                 write_full=full,
                 write_tracks=tracks,
                 video_full=video_full,
                 video_tracks=video_tracks,
                 video_image=image or None,
+                video_images=chosen.video_images,
+                video_slide_fade_s=chosen.slide_fade_s,
+                selection=selection,
             )
         except ValueError:
             messagebox.showerror("Réglages",
@@ -644,9 +951,11 @@ class App(tk.Tk):
         self._set_progress(True)
         # Une étape par piste, une seconde quand chaque piste donne aussi une
         # vidéo, et une dernière pour la vidéo du concert entier.
+        wanted = (len(selection) if selection is not None
+                  else len(self.analysis.tracks))
         self.progress.configure(
             mode="determinate", value=0,
-            maximum=len(self.analysis.tracks) * (2 if params.video_tracks else 1)
+            maximum=wanted * (2 if params.video_tracks else 1)
             + int(params.video_full))
         threading.Thread(target=self._run_render,
                          args=(self.analysis, str(out_dir), titles, params, replace),
@@ -736,14 +1045,14 @@ class App(tk.Tk):
         self._set_progress(False)
         self._set_busy(False)
 
+        self._set_levels(features.rms_db, features.fps)
         self.wave.set_source(str(self.source) if self.source else None)
         self.wave.set_envelope(features.rms_db, features.fps, analysis.duration)
         self.wave.set_segments(analysis.segments)
         self.history.clear()  # une nouvelle analyse rend l'historique caduc
         self.seek.set_duration(analysis.duration)
         self.duration_label.configure(text=_hms(analysis.duration))
-        self._refresh_table()
-        self.render_button.configure(state="normal")
+        self._refresh_table()   # rallume l'export au passage, s'il y a des pistes
 
         separation = analysis.params.get("separation_db", 0.0)
         self._set_status(f"{len(analysis.tracks)} morceaux détectés — "
@@ -789,11 +1098,19 @@ class App(tk.Tk):
             return
         self.player.play(start, stop)
         self._playing_row = row
+        # La tête de lecture saute tout de suite, sans attendre le battement
+        # d'horloge : un dixième de seconde d'écart entre le son qui démarre et
+        # le repère qui bouge suffit à faire douter du clic.
+        self.wave.set_cursor(start)
+        self._sync_slider(start)
         self.wave.ensure_visible(start)
         self._refresh_play_button()
         self._sync_playing_row()
 
     def stop_playback(self) -> None:
+        # La boucle d'abord : le lecteur passe à l'arrêt, et le battement
+        # suivant la relancerait sur-le-champ.
+        self._loop_position = None
         self.player.stop()
         self._playing_row = None
         self._refresh_play_button()
@@ -822,13 +1139,122 @@ class App(tk.Tk):
             self._refresh_play_button()
 
     def _on_wave_click(self, seconds: float) -> None:
+        self._place_playhead(seconds)
+
+    def _on_wave_double_click(self, seconds: float) -> None:
+        """Double clic dans la forme d'onde : placer *et* écouter."""
+        self.play_from(seconds)
+
+    def _place_playhead(self, seconds: float) -> None:
+        """Pose la tête de lecture. Le son ne la suit que s'il sortait déjà.
+
+        Un clic déclenchait la lecture, sans condition : impossible de préparer
+        une coupe, de viser une frontière ou de simplement repérer un instant
+        sans que le concert reparte dans les oreilles. Placer et écouter sont
+        deux intentions, et elles ont maintenant deux gestes — le double clic
+        et la barre d'espace demandent le son, le clic simple ne demande que la
+        position.
+        """
+        seconds = max(0.0, min(seconds, self.duration or seconds))
         self.wave.set_cursor(seconds)
+        self.wave.ensure_visible(seconds)
         self._sync_slider(seconds)
-        if self.player.available and self.source:
+        if not (self.player.available and self.source):
+            return
+        if self.player.state == PLAYING:
             self.player.play(seconds)
             self._playing_row = None
-            self._refresh_play_button()
-            self._sync_playing_row()
+        else:
+            # Arrêté ou en pause : on déplace le point de reprise sans le
+            # réveiller. La lecture repartira d'ici.
+            self.player.seek(seconds)
+        self._refresh_play_button()
+        self._sync_playing_row()
+
+    # -- déplacements repérés ----------------------------------------------
+
+    def _playhead(self) -> float:
+        return self.wave.cursor if self.wave.cursor is not None else 0.0
+
+    def _marks(self) -> list[float]:
+        """Tous les points d'ancrage du concert, dans l'ordre."""
+        if not self.analysis:
+            return [0.0]
+        return ([segment.start for segment in self.analysis.segments]
+                + [self.analysis.duration])
+
+    def go_section_start(self) -> None:
+        """Revient au début de la section écoutée ; deux fois de suite, à la précédente.
+
+        C'est le geste du bouton « précédent » d'un lecteur de disque, et c'est
+        celui qu'on répète en boucle quand on cale une coupe : réécouter le
+        début du morceau, encore, jusqu'à ce que l'entrée tombe juste.
+        """
+        if not self.analysis:
+            return
+        moment = self._playhead()
+        starts = [mark for mark in self._marks() if mark <= moment + 1e-6]
+        target = starts[-1] if starts else 0.0
+        if moment - target < BACK_STEP_S:
+            earlier = [mark for mark in starts if mark < target - 1e-6]
+            target = earlier[-1] if earlier else 0.0
+        self._place_playhead(target)
+        self._set_status(f"Début de section — {_hms(target)}.")
+
+    def go_boundary(self, forward: bool) -> None:
+        """Saute à la frontière suivante ou précédente."""
+        if not self.analysis:
+            return
+        moment = self._playhead()
+        marks = self._marks()
+        if forward:
+            target = next((mark for mark in marks if mark > moment + 1e-3), marks[-1])
+        else:
+            target = next((mark for mark in reversed(marks) if mark < moment - 1e-3),
+                          0.0)
+        self._place_playhead(target)
+
+    def toggle_loop(self) -> None:
+        """Répète sans fin le segment sous le curseur.
+
+        Caler une frontière demande de réentendre le même passage dix fois de
+        suite. Le relancer à la main dix fois laisse à chaque reprise le temps
+        d'oublier ce qu'on venait d'entendre.
+        """
+        if not self.analysis:
+            return
+        if self._loop_position is not None:
+            self._loop_position = None
+            self._set_status("Boucle arrêtée.")
+            return
+        moment = self._playhead()
+        position = next((index for index, segment in enumerate(self.analysis.segments)
+                         if segment.start <= moment < segment.end), None)
+        if position is None:
+            self._set_status("Aucun segment sous le curseur.")
+            return
+        self._loop_position = position
+        segment = self.analysis.segments[position]
+        self.play_from(segment.start, segment.end, row=str(position))
+        self._set_status(f"Boucle sur {_hms(segment.start)} – {_hms(segment.end)}. "
+                         "« B » pour l'arrêter.")
+
+    def _advance_loop(self) -> None:
+        """Relance le passage dès qu'il se termine.
+
+        Les bornes sont relues à chaque tour : déplacer la frontière pendant
+        que la boucle tourne change ce qu'on entend au tour suivant, ce qui est
+        précisément ce qu'on cherche à juger.
+        """
+        if self._loop_position is None or not self.analysis:
+            return
+        if self.player.state != STOPPED:
+            return
+        if not (0 <= self._loop_position < len(self.analysis.segments)):
+            self._loop_position = None
+            return
+        segment = self.analysis.segments[self._loop_position]
+        self.play_from(segment.start, segment.end, row=str(self._loop_position))
 
     def _sync_slider(self, seconds: float) -> None:
         self.seek.set_position(seconds)
@@ -844,13 +1270,143 @@ class App(tk.Tk):
                 self._sync_slider(moment)
             elif self._playing_row is not None and state not in (PLAYING, PAUSED):
                 self._playing_row = None
+            self._advance_loop()
             self._refresh_play_button()
             self._sync_playing_row()
         self.after(120, self._tick)
 
     def _on_close(self) -> None:
+        # Sans attendre le différé : la fenêtre se ferme parfois deux secondes
+        # après la dernière correction, et c'est celle-là qu'on retrouverait
+        # manquante en rouvrant.
+        self.save_project()
         self.player.close()
         self.destroy()
+
+    # -- travail en cours --------------------------------------------------
+
+    def _touch_project(self) -> None:
+        """Programme une sauvegarde, en repoussant celle déjà prévue.
+
+        Écrire à chaque geste enregistrerait vingt-cinq fois pendant qu'on
+        décoche une liste. Le délai regroupe la rafale en une seule écriture,
+        et l'utilisateur n'a jamais à penser à enregistrer — c'est un point de
+        reprise, pas un document.
+        """
+        if self.analysis is None:
+            return
+        if self._save_timer is not None:
+            self.after_cancel(self._save_timer)
+        self._save_timer = self.after(SAVE_DELAY_MS, self.save_project)
+
+    def save_project(self) -> Path | None:
+        """Écrit le travail en cours. Silencieuse : elle ne doit jamais gêner."""
+        if self._save_timer is not None:
+            self.after_cancel(self._save_timer)
+            self._save_timer = None
+        if self.analysis is None or self.source is None:
+            return None
+        work = project.Project(
+            analysis=self.analysis,
+            settings=self._collect_settings(),
+            export=self._collect_export(),
+            view={"listen_share": round(self.listen_share, 3)},
+        )
+        path = self.project_path or project.path_for(self.source)
+        try:
+            work.write(path)
+            project.prune()
+        except OSError as error:
+            # Un disque plein ou un dossier en lecture seule ne doit pas
+            # interrompre le découpage : on le dit au journal, et on continue.
+            self._write_log(f"[!] Travail non enregistré : {error}")
+            return None
+        self.project_path = path
+        return path
+
+    def _collect_settings(self) -> dict:
+        """Les champs tels qu'ils sont, y compris à moitié remplis."""
+        return {name: variable.get() for name, variable in self._settings().items()}
+
+    def _apply_settings(self, saved: dict) -> None:
+        for name, variable in self._settings().items():
+            if isinstance(saved.get(name), str):
+                variable.set(saved[name])
+
+    def _settings(self) -> dict:
+        return {
+            "min_gap": self.min_gap, "min_song": self.min_song,
+            "pad_start": self.pad_start, "pad_end": self.pad_end,
+            "fade_ms": self.fade_ms, "expected": self.expected,
+        }
+
+    def _pieces(self) -> list[tuple[int, str, float]]:
+        """Les morceaux tels que la fenêtre d'export doit les présenter.
+
+        Le titre saisi s'il existe, sinon le nom que prendra le fichier : une
+        liste de « Piste 03 » se choisit mal, mais mieux qu'une liste de vides.
+        """
+        if not self.analysis:
+            return []
+        return [(track.number, track.title.strip() or f"Piste {track.number:02d}",
+                 track.duration)
+                for track in self.analysis.tracks]
+
+    def _collect_export(self) -> dict:
+        return {
+            "dir": self.export_dir, "image": self.export_image,
+            "images": list(self.export_images),
+            "crossfade": self.export_crossfade,
+            "slide_fade": self.export_slide_fade,
+            "selection": (list(self.export_selection)
+                          if self.export_selection is not None else None),
+            "full": self.export_full, "tracks": self.export_tracks,
+            "video_full": self.export_video_full,
+            "video_tracks": self.export_video_tracks,
+        }
+
+    def _apply_export(self, saved: dict) -> None:
+        """Retrouve la destination et la forme du dernier export.
+
+        C'est la moitié du travail de reprise : refaire le même export au même
+        endroit est le geste qui suit presque toujours la reprise.
+        """
+        if isinstance(saved.get("dir"), str):
+            self.export_dir = saved["dir"]
+        if isinstance(saved.get("image"), str):
+            self.export_image = saved["image"]
+        if isinstance(saved.get("images"), list):
+            self.export_images = tuple(str(path) for path in saved["images"])
+        for name in ("crossfade", "slide_fade"):
+            if isinstance(saved.get(name), (int, float)):
+                setattr(self, f"export_{name}", float(saved[name]))
+        for name in ("full", "tracks", "video_full", "video_tracks"):
+            if isinstance(saved.get(name), bool):
+                setattr(self, f"export_{name}", saved[name])
+        picked = saved.get("selection")
+        if isinstance(picked, list):
+            self.export_selection = tuple(int(number) for number in picked)
+
+    def resume_last(self) -> None:
+        """Rouvre le travail le plus récent."""
+        found = project.recent()
+        if found:
+            self.open_path(found[0])
+
+    def _refresh_resume_button(self) -> None:
+        """Le bouton n'existe que s'il y a quelque chose à reprendre.
+
+        Proposé en permanence, il resterait gris à la première ouverture — un
+        bouton mort au milieu de ceux qui marchent, qu'on finit par ne plus
+        voir du tout.
+        """
+        found = project.recent()
+        if not found or self.analysis is not None:
+            self.resume_button.pack_forget()
+            return
+        name = found[0].name[:-len(project.SUFFIX)]
+        self.resume_button.configure(text=f"Reprendre « {_short(name)} »")
+        self.resume_button.pack(side="left", padx=(18, 0))
 
     # -- édition -----------------------------------------------------------
 
@@ -896,10 +1452,16 @@ class App(tk.Tk):
         # frontière entre un morceau et un blanc court signifie presque toujours
         # que le blanc n'en était pas un.
         kind = before.kind if before.duration >= after.duration else after.kind
+        # Le numéro et le titre survivent à la fusion : sans eux, supprimer la
+        # frontière d'entrée du morceau 7 en faisait un morceau neuf, qui
+        # prenait le numéro suivant le plus grand et sortait à l'export sous un
+        # nom que rien à l'écran n'avait annoncé.
         segments[index : index + 2] = [Segment(
             start=before.start, end=after.end, kind=kind,
             confidence=min(before.confidence, after.confidence),
             stats=before.stats if before.duration >= after.duration else after.stats,
+            title=before.title or after.title,
+            number=before.number or after.number,
         )]
         self.analysis.normalize()
         self.wave.select(None)
@@ -909,67 +1471,117 @@ class App(tk.Tk):
                          f"{len(self.analysis.tracks)} morceaux.", log=True)
 
     def split_here(self) -> None:
-        """Scinde en deux le morceau sous le curseur, en y insérant un court blanc.
+        """Pose une frontière au curseur, quelle que soit la couleur du segment.
 
-        Insérer un blanc plutôt que basculer la moitié droite : c'est la seule
-        façon d'obtenir deux morceaux tout en conservant l'alternance
-        musique / blanc dont dépendent la numérotation et le rendu.
+        La coupe refusait tout ce qui n'était pas un morceau : impossible de
+        marquer, dans un long passage rouge, l'endroit où la détection avait
+        manqué une entrée. Elle ne refuse plus rien — les deux moitiés gardent
+        le type de l'original, et la case décide ensuite du sort de chacune.
+        C'est le même geste dans le vert et dans le rouge, et il ne perd pas de
+        son : rien n'est inséré, seulement séparé.
+
+        Aucun `normalize()` ici, contrairement aux fusions : il refusionnerait
+        aussitôt deux moitiés qui sont du même type par construction, et la
+        coupe paraîtrait sans effet. Rien n'en dépend — la numérotation et le
+        rendu traitent déjà deux segments de même type côte à côte.
         """
+        self._cut(join=False)
+
+    def split_track(self) -> None:
+        """Sépare le morceau sous le curseur en deux pistes distinctes.
+
+        Un court blanc s'insère à l'endroit de la coupe. C'est ce qui distingue
+        ce geste du précédent : deux segments verts adjacents forment *un* seul
+        morceau au rendu, donc séparer une improvisation en deux pistes réclame
+        un blanc entre elles. Il coûte les deux secondes qu'il occupe — d'où
+        deux commandes, et non une seule qui trancherait à notre place.
+        """
+        self._cut(join=True)
+
+    def _cut(self, join: bool) -> None:
+        """Coupe au curseur. `join` insère le blanc qui sépare deux morceaux."""
         if not self.analysis or self.wave.cursor is None:
             self._set_status("Cliquer d'abord dans la forme d'onde.")
             return
 
         moment = self.wave.cursor
         segments = self.analysis.segments
-        half = SPLIT_GAP_S / 2.0
+        half = SPLIT_GAP_S / 2.0 if join else 0.0
 
         for index, segment in enumerate(segments):
             if not (segment.start < moment < segment.end):
                 continue
-            if segment.kind != MUSIC:
-                self._set_status("On ne scinde qu'un morceau. Pour raccourcir un "
-                                 "blanc, déplacer sa frontière.")
+            if join and segment.kind != MUSIC:
+                self._set_status("Un blanc n'a pas à être séparé en morceaux. "
+                                 "« Couper ici » y pose une frontière.")
                 return
-            if moment - half - segment.start < 1.0 or segment.end - (moment + half) < 1.0:
-                self._set_status("Trop près du bord du morceau pour couper ici.")
+            if (moment - half - segment.start < MIN_PIECE_S
+                    or segment.end - (moment + half) < MIN_PIECE_S):
+                self._set_status("Trop près du bord du segment pour couper ici.")
                 return
 
             self._remember()
-            segments[index : index + 1] = [
-                Segment(segment.start, moment - half, MUSIC,
-                        segment.confidence, dict(segment.stats)),
-                Segment(moment - half, moment + half, GAP, 0.0, dict(segment.stats)),
-                Segment(moment + half, segment.end, MUSIC,
+            pieces = [
+                # Le titre et le numéro restent à gauche : c'est là qu'ils ont
+                # été posés, et la moitié droite est une portion qu'on n'a pas
+                # encore nommée. Les laisser tomber renommait le morceau 3 en
+                # 26 au premier coup de ciseaux.
+                Segment(segment.start, moment - half, segment.kind,
+                        segment.confidence, dict(segment.stats), segment.title,
+                        segment.number),
+                Segment(moment + half, segment.end, segment.kind,
                         segment.confidence, dict(segment.stats)),
             ]
-            self.analysis.normalize()
-            self.wave.set_segments(self.analysis.segments)
+            if join:
+                pieces.insert(1, Segment(moment - half, moment + half, GAP, 0.0,
+                                         dict(segment.stats)))
+            segments[index : index + 1] = pieces
+            self.wave.set_segments(segments)
             self._refresh_table()
-            self._set_status(f"Morceau scindé à {_hms(moment)} — "
+            what = "Morceau séparé" if join else "Frontière posée"
+            self._set_status(f"{what} à {_hms(moment)} — "
                              f"{len(self.analysis.tracks)} morceaux.", log=True)
             return
 
         self._set_status("Aucun segment sous le curseur.")
 
     def set_segment_kind(self, position: int, kind: str) -> None:
-        """Fixe le sort d'un segment : conservé ou supprimé.
-
-        Aucune fusion ici, contrairement aux autres éditions : le segment change
-        de type mais reste une entité distincte, donc l'opération se défait.
-        Le fusionner effacerait sa frontière et rendrait le geste irréversible.
-        """
+        """Fixe le sort d'un segment : conservé ou supprimé."""
         if not self.analysis or not (0 <= position < len(self.analysis.segments)):
             return
         segment = self.analysis.segments[position]
-        if segment.kind == kind:
+        if not self._apply_kinds({position: kind}):
             return
-        self._remember()
-        segment.kind = kind
-        self.wave.set_segments(self.analysis.segments)
-        self._refresh_table()
         action = "conservé" if kind == MUSIC else "supprimé"
         self._set_status(f"Segment {_hms(segment.start)} → {action} — "
                          f"{len(self.analysis.tracks)} morceaux.", log=True)
+
+    def _apply_kinds(self, wanted: dict[int, str]) -> bool:
+        """Écrit le sort de plusieurs segments d'un coup. Vrai si quelque chose a bougé.
+
+        Aucune fusion ici, contrairement aux autres éditions : les segments
+        changent de type mais restent des entités distinctes, donc l'opération
+        se défait. Les fusionner effacerait leurs frontières et rendrait le
+        geste irréversible — tout décocher réduirait le concert à un unique
+        blanc, et l'analyse serait à refaire.
+
+        Une seule mémorisation pour l'ensemble : sans elle, décocher vingt-cinq
+        segments demanderait vingt-cinq « Annuler » pour revenir en arrière.
+        """
+        if not self.analysis:
+            return False
+        segments = self.analysis.segments
+        changes = {position: kind for position, kind in wanted.items()
+                   if 0 <= position < len(segments)
+                   and segments[position].kind != kind}
+        if not changes:
+            return False
+        self._remember()
+        for position, kind in changes.items():
+            segments[position].kind = kind
+        self.wave.set_segments(segments)
+        self._refresh_table()
+        return True
 
     def toggle_segment(self, position: int) -> None:
         """Inverse le sort d'un segment."""
@@ -1031,24 +1643,16 @@ class App(tk.Tk):
         self._track_row = None
         self._playing_row = None
         self._play_cell_active = None
+        self._followed_row = None
         if not self.analysis:
             self.count_label.configure(text="")
             self.summary.configure(text="")
+            self._refresh_side_buttons()
             return
 
-        numbers = self.analysis.track_numbers()
+        self.analysis.assign_numbers()
         for position, segment in enumerate(self.analysis.segments):
-            number = numbers[position]
-            if number is None:
-                label = "—"
-            elif position and numbers[position - 1] == number:
-                # Suite d'un morceau déjà commencé : on montre le rattachement
-                # plutôt que de répéter un numéro, sinon on croirait à deux
-                # pistes distinctes.
-                label = "  ↳"
-            else:
-                title = segment.title.strip()
-                label = f"{number}. {title}" if title else f"{number}."
+            label = self._row_label(position, segment)
             track = self._segment_track(segment)
             self._tracks[str(position)] = track
             self.tree.insert(
@@ -1067,21 +1671,75 @@ class App(tk.Tk):
             text=f"Conservé : {_hms(kept)}     Supprimé : {_hms(dropped)}     "
                  f"Source : {_hms(self.analysis.duration)}     "
                  f"({100 * kept / max(self.analysis.duration, 1e-9):.1f} % conservé)")
+        self._refresh_side_buttons()
+        self._refresh_resume_button()
+        # Toute édition finit par repasser ici : un seul point d'accroche
+        # suffit donc à ne jamais rater une modification.
+        self._touch_project()
+
+    def _row_label(self, position: int, segment) -> str:
+        """Ce qu'affiche la colonne Morceau, pour n'importe quelle ligne.
+
+        Chaque ligne dit à quel morceau elle appartient, quel que soit son
+        sort. Une flèche `↳` tenait lieu de nom sur les suites rattachées, et
+        un tiret sur les segments décochés : dans les deux cas, il fallait
+        remonter la liste des yeux pour savoir ce qu'on regardait. Le nom
+        revient partout, et la mention entre parenthèses dit ce qui distingue
+        la ligne plutôt que de remplacer son identité.
+        """
+        # Numéro et titre du *morceau*, pas du segment : un segment rattaché à
+        # un morceau commencé plus haut s'annonce sous le numéro de celui-là,
+        # en gardant le sien en réserve pour le jour où la suite se rompt.
+        number, title = self.analysis.track_at(position)
+        title = title.strip()
+        if segment.kind == MUSIC:
+            name = f"{number}. {title}" if title else f"{number}."
+            return name if self.analysis.is_track_start(position) else f"{name}  (suite)"
+        if number:
+            # Un morceau détecté puis écarté : il garde son numéro et son nom,
+            # et l'export laissera simplement un trou dans la suite.
+            return f"{number}. {title} — retiré" if title \
+                else f"{number}. — retiré"
+        return title or "Blanc"
+
+    def _refresh_side_buttons(self) -> None:
+        """Les boutons qui dépendent de l'état du concert, pas d'un clic."""
+        self._refresh_render_button()
+        self._refresh_resume_button()
+
+    def _refresh_render_button(self) -> None:
+        """L'export ne s'ouvre que s'il reste quelque chose à écrire.
+
+        Sans ce garde-fou, tout décocher laissait le bouton actif et l'export
+        échouait sur « Aucun segment musical à rendre » — un message d'erreur
+        pour une situation que l'écran montrait déjà.
+        """
+        exportable = bool(self.analysis and self.analysis.tracks and not self._busy)
+        self.render_button.configure(state="normal" if exportable else "disabled")
+
+    def _set_levels(self, rms_db, fps: float) -> None:
+        """Fixe les niveaux servant à la fois au tracé et aux silhouettes.
+
+        Ramenés une fois pour toutes entre 0 et 1 : la conversion se refaisait
+        sur le tableau entier à chaque changement de largeur de colonne, sur un
+        tableau qui porte deux heures de niveaux.
+        """
+        self.levels = np.clip((np.asarray(rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        self.levels_fps = fps
 
     def _segment_track(self, segment) -> str:
-        """Silhouette du segment, tirée de l'enveloppe déjà calculée.
+        """Silhouette du segment, tirée des niveaux déjà calculés.
 
-        Rien à relire sur le disque : `features` porte le niveau image par
-        image, le même que celui sur lequel la détection a tranché. La ligne du
-        tableau montre donc exactement ce que la forme d'onde montre plus haut.
+        Rien à relire sur le disque : les niveaux sont ceux du tracé affiché
+        au-dessus, donc la ligne du tableau montre exactement la même chose que
+        la forme d'onde.
         """
-        if self.features is None:
+        if self.levels is None:
             return ""
-        fps = self.features.fps
-        levels = np.clip((np.asarray(self.features.rms_db) + 60.0) / 60.0, 0.0, 1.0)
+        fps = self.levels_fps
         first = max(0, int(segment.start * fps))
-        last = min(levels.size, int(segment.end * fps))
-        return _sparkline(levels[first:last], self._track_columns())
+        last = min(self.levels.size, int(segment.end * fps))
+        return _sparkline(self.levels[first:last], self._track_columns())
 
     def _track_columns(self) -> int:
         """Nombre de blocs qui tiennent dans la colonne, à sa largeur du moment.
@@ -1142,6 +1800,29 @@ class App(tk.Tk):
         row = self._row_at(moment)
         self._refresh_play_cells(row)
         self._refresh_track_head(row, moment)
+        self._follow_row(row)
+
+    def _follow_row(self, row: str | None) -> None:
+        """Amène la ligne écoutée sous les yeux, et la teinte.
+
+        Sur vingt-cinq segments dont dix tiennent à l'écran, savoir lequel sort
+        des haut-parleurs demandait de chercher la petite tête de piste dans la
+        colonne de droite. La ligne se signale maintenant d'elle-même.
+
+        Au changement de ligne seulement : la méthode passe dix fois par
+        seconde, et faire défiler le tableau à chaque passage l'empêcherait de
+        tenir en place.
+        """
+        if row == self._followed_row:
+            return
+        for target, playing in ((self._followed_row, False), (row, True)):
+            if target is None or not self.tree.exists(target):
+                continue
+            kind = self.analysis.segments[int(target)].kind
+            self.tree.item(target, tags=(f"{kind}_playing",) if playing else (kind,))
+        self._followed_row = row
+        if row is not None and self.tree.exists(row):
+            self.tree.see(row)
 
     def _row_at(self, moment: float | None) -> str | None:
         """Ligne dont le segment contient cet instant."""
@@ -1208,35 +1889,126 @@ class App(tk.Tk):
         if column == TITLE_COLUMN:
             self.edit_title(row)
             return "break"
+        if column in (START_COLUMN, END_COLUMN):
+            self.edit_time(row, "start" if column == START_COLUMN else "end")
+            return "break"
+        if column == TRACK_COLUMN:
+            self._seek_in_track(row, event.x)
+            return "break"
         return None
 
-    # -- titres ------------------------------------------------------------
+    def _seek_in_track(self, row: str, x: int) -> None:
+        """Clic dans la silhouette : la lecture se place à cet endroit du segment.
+
+        La colonne montrait déjà où en est la lecture, sans qu'on puisse rien
+        y faire ; c'était le seul repère de l'écran qu'on ne pouvait pas
+        toucher. Elle vaut maintenant barre de progression du segment — sur une
+        ligne de tableau, on vise un dixième de morceau bien plus vite que
+        l'instant correspondant dans une forme d'onde dézoomée.
+        """
+        if not self.analysis:
+            return
+        box = self.tree.bbox(row, "track")
+        if not box or box[2] <= 0:
+            return
+        segment = self.analysis.segments[int(row)]
+        share = max(0.0, min(1.0, (x - box[0]) / box[2]))
+        self.play_from(segment.start + share * segment.duration, row=row)
+
+    # -- saisie dans le tableau --------------------------------------------
 
     def edit_title(self, row: str) -> None:
         """Saisie du titre directement dans la cellule.
 
-        Seul le segment qui ouvre un morceau est éditable : les blancs n'ont
-        pas de titre, et une suite rattachée (`↳`) appartient au morceau
-        commencé plus haut, dont le titre est déjà affiché là-bas.
+        Un segment décoché se nomme aussi : on reconnaît un morceau à l'oreille
+        avant de décider s'il ira dans l'export, et refuser le titre tant que
+        la case n'est pas cochée obligeait à faire les deux gestes dans un
+        ordre imposé. Seule une suite rattachée (`↳`) reste hors d'atteinte :
+        elle appartient au morceau commencé plus haut, dont le titre est déjà
+        affiché là-bas.
+        """
+        if not (self.analysis and self._can_name(row)):
+            return
+        position = int(row)
+        segment = self.analysis.segments[position]
+        number = self.analysis.track_at(position)[0]
+
+        def apply(value: str) -> str:
+            if value == segment.title:
+                return ""
+            self._remember()
+            segment.title = value
+            self._refresh_table()
+            # Un blanc n'a pas de numéro de morceau : on le désigne par son
+            # horaire, seul repère qu'il porte.
+            who = f"Morceau {number}" if number else f"Segment {_hms(segment.start)}"
+            self._set_status(f"{who} nommé « {value} »." if value
+                             else f"Titre de « {who} » effacé.", log=True)
+            return ""
+
+        self._edit_cell(row, "index", segment.title, apply)
+
+    def edit_time(self, row: str, edge: str) -> None:
+        """Saisie d'un horaire de début ou de fin, au clavier.
+
+        La fin d'un segment *est* le début du suivant : ce sont deux vues de la
+        même frontière. Saisir un horaire revient donc à déplacer cette
+        frontière — le même geste qu'à la souris dans la forme d'onde, mais à
+        la seconde près, ce que six secondes par pixel interdisaient.
+
+        Le tout premier début et la toute dernière fin bornent le concert et ne
+        se déplacent pas : ils n'ont pas de frontière derrière eux.
         """
         if not self.analysis:
             return
+        position = int(row)
+        segments = self.analysis.segments
+        index = position - 1 if edge == "start" else position
+        if not (0 <= index < len(segments) - 1):
+            self._set_status("Le début du concert et sa fin ne se déplacent pas.")
+            return
+
+        before, after = segments[index], segments[index + 1]
+        floor, ceiling = before.start + MIN_PIECE_S, after.end - MIN_PIECE_S
+
+        def apply(value: str) -> str:
+            try:
+                moment = parse_time(value)
+            except ValueError:
+                return "Horaire illisible. Attendu : 12:34, 1:02:14 ou 754."
+            if not (floor <= moment <= ceiling):
+                return (f"À placer entre {_hms(floor)} et {_hms(ceiling)} — "
+                        "au-delà, la frontière traverserait un segment voisin.")
+            if abs(moment - before.end) < 1e-6:
+                return ""
+            self._remember()
+            before.end = moment
+            after.start = moment
+            self.wave.set_segments(segments)
+            self.wave.ensure_visible(moment)
+            self._refresh_table()
+            self._set_status(f"Frontière déplacée à {_hms(moment)}.", log=True)
+            return ""
+
+        self._edit_cell(row, edge, _hms(before.end), apply)
+
+    def _edit_cell(self, row: str, column: str, initial: str, apply) -> None:
+        """Champ de saisie posé sur une cellule du tableau.
+
+        `apply(texte)` rend le motif du refus, ou une chaîne vide s'il accepte.
+        Un refus laisse la saisie ouverte et se lit dans la ligne d'état :
+        fermer sur une valeur fausse obligerait à tout retaper, et l'horaire
+        qu'on vient de lire dans la forme d'onde n'est pas de ceux qu'on retient.
+        """
         self._commit_title()    # une saisie déjà ouverte se valide, pas l'inverse
         if self._title_editor is not None:
             return
-        position = int(row)
-        numbers = self.analysis.track_numbers()
-        number = numbers[position]
-        if number is None or (position and numbers[position - 1] == number):
-            return
-
-        box = self.tree.bbox(row, "index")
+        box = self.tree.bbox(row, column)
         if not box:
             return
 
-        segment = self.analysis.segments[position]
         editor = ttk.Entry(self.tree, style="Cell.TEntry")
-        editor.insert(0, segment.title)
+        editor.insert(0, initial)
         # Jamais moins que sa hauteur naturelle : un champ écrasé ne recentre
         # pas son texte, il en coupe le bas. Le surplus se répartit de part et
         # d'autre de la ligne, pour que la saisie reste centrée sur elle.
@@ -1247,21 +2019,30 @@ class App(tk.Tk):
         editor.select_range(0, "end")
         self._title_editor = editor
 
-        def finish(commit: bool):
+        def finish(commit: bool, insist: bool = False):
+            """`insist` garde la saisie ouverte si la valeur est refusée.
+
+            C'est ce que fait Entrée : on est en train de taper, et refermer
+            sur un refus perdrait ce qu'on vient de saisir. Un clic ailleurs,
+            lui, dit qu'on passe à autre chose — la saisie se referme alors sans
+            rien écrire, plutôt que de retenir le curseur dans une cellule
+            qu'on ne sait pas quitter.
+            """
             if self._title_editor is None:
                 return "break"      # déjà fermé : le focus perdu suit la validation
-            self._release_title_guard()
             value = editor.get().strip()
+            if commit:
+                refusal = apply(value)
+                if refusal:
+                    self._set_status(refusal)
+                    if insist:
+                        editor.focus_set()
+                        editor.select_range(0, "end")
+                        return "break"
+            self._release_title_guard()
             self._title_editor = None
             self._title_commit = None
             editor.destroy()
-            if commit and value != segment.title:
-                self._remember()
-                segment.title = value
-                self._refresh_table()
-                self._set_status(
-                    f"Morceau {number} nommé « {value} »." if value
-                    else f"Titre du morceau {number} effacé.", log=True)
             return "break"
 
         def elsewhere(event):
@@ -1278,8 +2059,8 @@ class App(tk.Tk):
         self._title_commit = finish
         self._title_guard = self.bind("<Button-1>", elsewhere, add="+")
 
-        editor.bind("<Return>", lambda _e: finish(True))
-        editor.bind("<KP_Enter>", lambda _e: finish(True))
+        editor.bind("<Return>", lambda _e: finish(True, insist=True))
+        editor.bind("<KP_Enter>", lambda _e: finish(True, insist=True))
         editor.bind("<FocusOut>", lambda _e: finish(True))
         editor.bind("<Escape>", lambda _e: finish(False))
 
@@ -1300,9 +2081,11 @@ class App(tk.Tk):
             return
         column = self.tree.identify_column(event.x)
         row = self.tree.identify_row(event.y)
-        if column in (PLAY_COLUMN, ACTION_COLUMN):
+        if column in (PLAY_COLUMN, ACTION_COLUMN, TRACK_COLUMN):
             self.tree.configure(cursor="hand2")
-        elif column == TITLE_COLUMN and self._is_track_start(row):
+        elif column == TITLE_COLUMN and self._can_name(row):
+            self.tree.configure(cursor="xterm")
+        elif column in (START_COLUMN, END_COLUMN) and self._can_move(row, column):
             self.tree.configure(cursor="xterm")
         else:
             self.tree.configure(cursor="")
@@ -1312,17 +2095,48 @@ class App(tk.Tk):
         self.tree.configure(cursor="")
 
     def _is_track_start(self, row: str) -> bool:
-        """Vrai si la ligne ouvre un morceau, donc porte un titre modifiable."""
+        """Vrai si la ligne ouvre un morceau."""
         if not (self.analysis and row):
             return False
         position = int(row)
-        numbers = self.analysis.track_numbers()
-        if not (0 <= position < len(numbers)) or numbers[position] is None:
+        return (0 <= position < len(self.analysis.segments)
+                and self.analysis.is_track_start(position))
+
+    def _can_move(self, row: str, column: str) -> bool:
+        """Vrai si l'horaire de cette cellule tient à une frontière déplaçable.
+
+        Le début du premier segment et la fin du dernier bornent le concert :
+        rien derrière eux à déplacer.
+        """
+        if not (self.analysis and row):
             return False
-        return not (position and numbers[position - 1] == numbers[position])
+        index = int(row) - 1 if column == START_COLUMN else int(row)
+        return 0 <= index < len(self.analysis.segments) - 1
+
+    def _can_name(self, row: str) -> bool:
+        """Vrai si la ligne porte un titre à elle, donc modifiable.
+
+        Tout le monde sauf les suites rattachées : un morceau conservé, mais
+        aussi un blanc, dont le nom attend qu'on le recoche.
+        """
+        if not (self.analysis and row):
+            return False
+        position = int(row)
+        if not (0 <= position < len(self.analysis.segments)):
+            return False
+        if self.analysis.segments[position].kind != MUSIC:
+            return True                     # un blanc : nommable
+        return self.analysis.is_track_start(position)
 
     def _toggle_row_playback(self, row: str) -> None:
-        """Joue le segment de la ligne, ou le met en pause si c'est lui qu'on entend.
+        """Joue depuis le début de la ligne, ou met en pause si c'est elle qu'on entend.
+
+        La lecture ne s'arrête pas au bout du segment : elle enchaîne sur la
+        suite du concert, comme le ferait n'importe quel lecteur. Elle était
+        bornée à la fin du morceau — et la seule façon d'entendre la jointure
+        avec le suivant, c'est-à-dire ce qu'on est venu vérifier, était de
+        recliquer avant qu'elle ne retombe. La boucle (« B ») reste là pour qui
+        veut au contraire retenir le son dans un passage.
 
         La comparaison porte sur ce qui sort vraiment, et non sur la ligne dont
         on a cliqué le bouton la dernière fois : déplacer la tête de lecture
@@ -1344,7 +2158,7 @@ class App(tk.Tk):
             self._sync_playing_row()
             return
         segment = self.analysis.segments[int(row)]
-        self.play_from(segment.start, segment.end, row=row)
+        self.play_from(segment.start, row=row)
 
     def _on_click_anywhere(self, event) -> None:
         """Un clic hors du tableau relâche la ligne sélectionnée.
@@ -1374,7 +2188,7 @@ class App(tk.Tk):
         self._busy = busy
         state = "disabled" if busy else "normal"
         self.analyze_button.configure(state=state if self.source else "disabled")
-        self.render_button.configure(state=state if self.analysis else "disabled")
+        self._refresh_render_button()
         if message:
             self._set_status(message, log=True)
 
@@ -1410,6 +2224,14 @@ def _within(widget, ancestor) -> bool:
     """
     path, root = str(widget), str(ancestor)
     return path == root or path.startswith(root + ".")
+
+
+def _short(name: str) -> str:
+    """Nom de concert raccourci par le milieu, pour tenir dans un bouton."""
+    if len(name) <= SHORT_NAME:
+        return name
+    keep = (SHORT_NAME - 1) // 2
+    return f"{name[:keep]}…{name[-keep:]}"
 
 
 def _percent(confidence: float) -> str:
@@ -1464,14 +2286,15 @@ def _hms(seconds: float) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Lance l'interface. Un chemin en argument ouvre directement ce fichier.
 
-    C'est ce qui permet de déposer un WAV sur l'exécutable pour l'ouvrir.
+    C'est ce qui permet de déposer un WAV — ou un travail en cours — sur
+    l'exécutable pour l'ouvrir.
     """
     argv = sys.argv[1:] if argv is None else argv
     app = App()
     if argv:
         candidate = _source_from(argv)
         if candidate is not None:
-            app.after(120, lambda: app.load_source(candidate))
+            app.after(120, lambda: app.open_path(candidate))
         else:
             app._set_status(f"Fichier introuvable : {' '.join(argv)}", log=True)
     app.mainloop()
@@ -1479,7 +2302,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _source_from(argv: list[str]) -> Path | None:
-    """Chemin du WAV à ouvrir, à partir des arguments reçus.
+    """Chemin du fichier à ouvrir — WAV ou projet — d'après les arguments reçus.
 
     Les noms de concerts contiennent presque toujours des espaces. Un chemin
     passé sans guillemets arrive donc découpé en plusieurs arguments : on tente

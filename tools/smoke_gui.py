@@ -8,6 +8,7 @@ l'utilisateur. Le rendu graphique lui-même n'est pas testé ici.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import time
 import tkinter.font as tkfont
@@ -16,12 +17,14 @@ from tkinter import ttk
 
 import numpy as _np
 
-from concertcutter import video
+from concertcutter import project, video
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import extract
 from concertcutter.ui import theme
 from concertcutter.ui.app import GLYPH_PAUSE, GLYPH_PLAY, App
-from concertcutter.ui.export_dialog import ExportChoice, ExportDialog
+from concertcutter.ui.export_dialog import (
+    MISSING_PIECE, ExportChoice, ExportDialog,
+)
 from concertcutter.ui.seekbar import MARGIN as SEEK_MARGIN
 
 
@@ -44,6 +47,20 @@ class _Click:
         self.widget = widget
 
 
+def _clock(seconds: float) -> str:
+    """Horaire tel qu'on le tape : mm:ss, ou h:mm:ss au-delà de l'heure."""
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def _descendants(widget):
+    """Tous les widgets sous celui-ci, en profondeur."""
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 def _face(button) -> str:
     """Ce que le bouton montre : son image si elle existe, sinon son texte."""
     return str(button.cget("image")) or str(button.cget("text"))
@@ -51,6 +68,13 @@ def _face(button) -> str:
 
 def main(wav: Path) -> int:
     ok = True
+    # Le dossier de reprise part dans le dossier d'essai : un test de fumée n'a
+    # rien à écrire dans les données de l'utilisateur, et surtout rien à y
+    # laisser traîner sous le nom d'un vrai concert.
+    scratch = Path("test/_smoke_projets")
+    shutil.rmtree(scratch, ignore_errors=True)
+    project.store = lambda: scratch
+
     app = App()
     app.update()  # force la construction des widgets
 
@@ -142,9 +166,82 @@ def main(wav: Path) -> int:
         app.redo()
         app.update()
 
+    print("\nUn blanc se nomme aussi, et garde son nom")
+    # On reconnaît un morceau à l'oreille avant de décider s'il ira dans
+    # l'export : refuser le titre tant que la case n'est pas cochée imposait
+    # l'ordre des deux gestes. Et le nom doit survivre à la bascule — il vivait
+    # déjà sur le segment, c'est l'affichage qui l'effaçait.
     gap_row = next(r for r in app.tree.get_children() if not app._is_track_start(r))
     app.edit_title(gap_row)
-    ok &= check("blanc non éditable", app._title_editor is None)
+    app.update()
+    ok &= check("blanc éditable", app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "Rappel")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check("titre du blanc retenu",
+                analysis.segments[int(gap_row)].title == "Rappel")
+    ok &= check("titre du blanc affiché malgré la case décochée",
+                "Rappel" in app.tree.set(gap_row, "index"))
+
+    app.set_segment_kind(int(gap_row), "music")
+    app.update()
+    ok &= check("titre conservé une fois coché",
+                analysis.segments[int(gap_row)].title == "Rappel")
+    suite = next((r for r in app.tree.get_children()
+                  if app.tree.set(r, "index").strip() == "↳"), None)
+    if suite is not None:
+        app.edit_title(suite)
+        ok &= check("suite rattachée non éditable", app._title_editor is None)
+    app.set_segment_kind(int(gap_row), "gap")
+    app.update()
+    ok &= check("titre toujours là une fois redécoché",
+                "Rappel" in app.tree.set(gap_row, "index"))
+    analysis.segments[int(gap_row)].title = ""
+    app._refresh_table()
+    app.update()
+
+    print("\nNuméros figés à l'analyse")
+    # Décocher le morceau 3 faisait remonter tous les suivants d'un cran : on
+    # ne pouvait plus désigner un morceau par son numéro d'un bout à l'autre
+    # d'une séance, ni retrouver dans le dossier d'export le « 12 » qu'on avait
+    # sous les yeux en travaillant.
+    numbers_before = [t.number for t in analysis.tracks]
+    ok &= check(f"numéros posés à l'analyse ({numbers_before})",
+                all(n > 0 for n in numbers_before)
+                and numbers_before == sorted(set(numbers_before)))
+    victim = numbers_before[len(numbers_before) // 2]
+    position = next(i for i, s in enumerate(analysis.segments)
+                    if s.number == victim and s.kind == "music")
+    analysis.segments[position].title = "Sans Toi"
+    app.set_segment_kind(position, "gap")
+    app.update()
+    ok &= check(f"le morceau {victim} décoché laisse un trou, pas un décalage",
+                [t.number for t in analysis.tracks]
+                == [n for n in numbers_before if n != victim])
+    ok &= check("son numéro et son nom restent affichés",
+                f"{victim}." in app.tree.set(str(position), "index")
+                and "Sans Toi" in app.tree.set(str(position), "index"))
+    ok &= check("et la ligne dit qu'il est retiré",
+                "retiré" in app.tree.set(str(position), "index"))
+    app.set_segment_kind(position, "music")
+    app.update()
+    ok &= check("recoché, il retrouve sa place",
+                [t.number for t in analysis.tracks] == numbers_before)
+    analysis.segments[position].title = ""
+    app._refresh_table()
+    app.update()
+
+    print("\nLe nom du morceau sur chaque ligne")
+    # Une flèche « ↳ » tenait lieu de nom sur les suites rattachées : il fallait
+    # remonter la liste des yeux pour savoir ce qu'on regardait.
+    ok &= check("plus aucune flèche seule dans la colonne Morceau",
+                all(app.tree.set(r, "index").strip() != "↳"
+                    for r in app.tree.get_children()))
+    ok &= check("aucune ligne sans identité",
+                all(app.tree.set(r, "index").strip()
+                    for r in app.tree.get_children()))
 
     print("\nRaccourcis neutralisés pendant une saisie")
     app.edit_title(start_row)
@@ -196,6 +293,11 @@ def main(wav: Path) -> int:
     )
     count_before = len(analysis.segments)
     tracks_before = len(analysis.tracks)
+    # Les noms affichés avant la bascule : c'est eux qui doivent revenir. Le
+    # numero du morceau suivant devenait celui du precedent et n'en repartait
+    # plus, si bien que deux morceaux distincts finissaient par s'appeler « 1 ».
+    labels_before = [app.tree.set(str(i), "index")
+                     for i in range(len(analysis.segments))]
     app.toggle_segment(gap_position)
     app.update()
     ok &= check("aucun segment perdu", len(analysis.segments) == count_before)
@@ -203,12 +305,21 @@ def main(wav: Path) -> int:
                 analysis.segments[gap_position].kind == "music")
     ok &= check(f"morceaux réunis au rendu : {tracks_before} -> "
                 f"{len(analysis.tracks)}", len(analysis.tracks) == tracks_before - 1)
+    joined = [app.tree.set(str(i), "index")
+              for i in (gap_position - 1, gap_position, gap_position + 1)]
+    ok &= check(f"les trois lignes portent le numero du premier ({joined})",
+                all(line.split(".")[0] == joined[0].split(".")[0]
+                    for line in joined)
+                and "(suite)" in joined[-1])
     app.toggle_segment(gap_position)
     app.update()
     ok &= check("retour à l'état initial possible",
                 analysis.segments[gap_position].kind == "gap"
                 and len(analysis.segments) == count_before
                 and len(analysis.tracks) == tracks_before)
+    ok &= check("et les morceaux retrouvent leur numero",
+                [app.tree.set(str(i), "index")
+                 for i in range(len(analysis.segments))] == labels_before)
 
     print("\nAnnuler / Rétablir")
     reference = [(s.start, s.end, s.kind) for s in analysis.segments]
@@ -252,7 +363,7 @@ def main(wav: Path) -> int:
                 len(app.tree.get_children()) == len(analysis.segments))
     ok &= check("segments contigus", _contiguous(analysis.segments))
 
-    print("\nAjout d'une coupe")
+    print("\nCoupe simple : une frontière, rien de plus")
     target = analysis.tracks[0]
     middle = (target.start + target.end) / 2
     app.wave.set_cursor(middle)
@@ -260,21 +371,193 @@ def main(wav: Path) -> int:
     segments_before = len(analysis.segments)
     app.split_here()
     app.update()
-    # Scinder un morceau insère musique / blanc / musique à la place d'un seul
-    # segment : deux segments de plus, un morceau de plus.
+    # Une frontière posée, aucun blanc inséré : rien n'est retiré du son. Deux
+    # verts voisins restent un seul morceau — c'est ce que « Séparer » corrige,
+    # et c'est pourquoi les deux gestes existent séparément.
+    ok &= check("segments +1", len(analysis.segments) == segments_before + 1)
+    ok &= check("aucun morceau créé : deux verts voisins n'en font qu'un",
+                len(analysis.tracks) == tracks_before)
+    ok &= check("segments contigus après coupe", _contiguous(analysis.segments))
+    app.undo()
+    app.update()
+    ok &= check("coupe annulée", len(analysis.segments) == segments_before)
+
+    print("\nCoupe dans un blanc : le retour du bêta-test")
+    gap = next(s for s in analysis.segments if s.kind == "gap" and s.duration > 5)
+    gap_middle = (gap.start + gap.end) / 2
+    app.wave.set_cursor(gap_middle)
+    count = len(analysis.segments)
+    app.split_here()
+    app.update()
+    ok &= check("blanc scindé", len(analysis.segments) == count + 1)
+    left = next((i for i, s in enumerate(analysis.segments)
+                 if s.kind == "gap" and abs(s.end - gap_middle) < 1e-6), None)
+    ok &= check("coupé à l'instant visé", left is not None)
+    ok &= check("segments contigus après coupe dans le blanc",
+                _contiguous(analysis.segments))
+    if left is not None:
+        app.set_segment_kind(left + 1, "music")
+        app.update()
+        ok &= check("la moitié qu'on coche devient un morceau",
+                    analysis.segments[left + 1].kind == "music")
+        app.undo()
+        app.update()
+    app.undo()
+    app.update()
+    ok &= check("retour à l'état d'avant la coupe",
+                len(analysis.segments) == count)
+
+    print("\nSéparer en deux morceaux : le blanc reste nécessaire")
+    app.wave.set_cursor(middle)
+    tracks_before = len(analysis.tracks)
+    segments_before = len(analysis.segments)
+    app.split_track()
+    app.update()
     ok &= check("segments +2", len(analysis.segments) == segments_before + 2)
     ok &= check(f"morceaux {tracks_before} -> {len(analysis.tracks)}",
                 len(analysis.tracks) == tracks_before + 1)
-    ok &= check("segments contigus après coupe", _contiguous(analysis.segments))
     ok &= check("blanc bien inséré entre les deux moitiés",
                 _alternating(analysis.segments))
-
-    print("\nCoupe refusée dans un blanc")
-    gap = next(s for s in analysis.segments if s.kind == "gap" and s.duration > 5)
-    app.wave.set_cursor((gap.start + gap.end) / 2)
+    app.wave.set_cursor(gap_middle)
     count = len(analysis.segments)
-    app.split_here()
-    ok &= check("blanc non scindé", len(analysis.segments) == count)
+    app.split_track()
+    app.update()
+    ok &= check("séparer un blanc en morceaux : refusé",
+                len(analysis.segments) == count)
+
+    print("\nHoraires saisis au clavier")
+    # La fin d'un segment est le début du suivant : saisir un horaire déplace
+    # cette frontière-là, à la seconde près — ce que six secondes par pixel
+    # interdisaient à la souris.
+    row = app.tree.get_children()[0]
+    index = int(row)
+    before, after = analysis.segments[index], analysis.segments[index + 1]
+    wanted = (before.start + before.end) / 2
+    app.edit_time(row, "end")
+    app.update()
+    ok &= check("éditeur ouvert sur la colonne Fin", app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, _clock(wanted))
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check(f"frontière posée à {_clock(wanted)}",
+                abs(before.end - wanted) < 1.0)
+    ok &= check("le segment suivant a suivi", abs(after.start - before.end) < 1e-6)
+    ok &= check("segments toujours contigus", _contiguous(analysis.segments))
+    app.undo()
+    app.update()
+    ok &= check("saisie annulable", abs(after.start - before.end) < 1e-6)
+
+    # Un horaire hors des bornes ne doit rien écrire, et surtout pas se perdre :
+    # celui qu'on vient de relever dans la forme d'onde n'est pas de ceux qu'on
+    # retient par cœur.
+    keep = before.end
+    app.edit_time(row, "end")
+    app.update()
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "9:59:59")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+    ok &= check("horaire hors bornes refusé", abs(before.end - keep) < 1e-6)
+    ok &= check("la saisie reste ouverte pour être corrigée",
+                app._title_editor is not None)
+    if app._title_editor is not None:
+        app._title_editor.event_generate("<Escape>")
+        app.update()
+    app.edit_time(row, "end")
+    app.update()
+    if app._title_editor is not None:
+        app._title_editor.delete(0, "end")
+        app._title_editor.insert(0, "trois heures")
+        app._title_editor.event_generate("<Return>")
+        app.update()
+        ok &= check("horaire illisible refusé", abs(before.end - keep) < 1e-6)
+        app._title_editor.event_generate("<Escape>")
+        app.update()
+
+    editors = app._title_editor
+    app.edit_time(row, "start")
+    ok &= check("le début du concert ne se déplace pas",
+                app._title_editor is editors)
+
+    print("\nLe curseur se pose sans réveiller le son")
+    app.stop_playback()
+    app.update()
+    quiet = (analysis.segments[1].start + analysis.segments[1].end) / 2
+    app._place_playhead(quiet)
+    app.update()
+    ok &= check("curseur posé", abs((app.wave.cursor or -1) - quiet) < 0.5)
+    ok &= check("le son n'est pas parti tout seul", app.player.state != "playing")
+
+    print("\nAller au début d'une section, et de frontière en frontière")
+    app.go_section_start()
+    app.update()
+    ok &= check("revenu au début de la section",
+                abs((app.wave.cursor or -1) - analysis.segments[1].start) < 0.01)
+    app.go_section_start()
+    app.update()
+    ok &= check("deux fois de suite : la section précédente",
+                (app.wave.cursor or 0) < analysis.segments[1].start + 1e-6)
+    app.go_boundary(True)
+    app.update()
+    ok &= check("frontière suivante atteinte",
+                (app.wave.cursor or 0) >= analysis.segments[1].start - 1e-6)
+
+    print("\nBoucle sur un segment")
+    # Caler une frontière demande de réentendre le même passage dix fois : la
+    # boucle doit tenir toute seule, et surtout lâcher prise à l'arrêt — sinon
+    # le battement d'horloge la relance aussitôt.
+    app.wave.set_cursor((analysis.segments[1].start + analysis.segments[1].end) / 2)
+    app.toggle_loop()
+    app.update()
+    ok &= check("boucle armée", app._loop_position == 1)
+    app.toggle_loop()
+    app.update()
+    ok &= check("second appui : boucle désarmée", app._loop_position is None)
+    app.toggle_loop()
+    app.update()
+    app.stop_playback()
+    app.update()
+    ok &= check("l'arrêt désarme la boucle", app._loop_position is None)
+
+    print("\nLa colonne Piste avance la lecture")
+    # La silhouette montrait déjà où en est la lecture sans qu'on puisse rien y
+    # faire : c'était le seul repère de l'écran qu'on ne pouvait pas toucher.
+    # Elle vaut maintenant barre de progression du segment.
+    ligne = next(r for r in app.tree.get_children()
+                 if analysis.segments[int(r)].duration > 30)
+    seg = analysis.segments[int(ligne)]
+    boite = app.tree.bbox(ligne, "track")
+    ok &= check("silhouette visible et mesurable", bool(boite) and boite[2] > 0)
+    if boite:
+        app._seek_in_track(ligne, boite[0] + int(0.75 * boite[2]))
+        app.update()
+        vise = seg.start + 0.75 * seg.duration
+        ok &= check(f"lecture placée aux trois quarts du segment "
+                    f"({_clock(app.wave.cursor or 0)} pour {_clock(vise)})",
+                    abs((app.wave.cursor or 0) - vise) < 0.05 * seg.duration)
+        # Un clic hors des bornes ne doit pas sortir du segment.
+        app._seek_in_track(ligne, boite[0] - 500)
+        app.update()
+        ok &= check("clic à gauche du cadre : borné au début du segment",
+                    abs((app.wave.cursor or 0) - seg.start) < 1.0)
+        app._seek_in_track(ligne, boite[0] + boite[2] + 500)
+        app.update()
+        ok &= check("clic à droite : borné à la fin",
+                    (app.wave.cursor or 0) <= seg.end + 1e-6)
+    app.stop_playback()
+    app.update()
+
+    print("\nSuivi de la ligne écoutée")
+    played = app.tree.get_children()[1]
+    app._follow_row(played)
+    ok &= check("la ligne écoutée est teintée",
+                app.tree.item(played, "tags")[0].endswith("_playing"))
+    app._follow_row(None)
+    ok &= check("la teinte repart avec la lecture",
+                not app.tree.item(played, "tags")[0].endswith("_playing"))
 
     print("\nDéplacement d'une frontière")
     # Une frontière entre deux segments assez longs : le déplacement est borné
@@ -502,9 +785,11 @@ def main(wav: Path) -> int:
     dialog.want_tracks.set(True)
     dialog._refresh()
     dialog.validate()
+    # Comparaison sur les six premieres reponses : la fenetre en a gagne
+    # d'autres — diaporama, selection — qui ne sont pas l'objet de ce controle.
     ok &= check(f"validation rend les sorties, le dossier et l'image ({dialog.result})",
-                dialog.result == ExportChoice(True, True, False, False,
-                                              "test/_smoke_export", ""))
+                dialog.result[:6] == ExportChoice(True, True, False, False,
+                                                  "test/_smoke_export", "")[:6])
 
     # Le message du bas remplace le precedent sans pousser les bords : la
     # fenetre sautait a chaque case cochee.
@@ -568,9 +853,9 @@ def main(wav: Path) -> int:
         dialog._refresh()
         dialog.validate()
         ok &= check(f"video seule, album et pistes ({dialog.result})",
-                    dialog.result == ExportChoice(False, False, True, True,
-                                                  "test/_smoke_export",
-                                                  "test/_smoke_fond.png"))
+                    dialog.result[:6] == ExportChoice(False, False, True, True,
+                                                      "test/_smoke_export",
+                                                      "test/_smoke_fond.png")[:6])
 
         # Choisir un fond sans avoir coche de video en demande une : sinon le
         # geste reste sans effet et la fenetre reclame encore une case.
@@ -582,8 +867,133 @@ def main(wav: Path) -> int:
                     seul.want_video_tracks.get())
         seul.cancel()
 
+        print("\nListe des fonds video")
+        # Le champ resume d'avant remplacait la selection entiere a chaque
+        # passage par le selecteur : ajouter une photo oubliee obligeait a
+        # retrouver les douze autres. La liste ajoute a la suite, et l'ordre —
+        # celui du defilement — se corrige ligne a ligne.
+        fonds = ExportDialog(app, directory="test/_smoke_export")
+        app.update()
+        fonds.want_video_tracks.set(True)
+        fonds.set_images(["a.png", "b.png"])
+        fonds.add_images(["c.png", "b.png"])
+        ok &= check(f"ajouter n'efface rien, et ne double rien "
+                    f"({fonds.video_images})",
+                    fonds.video_images == ("a.png", "b.png", "c.png"))
+        ok &= check("une ligne par image",
+                    len(fonds._images.get_children()) == 3)
+        fonds.move_image(2, -1)
+        ok &= check(f"l'ordre se corrige ({fonds.video_images})",
+                    fonds.video_images == ("a.png", "c.png", "b.png"))
+        fonds.remove_image(0)
+        ok &= check(f"et une image se retire ({fonds.video_images})",
+                    fonds.video_images == ("c.png", "b.png"))
+        ok &= check("la premiere image reste celle que lit le rendu",
+                    fonds.video_image.get() == "c.png")
+        fonds.set_images([])
+        ok &= check("liste vidée : plus rien à valider",
+                    bool(fonds._missing()))
+        fonds.cancel()
+
+    print("\nDeux morceaux du meme numero n'empechent pas d'exporter")
+    # Ils ne devraient plus arriver — le numero ne se reecrit plus — mais la
+    # fenetre s'ouvrait autrefois sur « Item 1 already exists », c'est-a-dire
+    # pas du tout. Les lignes se designent par leur rang depuis.
+    jumeaux = ExportDialog(app, directory="test/_smoke_export",
+                           pieces=[(1, "Un", 60.0), (1, "Encore un", 60.0),
+                                   (3, "Trois", 60.0)])
+    app.update()
+    ok &= check("la liste s'ouvre quand meme (3 lignes)",
+                len(jumeaux._picker.get_children()) == 3)
+    jumeaux.cancel()
+
+    print("\nChoix des morceaux a exporter")
+    # Le piege n'est pas de filtrer, c'est de renumeroter : exporter les
+    # morceaux 2 et 4 doit donner « 02 » et « 04 ». La fenetre rend donc des
+    # numeros d'origine, et None quand ils y sont tous.
+    pieces = [(n, t.title.strip() or f"Piste {n:02d}", t.duration)
+              for n, t in enumerate(analysis.tracks, start=1)]
+    picker = ExportDialog(app, directory="test/_smoke_export", pieces=pieces)
+    app.update()
+    ok &= check(f"un morceau par ligne ({len(picker._picker.get_children())})",
+                len(picker._picker.get_children()) == len(pieces))
+    ok &= check("tous coches a l'ouverture : rien a filtrer",
+                picker.selected() is None)
+    picker.check_all(False)
+    app.update()
+    ok &= check("aucun coche : rien a valider", bool(picker._missing()))
+    ok &= check("et la fenetre dit quoi (" + picker._missing() + ")",
+                picker._missing() == MISSING_PIECE)
+    # Les lignes se designent par leur rang, les morceaux par leur numero : la
+    # fenetre coche un rang et rend un numero. Deux morceaux ont pu porter le
+    # meme numero apres un decochage mal rattrape, et une liste indexee par
+    # numero refusait alors de s'ouvrir.
+    picker._picked[1] = True
+    picker._picked[len(pieces) - 1] = True
+    picker._paint_picks()
+    picker._refresh()
+    app.update()
+    ok &= check(f"numeros d'origine rendus ({picker.selected()})",
+                picker.selected() == (2, len(pieces)))
+    ok &= check("export a nouveau possible", not picker._missing())
+    picker.validate()
+    app.update()
+    ok &= check("le choix voyage dans le resultat",
+                picker.result is not None
+                and picker.result.selection == (2, len(pieces)))
+
+    seul = ExportDialog(app, directory="test/_smoke_export",
+                        pieces=pieces[:1])
+    app.update()
+    ok &= check("un concert d'un seul morceau n'affiche pas de liste",
+                seul._picker is None and seul.selected() is None)
+    seul.cancel()
+
+    print("\nFenetre d'export : trois questions dans l'ordre")
+    # Les morceaux d'abord : c'est la seule decision qui porte sur le concert,
+    # les deux autres portent sur des fichiers.
+    ordered = ExportDialog(app, directory="test/_smoke_export", pieces=pieces,
+                           crossfade_s=2.0)
+    app.update()
+    etapes = [w for w in _descendants(ordered)
+              if str(w.cget("style") if "style" in w.keys() else "") == "Step.TLabel"]
+    ok &= check(f"trois etapes numerotees ({[str(w.cget('text')) for w in etapes]})",
+                [str(w.cget("text")) for w in etapes] == ["1", "2", "3"])
+    ok &= check("les morceaux passent en premier",
+                ordered._picker.winfo_rooty() < ordered._full_check.winfo_rooty())
+    ok &= check("la destination passe en dernier",
+                ordered._path.winfo_rooty() > ordered._full_check.winfo_rooty())
+
+    ok &= check("libelles parlants sous Audio",
+                str(ordered._full_check.cget("text")) == "Le concert en un seul fichier"
+                and str(ordered._tracks_check.cget("text")) == "Un fichier par morceau")
+    ok &= check("et sous Video",
+                str(ordered._video_full_check.cget("text"))
+                == "Le concert en une seule video".replace("video", "vidéo")
+                and str(ordered._video_tracks_check.cget("text"))
+                == "Une vidéo par morceau")
+
+    # Le fondu enchaine a quitte les reglages de la fenetre principale : il ne
+    # se decide qu'au moment d'exporter, et n'agit que sur un seul fichier.
+    ok &= check(f"fondu enchaine repris ({ordered.crossfade_s.get()} s)",
+                ordered.crossfade_s.get() == "2")
+    ok &= check("le rang du fondu est actif tant que l'album est coche",
+                str(ordered._crossfade_row.winfo_children()[1]["state"]) != "disabled")
+    ordered.want_full.set(False)
+    ordered._refresh()
+    app.update()
+    ok &= check("album decoche : le fondu s'eteint, il ne disparait pas",
+                str(ordered._crossfade_row.winfo_children()[1]["state"]) == "disabled"
+                and ordered._crossfade_row.winfo_ismapped())
+    ordered.want_full.set(True)
+    ordered._refresh()
+    ordered.validate()
+    app.update()
+    ok &= check("le fondu voyage dans le resultat",
+                ordered.result is not None
+                and abs(ordered.result.crossfade_s - 2.0) < 1e-6)
+
     print("\nDossier d'export")
-    import shutil
     from concertcutter.render import RenderParams
     target = Path("test/_smoke_export")
     shutil.rmtree(target, ignore_errors=True)
@@ -601,7 +1011,22 @@ def main(wav: Path) -> int:
     app.split_here()  # ne doit rien faire ni lever
     ok &= check("coupe sans curseur ignorée", True)
 
-    app.destroy()
+    print("\nTravail en cours enregistré à la fermeture")
+    # La fenêtre se ferme souvent deux secondes après la dernière correction :
+    # c'est justement celle-là qu'on retrouverait manquante en rouvrant, si la
+    # fermeture attendait le différé.
+    app.export_dir = "test/_smoke_export"
+    app._on_close()     # et non `destroy` : c'est le chemin qu'emprunte la croix
+    saved = list(scratch.glob(f"*{project.SUFFIX}"))
+    ok &= check(f"point de reprise écrit ({len(saved)} fichier)", len(saved) == 1)
+    if saved:
+        work = project.read(saved[0])
+        ok &= check("il porte le découpage courant",
+                    len(work.analysis.segments) == len(analysis.segments))
+        ok &= check("et la destination d'export",
+                    work.export.get("dir") == "test/_smoke_export")
+    shutil.rmtree(scratch, ignore_errors=True)
+
     print("\n" + ("TOUT PASSE" if ok else "DES TESTS ECHOUENT"))
     return 0 if ok else 1
 

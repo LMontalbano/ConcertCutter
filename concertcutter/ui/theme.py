@@ -134,6 +134,17 @@ def apply(root: tk.Misc) -> ttk.Style:
     style.configure("Chip.TLabel", background=PANEL_BG, foreground=TEXT_MUTED,
                     font=FONT_SMALL, padding=(9, 4), relief="solid", borderwidth=1)
 
+    # Numéro d'une étape, dans la fenêtre d'export. Cerclé plutôt que suivi
+    # d'un point : il se lit alors comme un repère dans une marche à suivre, et
+    # non comme le premier mot du titre qu'il précède.
+    style.configure("Step.TLabel", background=BURGUNDY, foreground=TEXT_ON_ACCENT,
+                    font=FONT_BOLD, padding=(9, 2), anchor="center")
+
+    # Bulle d'aide : fond clair et texte plein, pas le gris du second plan —
+    # on la lit une fois, et c'est le seul endroit où la phrase se trouve.
+    style.configure("Tooltip.TLabel", background=PANEL_BG, foreground=TEXT,
+                    font=FONT_SMALL, padding=(10, 7))
+
     # En-tête d'une section repliable : le titre lui-même sert de cible.
     style.configure("Section.TLabel", background=APP_BG, foreground=TEXT_MUTED,
                     font=FONT_BOLD, padding=(0, 4))
@@ -141,6 +152,13 @@ def apply(root: tk.Misc) -> ttk.Style:
                     foreground=TEXT_MUTED, font=FONT_BOLD, padding=(0, 4))
     style.configure("Legend.TLabel", background=PANEL_BG, foreground=BURGUNDY,
                     font=FONT_BOLD)
+    # La même légende, sur le fond général : la fenêtre d'export n'est pas
+    # posée sur un cartouche, et la version claire y traînait un rectangle plus
+    # pâle derrière chaque intitulé.
+    style.configure("AppLegend.TLabel", background=APP_BG, foreground=BURGUNDY,
+                    font=FONT_BOLD)
+    style.map("AppLegend.TLabel", foreground=[("disabled", BORDER_STRONG)],
+              background=[("disabled", APP_BG)])
 
     style.configure("TLabelframe", background=PANEL_BG, bordercolor=BORDER,
                     relief="solid", borderwidth=1)

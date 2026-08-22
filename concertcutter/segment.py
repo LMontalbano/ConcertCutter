@@ -8,7 +8,7 @@ produit ici est le point de reprise manuelle : on peut le relire, le corriger
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 MUSIC = "music"
@@ -24,11 +24,25 @@ class Segment:
     # Diagnostics conservés pour préparer la V1 (choix du classifieur).
     stats: dict = field(default_factory=dict)
     # Titre saisi par l'utilisateur, porté par le segment qui ouvre le morceau.
-    # Attaché au segment plutôt qu'à un numéro de piste : une numérotation se
-    # décale dès qu'on ajoute ou retire une frontière, et les titres suivraient
-    # le mauvais morceau. Champ optionnel, donc les JSON antérieurs restent
-    # lisibles.
+    # Attaché au segment plutôt qu'à un numéro de piste : les titres suivent
+    # ainsi leur morceau quoi qu'il arrive aux frontières. Champ optionnel,
+    # donc les JSON antérieurs restent lisibles.
     title: str = ""
+    # Numéro que ce segment apporte au morceau qu'il ouvre, ou 0 pour un blanc
+    # qui n'en a jamais ouvert.
+    #
+    # Posé une fois, et plus jamais réécrit — ni par une fusion, ni par un
+    # décochage. C'est un identifiant, pas un rang : décocher le morceau 4
+    # laisse un trou entre 3 et 5 au lieu de faire remonter tous les suivants,
+    # si bien qu'on peut désigner un morceau par son numéro d'un bout à
+    # l'autre d'une séance, et retrouver dans un dossier d'export le « 12 »
+    # qu'on avait sous les yeux en travaillant.
+    #
+    # Ce que le tableau affiche est le numéro du *morceau*, pas celui du
+    # segment : `Analysis.track_at` le lit sur la suite entière. Un segment
+    # rattaché à un morceau commencé plus haut garde donc son numéro en
+    # réserve, sans le montrer, et le retrouve dès que la suite se rompt.
+    number: int = 0
 
     @property
     def duration(self) -> float:
@@ -55,45 +69,104 @@ class Analysis:
         pour de bon détruirait la frontière.
         """
         tracks: list[Segment] = []
-        current: Segment | None = None
-        for segment in self.segments:
-            if segment.kind != MUSIC:
-                current = None
-                continue
-            if current is None:
-                current = Segment(segment.start, segment.end, MUSIC,
-                                  segment.confidence, dict(segment.stats),
-                                  segment.title)
-                tracks.append(current)
-            else:
-                current.end = segment.end
-                current.confidence = min(current.confidence, segment.confidence)
+        for first, last in self.music_runs():
+            head = self.segments[first]
+            number, title = self.track_at(first)
+            merged = Segment(head.start, self.segments[last - 1].end, MUSIC,
+                             min(s.confidence for s in self.segments[first:last]),
+                             dict(head.stats), title, number)
+            tracks.append(merged)
         return tracks
 
-    def track_numbers(self) -> list[int | None]:
-        """Numéro de morceau par segment ; None pour un blanc.
+    def music_runs(self) -> list[tuple[int, int]]:
+        """Bornes (premier, après-dernier) de chaque suite de segments conservés.
 
-        Deux segments conservés adjacents appartiennent au même morceau et
-        portent donc le même numéro — c'est ce qui permet à l'affichage de
-        montrer un regroupement sans mentir sur la structure sous-jacente.
+        Un morceau, c'est cette suite-là : des segments verts qui se touchent.
+        Toute la numérotation en découle, et c'est la seule définition — elle
+        était auparavant recopiée à trois endroits, avec trois nuances, d'où
+        des lignes du tableau qui se disaient « suite » d'un morceau que le
+        rendu comptait pour deux.
         """
-        numbers: list[int | None] = []
-        count = 0
-        previous_was_music = False
-        for segment in self.segments:
-            if segment.kind != MUSIC:
-                numbers.append(None)
-                previous_was_music = False
+        runs: list[tuple[int, int]] = []
+        first: int | None = None
+        for position, segment in enumerate(self.segments):
+            if segment.kind == MUSIC:
+                if first is None:
+                    first = position
+            elif first is not None:
+                runs.append((first, position))
+                first = None
+        if first is not None:
+            runs.append((first, len(self.segments)))
+        return runs
+
+    def track_at(self, position: int) -> tuple[int, str]:
+        """Numéro et titre du morceau auquel appartient ce segment.
+
+        Les deux se lisent sur la suite entière, et non sur le segment : le
+        morceau prend le premier numéro et le premier titre qu'il trouve chez
+        les siens, dans l'ordre.
+
+        C'est ce qui rend la fusion réversible. Cocher le blanc qui sépare les
+        morceaux 1 et 2 les réunit : la suite commence au 1, elle s'annonce
+        donc « 1 » sur toute sa longueur — mais le 2 dort toujours sur son
+        segment, et le décochage le fait réapparaître. Auparavant le numéro
+        était réécrit sur place : le 2 était perdu pour de bon, deux morceaux
+        distincts finissaient par porter le même numéro, et l'export leur
+        donnait le même nom de fichier.
+        """
+        segment = self.segments[position]
+        if segment.kind != MUSIC:
+            return segment.number, segment.title
+        for first, last in self.music_runs():
+            if first <= position < last:
+                run = self.segments[first:last]
+                return (next((s.number for s in run if s.number), 0),
+                        next((s.title for s in run if s.title.strip()), ""))
+        return segment.number, segment.title
+
+    def track_numbers(self) -> list[int | None]:
+        """Numéro porté par chaque segment ; None pour un blanc qui n'en a pas.
+
+        Un morceau écarté garde le sien : c'est ce qui permet de continuer à le
+        désigner, et de le retrouver intact si on le recoche.
+        """
+        return [self.track_at(position)[0] or None
+                for position in range(len(self.segments))]
+
+    def assign_numbers(self) -> None:
+        """Donne un numéro aux morceaux qui n'en ont pas encore.
+
+        Appelée après l'analyse, et après toute édition qui a pu créer un
+        morceau. Les numéros déjà posés ne sont jamais retouchés — c'est toute
+        la raison d'être de cette méthode. Un morceau neuf prend donc la suite
+        du plus grand numéro attribué, quitte à porter le 26 au milieu du
+        concert : mieux vaut un numéro dans le désordre qu'un numéro qui change
+        sous les yeux.
+
+        Une suite qui compte déjà un numéro chez l'un des siens n'en reçoit
+        aucun : elle porte celui-là. Cocher un blanc entre deux morceaux ne
+        crée donc rien, cela réunit — et le second numéro, laissé intact,
+        revient dès qu'on décoche.
+        """
+        highest = max((segment.number for segment in self.segments), default=0)
+        for first, last in self.music_runs():
+            if any(segment.number for segment in self.segments[first:last]):
                 continue
-            if not previous_was_music:
-                count += 1
-            numbers.append(count)
-            previous_was_music = True
-        return numbers
+            highest += 1
+            self.segments[first].number = highest
+
+    def is_track_start(self, position: int) -> bool:
+        """Vrai si ce segment ouvre son morceau, et porte donc son titre."""
+        segment = self.segments[position]
+        if segment.kind != MUSIC:
+            return False
+        return position == 0 or self.segments[position - 1].kind != MUSIC
 
     def snapshot(self) -> list[Segment]:
         """Copie indépendante des segments, pour l'historique d'annulation."""
-        return [Segment(s.start, s.end, s.kind, s.confidence, dict(s.stats), s.title)
+        return [Segment(s.start, s.end, s.kind, s.confidence, dict(s.stats),
+                        s.title, s.number)
                 for s in self.segments]
 
     def normalize(self) -> None:
@@ -109,6 +182,11 @@ class Analysis:
                 previous = merged[-1]
                 previous.end = segment.end
                 previous.confidence = min(previous.confidence, segment.confidence)
+                # Le survivant garde son numéro et son titre s'il en a un ;
+                # sinon il hérite de ceux du segment absorbé, qui seraient
+                # perdus autrement.
+                previous.number = previous.number or segment.number
+                previous.title = previous.title or segment.title
             else:
                 merged.append(segment)
         self.segments = merged
@@ -123,6 +201,30 @@ class Analysis:
     def from_json(path: str | Path) -> "Analysis":
         # utf-8-sig : ce fichier est fait pour être corrigé à la main, et un
         # éditeur Windows peut y laisser un BOM que json.loads refuserait.
-        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        payload["segments"] = [Segment(**s) for s in payload["segments"]]
-        return Analysis(**payload)
+        return Analysis.from_payload(
+            json.loads(Path(path).read_text(encoding="utf-8-sig")))
+
+    @staticmethod
+    def from_payload(payload: dict) -> "Analysis":
+        """Analyse relue depuis un dictionnaire, en ignorant ce qu'on ne sait pas lire.
+
+        `Analysis(**payload)` levait un `TypeError` sur la moindre clé inconnue.
+        Ce fichier est pourtant celui qu'on ouvre pour reprendre un travail, et
+        celui qu'on corrige à la main : une version ultérieure qui y ajoute un
+        champ le rendrait illisible par celle-ci, alors qu'il porte tout ce
+        qu'il faut. On garde ce qu'on connaît, on laisse le reste.
+        """
+        known = {field.name for field in fields(Analysis)}
+        kept = {key: value for key, value in payload.items() if key in known}
+        kept["segments"] = [_segment_from(item) for item in kept.get("segments", [])]
+        found = Analysis(**kept)
+        # Un fichier écrit avant que les numéros n'existent n'en porte aucun :
+        # on les pose à la relecture, une fois pour toutes.
+        found.assign_numbers()
+        return found
+
+
+def _segment_from(payload: dict) -> Segment:
+    """Segment relu, même tolérance que pour l'analyse qui le porte."""
+    known = {field.name for field in fields(Segment)}
+    return Segment(**{key: value for key, value in payload.items() if key in known})
