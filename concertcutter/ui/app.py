@@ -1452,10 +1452,16 @@ class App(tk.Tk):
         # frontière entre un morceau et un blanc court signifie presque toujours
         # que le blanc n'en était pas un.
         kind = before.kind if before.duration >= after.duration else after.kind
+        # Le numéro et le titre survivent à la fusion : sans eux, supprimer la
+        # frontière d'entrée du morceau 7 en faisait un morceau neuf, qui
+        # prenait le numéro suivant le plus grand et sortait à l'export sous un
+        # nom que rien à l'écran n'avait annoncé.
         segments[index : index + 2] = [Segment(
             start=before.start, end=after.end, kind=kind,
             confidence=min(before.confidence, after.confidence),
             stats=before.stats if before.duration >= after.duration else after.stats,
+            title=before.title or after.title,
+            number=before.number or after.number,
         )]
         self.analysis.normalize()
         self.wave.select(None)
@@ -1516,10 +1522,13 @@ class App(tk.Tk):
 
             self._remember()
             pieces = [
-                # Le titre reste à gauche : c'est là qu'il a été saisi, et la
-                # moitié droite est une portion qu'on n'a pas encore nommée.
+                # Le titre et le numéro restent à gauche : c'est là qu'ils ont
+                # été posés, et la moitié droite est une portion qu'on n'a pas
+                # encore nommée. Les laisser tomber renommait le morceau 3 en
+                # 26 au premier coup de ciseaux.
                 Segment(segment.start, moment - half, segment.kind,
-                        segment.confidence, dict(segment.stats), segment.title),
+                        segment.confidence, dict(segment.stats), segment.title,
+                        segment.number),
                 Segment(moment + half, segment.end, segment.kind,
                         segment.confidence, dict(segment.stats)),
             ]
@@ -1678,15 +1687,19 @@ class App(tk.Tk):
         revient partout, et la mention entre parenthèses dit ce qui distingue
         la ligne plutôt que de remplacer son identité.
         """
-        title = segment.title.strip()
+        # Numéro et titre du *morceau*, pas du segment : un segment rattaché à
+        # un morceau commencé plus haut s'annonce sous le numéro de celui-là,
+        # en gardant le sien en réserve pour le jour où la suite se rompt.
+        number, title = self.analysis.track_at(position)
+        title = title.strip()
         if segment.kind == MUSIC:
-            name = f"{segment.number}. {title}" if title else f"{segment.number}."
+            name = f"{number}. {title}" if title else f"{number}."
             return name if self.analysis.is_track_start(position) else f"{name}  (suite)"
-        if segment.number:
+        if number:
             # Un morceau détecté puis écarté : il garde son numéro et son nom,
             # et l'export laissera simplement un trou dans la suite.
-            return f"{segment.number}. {title} — retiré" if title \
-                else f"{segment.number}. — retiré"
+            return f"{number}. {title} — retiré" if title \
+                else f"{number}. — retiré"
         return title or "Blanc"
 
     def _refresh_side_buttons(self) -> None:
@@ -1918,7 +1931,7 @@ class App(tk.Tk):
             return
         position = int(row)
         segment = self.analysis.segments[position]
-        number = segment.number
+        number = self.analysis.track_at(position)[0]
 
         def apply(value: str) -> str:
             if value == segment.title:

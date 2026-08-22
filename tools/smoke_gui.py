@@ -293,6 +293,11 @@ def main(wav: Path) -> int:
     )
     count_before = len(analysis.segments)
     tracks_before = len(analysis.tracks)
+    # Les noms affichés avant la bascule : c'est eux qui doivent revenir. Le
+    # numero du morceau suivant devenait celui du precedent et n'en repartait
+    # plus, si bien que deux morceaux distincts finissaient par s'appeler « 1 ».
+    labels_before = [app.tree.set(str(i), "index")
+                     for i in range(len(analysis.segments))]
     app.toggle_segment(gap_position)
     app.update()
     ok &= check("aucun segment perdu", len(analysis.segments) == count_before)
@@ -300,12 +305,21 @@ def main(wav: Path) -> int:
                 analysis.segments[gap_position].kind == "music")
     ok &= check(f"morceaux réunis au rendu : {tracks_before} -> "
                 f"{len(analysis.tracks)}", len(analysis.tracks) == tracks_before - 1)
+    joined = [app.tree.set(str(i), "index")
+              for i in (gap_position - 1, gap_position, gap_position + 1)]
+    ok &= check(f"les trois lignes portent le numero du premier ({joined})",
+                all(line.split(".")[0] == joined[0].split(".")[0]
+                    for line in joined)
+                and "(suite)" in joined[-1])
     app.toggle_segment(gap_position)
     app.update()
     ok &= check("retour à l'état initial possible",
                 analysis.segments[gap_position].kind == "gap"
                 and len(analysis.segments) == count_before
                 and len(analysis.tracks) == tracks_before)
+    ok &= check("et les morceaux retrouvent leur numero",
+                [app.tree.set(str(i), "index")
+                 for i in range(len(analysis.segments))] == labels_before)
 
     print("\nAnnuler / Rétablir")
     reference = [(s.start, s.end, s.kind) for s in analysis.segments]
@@ -853,6 +867,18 @@ def main(wav: Path) -> int:
                     seul.want_video_tracks.get())
         seul.cancel()
 
+    print("\nDeux morceaux du meme numero n'empechent pas d'exporter")
+    # Ils ne devraient plus arriver — le numero ne se reecrit plus — mais la
+    # fenetre s'ouvrait autrefois sur « Item 1 already exists », c'est-a-dire
+    # pas du tout. Les lignes se designent par leur rang depuis.
+    jumeaux = ExportDialog(app, directory="test/_smoke_export",
+                           pieces=[(1, "Un", 60.0), (1, "Encore un", 60.0),
+                                   (3, "Trois", 60.0)])
+    app.update()
+    ok &= check("la liste s'ouvre quand meme (3 lignes)",
+                len(jumeaux._picker.get_children()) == 3)
+    jumeaux.cancel()
+
     print("\nChoix des morceaux a exporter")
     # Le piege n'est pas de filtrer, c'est de renumeroter : exporter les
     # morceaux 2 et 4 doit donner « 02 » et « 04 ». La fenetre rend donc des
@@ -870,8 +896,12 @@ def main(wav: Path) -> int:
     ok &= check("aucun coche : rien a valider", bool(picker._missing()))
     ok &= check("et la fenetre dit quoi (" + picker._missing() + ")",
                 picker._missing() == MISSING_PIECE)
-    picker._picked[2] = True
-    picker._picked[len(pieces)] = True
+    # Les lignes se designent par leur rang, les morceaux par leur numero : la
+    # fenetre coche un rang et rend un numero. Deux morceaux ont pu porter le
+    # meme numero apres un decochage mal rattrape, et une liste indexee par
+    # numero refusait alors de s'ouvrir.
+    picker._picked[1] = True
+    picker._picked[len(pieces) - 1] = True
     picker._paint_picks()
     picker._refresh()
     app.update()

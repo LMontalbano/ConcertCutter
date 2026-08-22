@@ -134,6 +134,14 @@ suite — 01, 02, 04, 05 —, ce qui est exactement l'information utile : il man
 quelque chose, et on sait quoi. Il garde son numéro et son nom dans le tableau,
 suivis de la mention « retiré », et les retrouve si on le recoche.
 
+Le numéro affiché est celui du **morceau**, pas du segment. Cocher le blanc
+entre les morceaux 1 et 2 les réunit : la suite entière s'annonce alors « 1 »,
+puisque c'est là qu'elle commence. Le 2 n'est pas perdu pour autant — il dort
+sur son segment et réapparaît au décochage. Il était auparavant réécrit sur
+place : le second morceau restait « 1 » une fois séparé, deux morceaux
+distincts finissaient par porter le même numéro, l'export leur donnait le même
+nom de fichier, et la fenêtre d'export refusait de s'ouvrir sur cette liste.
+
 **Si tu connais le nombre de morceaux, donne-le** dans le champ « Morceaux
 attendus ». C'est la seule information qui vienne de l'extérieur du signal, donc
 la plus fiable du problème : l'outil fusionne alors les blancs les moins

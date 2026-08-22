@@ -187,8 +187,13 @@ def apply_segues(
                     or segment.end - (candidate.time + half) < 1.0):
                 break
             segments[index : index + 1] = [
+                # La moitié gauche garde le numéro et le titre du morceau
+                # d'origine : c'est lui qu'on vient de scinder, pas un morceau
+                # neuf, et le laisser tomber le renuméroterait en queue de
+                # concert.
                 Segment(segment.start, candidate.time - half, MUSIC,
-                        segment.confidence, dict(segment.stats)),
+                        segment.confidence, dict(segment.stats),
+                        segment.title, segment.number),
                 Segment(candidate.time - half, candidate.time + half, GAP,
                         candidate.score, {"source": "segue"}),
                 Segment(candidate.time + half, segment.end, MUSIC,

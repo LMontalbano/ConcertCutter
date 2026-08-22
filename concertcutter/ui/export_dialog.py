@@ -401,11 +401,17 @@ class ExportDialog(tk.Toplevel):
         self._picked_label = ttk.Label(body, text="", style="Muted.TLabel")
         self._picked_label.pack(anchor="w", pady=(6, 0))
 
+        # Les lignes sont désignées par leur rang, jamais par leur numéro de
+        # morceau. Deux morceaux ont pu porter le même numéro — c'était le cas
+        # après un décochage de blanc mal rattrapé — et la fenêtre s'ouvrait
+        # alors sur « Item 1 already exists » au lieu de s'ouvrir. Le rang, lui,
+        # est unique par construction ; le numéro reste ce qu'on affiche et ce
+        # qu'on rend au rendu.
         wanted = set(self._wanted) if self._wanted is not None else None
         self._picked = {}
-        for number, label, duration in self.pieces:
-            self._picked[number] = wanted is None or number in wanted
-            self._picker.insert("", "end", iid=str(number),
+        for rank, (number, label, duration) in enumerate(self.pieces):
+            self._picked[rank] = wanted is None or number in wanted
+            self._picker.insert("", "end", iid=str(rank),
                                 text=f"  {number:02d}   {label}   ·   "
                                      f"{_clock(duration)}")
         self._picker.bind("<Button-1>", self._on_pick)
@@ -425,19 +431,18 @@ class ExportDialog(tk.Toplevel):
 
     def check_all(self, on: bool) -> None:
         """Tout cocher ou tout décocher. Sert surtout à repartir de zéro."""
-        for number in self._picked:
-            self._picked[number] = on
+        for rank in self._picked:
+            self._picked[rank] = on
         self._paint_picks()
         self._refresh()
 
     def _paint_picks(self) -> None:
-        for number, on in self._picked.items():
+        for rank, on in self._picked.items():
             image = assets.icon("check_on" if on else "check_off")
             if image is not None:
-                self._picker.item(str(number), image=image)
-        kept = [n for n, on in self._picked.items() if on]
-        total = sum(duration for number, _label, duration in self.pieces
-                    if number in set(kept))
+                self._picker.item(str(rank), image=image)
+        kept = [rank for rank, on in self._picked.items() if on]
+        total = sum(self.pieces[rank][2] for rank in kept)
         self._picked_label.configure(
             text=f"{len(kept)} morceau(x) sur {len(self.pieces)} · "
                  f"{_clock(total)} à écrire")
@@ -446,7 +451,8 @@ class ExportDialog(tk.Toplevel):
         """Numéros retenus, ou None s'ils y sont tous."""
         if self._picker is None:
             return None
-        kept = tuple(number for number, on in self._picked.items() if on)
+        kept = tuple(self.pieces[rank][0]
+                     for rank, on in sorted(self._picked.items()) if on)
         return None if len(kept) == len(self.pieces) else kept
 
     # -- pilotage ----------------------------------------------------------
