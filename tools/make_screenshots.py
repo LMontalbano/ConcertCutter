@@ -23,12 +23,13 @@ from __future__ import annotations
 import argparse
 import subprocess
 import time
+import tkinter as tk
 from pathlib import Path
 
 from concertcutter.audio import probe
 from concertcutter.detect_hmm import HmmParams, analyze
 from concertcutter.spectral import SpectralFeatures, extract
-from concertcutter.ui import export_dialog
+from concertcutter.ui import export_dialog, theme
 from concertcutter.ui.app import App, _hms
 from concertcutter import video
 
@@ -37,8 +38,10 @@ from concertcutter import video
 # nommer les morceaux.
 TITRES = ["Ouverture", "Le Long Chemin", "Sans Toi", "Rappel : Final"]
 
-# Hauteur de la barre de titre de Windows 11, à 100 % d'échelle. Tk ne sait pas
-# la donner : `winfo_rooty` désigne le haut de la zone cliente, sous elle.
+# Hauteur approximative d'une barre de titre Windows 11. Ne sert plus à cadrer
+# — les bornes viennent de Windows — mais à savoir à partir d'où le contrôle
+# doit regarder : la barre de titre n'est pas aux couleurs de l'application, et
+# la compter ferait baisser le score sans rien dire de la capture.
 TITRE_H = 32
 
 # Chemins inventés, plutôt que ceux de la machine qui fabrique les captures :
@@ -106,7 +109,13 @@ def _populate(app: App, wav: Path, analysis, features) -> App:
 
 
 def _shot_dialog(app: App, path: Path, ffmpeg: bool) -> None:
-    """Ouvre la fenêtre d'export dans l'état demandé, la capture, la referme."""
+    """Ouvre la fenêtre d'export dans l'état demandé, la capture, la referme.
+
+    Avec les morceaux du concert : sans eux la fenêtre escamote sa première
+    question, et la capture en montrait deux là où le mode d'emploi en annonce
+    trois. C'est le genre d'écart qu'un lecteur met sur le compte de sa propre
+    lecture avant de le mettre sur celui de l'image.
+    """
     video.forget_probe()
     if ffmpeg:
         # Sur une machine sans ffmpeg, la capture « normale » montrerait le
@@ -116,10 +125,15 @@ def _shot_dialog(app: App, path: Path, ffmpeg: bool) -> None:
     else:
         video._probe_cache["ffmpeg"] = None
 
-    dialog = export_dialog.ExportDialog(app, video_tracks=ffmpeg)
+    dialog = export_dialog.ExportDialog(app, video_tracks=ffmpeg,
+                                        pieces=app._pieces())
     dialog.set_directory(DEST)
     if ffmpeg:
         dialog.set_images(IMAGES)
+        # Une ligne choisie : les commandes qui portent sur elle sont grises
+        # tant qu'il n'y en a pas, et une rangée de boutons éteints se lit comme
+        # une fonction indisponible plutôt que comme une fonction en attente.
+        dialog._select_image(0)
     dialog.center_on(app)
     dialog.update()
     _shot(dialog, path)
@@ -138,25 +152,85 @@ def _shot(window, path: Path) -> None:
     est reprise au-dessus, sans quoi la capture commencerait sous le nom de la
     fenêtre.
     """
+    # Au-dessus de tout le reste, le temps de la photo. `lift` seul ne suffit
+    # pas : une fenêtre déjà déclarée topmost — un lecteur vidéo, un jeu —
+    # reste devant, et c'est elle qu'on photographiait. L'attribut est rendu
+    # aussitôt après, pour ne pas laisser une fenêtre collée au premier plan.
+    window.attributes("-topmost", True)
     window.lift()
     window.focus_force()
     window.update_idletasks()
     window.update()
     time.sleep(0.6)     # le temps que Windows finisse de dessiner le cadre
 
-    x = window.winfo_rootx()
-    y = window.winfo_rooty() - TITRE_H
-    w = window.winfo_width()
-    h = window.winfo_height() + TITRE_H
+    # Les bornes viennent de Windows, pas d'une estimation. La barre de titre
+    # était reprise en ajoutant 32 pixels au-dessus de la zone cliente : c'est
+    # sa hauteur sur *une* configuration, et deux pixels de trop suffisent à
+    # faire entrer un morceau de la fenêtre du dessous en haut de l'image.
+    # `DwmGetWindowAttribute` donne le cadre tel qu'il se voit, ombre portée
+    # exclue — ce que `GetWindowRect` ne fait pas depuis Windows 10.
+    script = f"""
+Add-Type -AssemblyName System.Drawing;
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public struct RECT {{ public int L, T, R, B; }}
+public static class Win {{
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(
+      IntPtr h, int a, out RECT r, int s);
+}}
+'@;
+$h = [Win]::GetAncestor([IntPtr]{window.winfo_id()}, 2);
+$r = New-Object RECT;
+if ([Win]::DwmGetWindowAttribute($h, 9, [ref]$r, 16) -ne 0) {{
+    [void][Win]::GetWindowRect($h, [ref]$r);
+}}
+$w = $r.R - $r.L; $hgt = $r.B - $r.T;
+$b = New-Object Drawing.Bitmap $w,$hgt;
+$g = [Drawing.Graphics]::FromImage($b);
+$g.CopyFromScreen($r.L, $r.T, 0, 0, $b.Size);
+$b.Save('{path.as_posix()}', [Drawing.Imaging.ImageFormat]::Png);
+"Fenetre {{0}}x{{1}} en {{2}},{{3}}" -f $w, $hgt, $r.L, $r.T
+"""
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
+    finally:
+        window.attributes("-topmost", False)
+    _confirm(window, path)
 
-    script = (
-        "Add-Type -AssemblyName System.Drawing;"
-        f"$b = New-Object Drawing.Bitmap {w},{h};"
-        "$g = [Drawing.Graphics]::FromImage($b);"
-        f"$g.CopyFromScreen({max(0, x)},{max(0, y)},0,0,$b.Size);"
-        f"$b.Save('{path.as_posix()}', [Drawing.Imaging.ImageFormat]::Png);"
-    )
-    subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
+
+def _confirm(window, path: Path) -> None:
+    """Refuse une capture qui ne montre pas la fenêtre.
+
+    La capture passe par l'écran : si quoi que ce soit passe devant au mauvais
+    moment, on obtient une image parfaitement valide de tout autre chose. Elle
+    part alors dans un README public sans que rien ne le signale — c'est arrivé,
+    et c'est le bureau de quelqu'un qui a failli s'y retrouver.
+
+    Le contrôle est grossier exprès : on compte les pixels qui portent une
+    couleur du thème. Sous la barre de titre, une fenêtre de l'application en
+    est presque entièrement faite ; n'importe quoi d'autre — une photo, un
+    navigateur, un jeu — n'en a pratiquement aucun.
+    """
+    shot = tk.PhotoImage(master=window, file=str(path))
+    wanted = {theme.APP_BG.lower(), theme.PANEL_BG.lower(), theme.FIELD_BG.lower()}
+    seen = total = 0
+    # Une grille de points suffit, et coûte mille lectures au lieu d'un million.
+    for x in range(4, shot.width() - 4, max(1, shot.width() // 40)):
+        for y in range(TITRE_H + 4, shot.height() - 4, max(1, shot.height() // 40)):
+            total += 1
+            if "#%02x%02x%02x" % shot.get(x, y) in wanted:
+                seen += 1
+    share = seen / max(1, total)
+    if share < 0.25:
+        path.unlink(missing_ok=True)
+        raise SystemExit(
+            f"Capture abandonnée : {path.name} ne montre pas l'application "
+            f"({share:.0%} de pixels au thème, 25 % attendus). Une autre "
+            "fenêtre est passée devant — fermer ce qui traîne et relancer.")
+    print(f"  {path.name} — {share:.0%} de pixels au thème")
 
 
 if __name__ == "__main__":
