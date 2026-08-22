@@ -79,9 +79,9 @@ HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. On peut "
               "diaporama. Chacune garde ses proportions et se centre sur du "
               "noir, elle n'est jamais déformée pour remplir le cadre.")
 HELP_SLIDE_FADE = ("Durée du fondu d'une image à la suivante. À zéro, elles se "
-                   "remplacent d'un coup. Les images se répartissent seules "
-                   "sur la durée : sur la vidéo du concert entier, le "
-                   "changement d'image tombe sur le changement de morceau.")
+                   "remplacent d'un coup. Le rythme, lui, ne se règle pas : "
+                   f"une image toutes les {video.SLIDE_S:g} secondes, et le "
+                   "cycle recommence aussi longtemps que dure le son.")
 HELP_CROSSFADE = ("N'agit que sur le concert en un seul fichier : la fin d'un "
                   "morceau se fond dans le début du suivant. À zéro, ils se "
                   "suivent bout à bout, comme sur un disque.")

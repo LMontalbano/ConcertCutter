@@ -4,9 +4,11 @@ Deux ajouts demandés au premier bêta-test, et deux pièges distincts.
 
 Le diaporama : dérouler les images sur la durée d'un concert demanderait neuf
 cents entrées pour deux heures, d'où un cycle encodé à part puis rejoué en
-boucle. Ce qu'il faut vérifier, c'est qu'un lot de photos de tailles
-différentes passe sans que ffmpeg bute, et que la vidéo dure ce que dure son
-audio — ni plus, ni moins.
+boucle. Trois choses à vérifier : qu'un lot de photos de tailles différentes
+passe sans que ffmpeg bute, que la vidéo dure ce que dure son audio — ni plus,
+ni moins —, et que les images tournent vraiment au rythme annoncé, cycle
+compris. Ce dernier point est celui qui a lâché : étalées sur la durée à
+couvrir, trois photos donnaient une image fixe pendant quarante minutes.
 
 Le fondu enchaîné : il raccourcit l'album de sa durée à chaque jointure. La
 cue sheet et les titres de la vidéo se calculent par cumul des durées de piste,
@@ -126,41 +128,42 @@ def main(segments_path: Path, root: Path) -> int:
     ok &= _check(f"une image seule marche toujours ({duration:.1f} s)",
                  abs(duration - 14.0) < 0.3)
 
-    print("\nLes images changent avec les morceaux")
-    # C'est tout l'intérêt du calage : le passage d'un titre au suivant se voit,
-    # là où un défilement à intervalle fixe dérivait et tombait au milieu d'un
-    # morceau une fois sur deux.
+    print("\nLes images tournent en boucle")
+    # C'est là que le diaporama se joue vraiment : sur un morceau de dix
+    # minutes comme sur un concert de deux heures, l'image doit changer au
+    # rythme annoncé et le cycle reprendre — trois images étalées sur la durée
+    # donnaient une photo fixe pendant quarante minutes.
+    long_sound = root / "long.wav"
+    span = 3 * video.SLIDE_S * 2 + video.SLIDE_S / 2      # deux tours et demi
+    sf.write(str(long_sound), np.zeros((int(44100 * span), 2), dtype="float32"),
+             44100)
+    pool = [_png(root / f"cycle{index}.png", colour, 900, 600)
+            for index, colour in enumerate([(220, 20, 20), (20, 220, 20),
+                                            (20, 20, 220)])]
+    turning = root / "boucle.mp4"
+    video.write_video(long_sound, "Un morceau qui dure", turning,
+                      video.VideoParams(image=pool[0], images=tuple(pool)))
+
+    seen = [_centre(turning, moment) for moment in
+            [step * video.SLIDE_S + video.SLIDE_S / 2
+             for step in range(int(span // video.SLIDE_S))]]
+    changes = sum(1 for a, b in zip(seen, seen[1:]) if a != b)
+    ok &= _check(f"l'image change à chaque créneau de {video.SLIDE_S:g} s "
+                 f"({changes} changements sur {len(seen) - 1} créneaux)",
+                 changes == len(seen) - 1)
+    ok &= _check(f"et le cycle reprend au bout de {3 * video.SLIDE_S:g} s "
+                 f"({seen[0]} → {seen[3]})", seen[0] == seen[3])
+
+    print("\nLa vidéo du concert entier")
     marks = [3.0, 7.0, 11.0]
     captions = [video.Caption(f"M{index}", start, end) for index, (start, end)
                 in enumerate(zip([0.0] + marks, marks + [14.0]))]
-    for label, count in (("moins d'images que de morceaux", 2),
-                         ("autant", 4), ("plus d'images que de morceaux", 6)):
-        pool = [stills[index % len(stills)] for index in range(count)]
-        # Des chemins distincts, sinon deux créneaux voisins tomberaient sur le
-        # même fichier et l'on ne saurait pas si l'image a changé.
-        pool = [_png(root / f"p{count}_{index}.png",
-                     (30 + 40 * index, 60, 200 - 20 * index), 900, 600)
-                for index in range(count)]
-        slots = video.plan_slides(pool, captions, 14.0)
-        clock, changes = 0.0, []
-        for still, span in slots[:-1]:
-            clock += span
-            changes.append(round(clock, 3))
-        ok &= _check(f"{label} ({count}) : chaque morceau change d'image",
-                     all(any(abs(change - mark) < 1e-6 for change in changes)
-                         for mark in marks))
-        ok &= _check(f"  et deux créneaux voisins ne sont jamais la même image",
-                     all(a[0] != b[0] for a, b in zip(slots, slots[1:])))
-        ok &= _check(f"  la somme des créneaux couvre la vidéo "
-                     f"({sum(span for _still, span in slots):.1f} s)",
-                     abs(sum(span for _still, span in slots) - 14.0) < 1e-6)
-
     whole = root / "concert.mp4"
     video.write_video(sound, captions, whole,
                       video.VideoParams(image=stills[0], images=tuple(stills),
                                         slide_fade_s=0.4))
     duration, _width, _height = _probe(whole)
-    ok &= _check(f"la vidéo du concert entier tient la durée ({duration:.1f} s)",
+    ok &= _check(f"elle tient la durée ({duration:.1f} s)",
                  abs(duration - 14.0) < 0.3)
 
     shutil.rmtree(root, ignore_errors=True)
@@ -176,6 +179,23 @@ def _cue_marks(path: Path) -> list[float]:
             minutes, seconds, frames = line.split()[-1].split(":")
             marks.append(int(minutes) * 60 + int(seconds) + int(frames) / 75)
     return marks
+
+
+def _centre(path: Path, at: float) -> tuple[int, int, int]:
+    """Couleur au centre de l'image, à cet instant de la vidéo.
+
+    Les fonds du contrôle sont des aplats : un pixel suffit à dire laquelle des
+    trois est à l'écran, sans dépendre d'une bibliothèque d'image.
+    """
+    found = subprocess.run(
+        [video.find_ffmpeg(), "-v", "error", "-ss", f"{at:.3f}", "-i", str(path),
+         "-frames:v", "1", "-vf", "crop=8:8:960:540,scale=1:1",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True)
+    raw = found.stdout[:3]
+    # Arrondi au dizième : l'encodage déplace un aplat de deux ou trois
+    # niveaux, ce qui suffirait à faire croire à un changement d'image.
+    return tuple(value // 16 for value in raw.ljust(3, b"\x00"))
 
 
 def _probe(path: Path) -> tuple[float, int, int]:

@@ -218,17 +218,16 @@ dans le dossier n'est jamais touché.
 
 Pour déposer un concert sur une plateforme qui n'accepte que de la vidéo :
 **une image fournie par toi, et le titre du morceau écrit dessus**. Plusieurs
-images se choisissent d'un coup et défilent alors en diaporama, avec un fondu de
-l'une à l'autre — une seule photo tenue deux heures finit par peser.
+images défilent en diaporama, avec un fondu de l'une à l'autre — une seule photo
+tenue deux heures finit par peser.
 
-**Rien à régler en secondes.** Les images se répartissent d'elles-mêmes sur la
-durée à couvrir, et sur la vidéo du concert entier le changement d'image tombe
-sur le changement de morceau : le passage d'un titre au suivant gagne ainsi un
-repère visuel, là où un défilement à intervalle fixe dérivait et tombait au
-milieu d'un morceau une fois sur deux. Plus d'images que de morceaux : elles se
-répartissent à l'intérieur des morceaux, toutes servies. Moins d'images que de
-morceaux : elles tournent, et chaque changement de morceau amène quand même la
-suivante.
+**Rien à régler en secondes.** Une image toutes les huit secondes, puis le cycle
+recommence, aussi longtemps que dure le son : trois photos suffisent donc à
+animer un concert de deux heures. Les images ont un temps été étalées sur la
+durée à couvrir, une par morceau — et c'était le contraire d'un diaporama :
+l'image changeait toutes les trois minutes et rien ne bougeait entre-temps. Un
+cycle qui tourne, quitte à repasser plusieurs fois dans un même morceau, est ce
+qui fait qu'il se passe quelque chose à l'écran.
 
 La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
 continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
