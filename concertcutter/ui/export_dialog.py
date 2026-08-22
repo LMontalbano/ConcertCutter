@@ -25,6 +25,12 @@ produit ; « Le concert en un seul fichier » et « Un fichier par morceau » le
 disent. Des cases à cocher et non des boutons radio : « l'un, l'autre, ou les
 deux » est en réalité deux questions oui/non.
 
+**Les fonds vidéo se tiennent en liste, pas en champ.** Un champ résumait le
+choix — « 12 images : a.jpg, b.jpg, c.jpg… » — sans laisser voir la douzième,
+en retirer une, ni savoir laquelle passerait en premier ; et chaque passage par
+le sélecteur remplaçait la sélection entière, alors qu'on y revient presque
+toujours pour *ajouter*. La liste répond aux quatre.
+
 **Chaque réglage est sous ce qu'il modifie.** Le fondu enchaîné vivait dans les
 réglages de la fenêtre principale, rangé avec les amorces et les anti-clics
 alors qu'il ne se décide qu'au moment d'exporter et n'agit que sur un seul des
@@ -74,9 +80,10 @@ HELP_VIDEO_FULL = ("Un MP4 du concert entier, sur l'image de fond. Le titre "
 HELP_VIDEO_TRACKS = ("Un MP4 par morceau, son titre incrusté. C'est la forme "
                      "qu'attendent les plateformes qui n'acceptent que de la "
                      "vidéo.")
-HELP_IMAGE = ("Fond des vidéos : photo du concert, pochette, affiche. On peut "
-              "en choisir plusieurs d'un coup — elles défilent alors en "
-              "diaporama. Chacune garde ses proportions et se centre sur du "
+HELP_IMAGE = ("Fond des vidéos : photos du concert, pochette, affiche. Le "
+              "bouton ajoute à la liste sans effacer ce qui y est déjà, et les "
+              "images se relaient dans l'ordre de la liste — les flèches le "
+              "corrigent. Chacune garde ses proportions et se centre sur du "
               "noir, elle n'est jamais déformée pour remplir le cadre.")
 HELP_SLIDE_FADE = ("Durée du fondu d'une image à la suivante. À zéro, elles se "
                    "remplacent d'un coup. Le rythme, lui, ne se règle pas : "
@@ -119,10 +126,19 @@ _MESSAGES = (MISSING_OUTPUT, MISSING_IMAGE, MISSING_DIR, MISSING_PIECE)
 # fixe la largeur d'ensemble : sans elle, c'est la plus longue qui décidait.
 BODY_WIDTH = 430
 
-# Lignes visibles de la liste des morceaux avant qu'elle ne défile. Huit tient
-# dans la fenêtre sans la faire déborder d'un écran de portable.
-PICK_ROWS = 8
+# Lignes visibles de la liste des morceaux avant qu'elle ne défile. Sept, et non
+# huit : la liste des fonds vidéo a pris une place que la fenêtre n'avait pas, et
+# c'est ici qu'elle coûte le moins — cette liste-là défile de toute façon, un
+# concert en comptant vingt-cinq.
+PICK_ROWS = 7
 PICK_WIDTH = 420
+
+# Lignes visibles de la liste des fonds. Trois : de quoi voir qu'il y en a
+# plusieurs et dans quel ordre, sans que la section vidéo prenne le pas sur le
+# reste de la fenêtre — elle est déjà la plus haute des trois. Au-delà, la liste
+# défile.
+IMAGE_ROWS = 3
+IMAGE_WIDTH = 300
 
 HINT_WIDTH = 280
 
@@ -184,11 +200,9 @@ class ExportDialog(tk.Toplevel):
         self.want_video_full = tk.BooleanVar(value=bool(video_full))
         self.want_video_tracks = tk.BooleanVar(value=bool(video_tracks))
         self.directory = tk.StringVar(value=directory)
+        # La première des images choisies. Tout ce qui n'attend qu'un fond la
+        # lit, et la fenêtre s'en sert pour savoir qu'une image a été choisie.
         self.video_image = tk.StringVar(value=video_image)
-        # Ce que le champ montre : un chemin quand il n'y a qu'une image, leur
-        # compte quand il y en a plusieurs — vingt chemins bout à bout ne se
-        # lisent pas.
-        self.image_shown = tk.StringVar(value=video_image)
         self.video_images: tuple[str, ...] = (
             tuple(video_images) or ((video_image,) if video_image else ()))
         self.slide_fade_s = tk.StringVar(value=f"{video.SLIDE_FADE_S:.1f}")
@@ -265,21 +279,19 @@ class ExportDialog(tk.Toplevel):
                                              self.want_video_tracks,
                                              HELP_VIDEO_TRACKS)
 
-        image_row = ttk.Frame(video_box)
-        image_row.pack(fill="x", pady=(6, 0))
-        self._image = ttk.Entry(image_row, textvariable=self.image_shown,
-                                width=40, state="readonly")
-        self._image.pack(side="left", fill="x", expand=True)
-        self._image_button = ttk.Button(image_row, text="Images…",
-                                        command=self.browse_image)
-        self._image_button.pack(side="left", padx=(8, 0))
-        tooltip.attach(self._image_button, HELP_IMAGE)
+        self._build_images(video_box)
 
         # Le fondu des images suit les images, comme celui de l'audio suit les
         # cases audio : chaque réglage est sous ce qu'il modifie, et non dans
         # un coin « réglages » où il faudrait deviner sur quoi il agit.
         self._slide_row = self._number_row(
             video_box, "Fondu entre images", self.slide_fade_s, HELP_SLIDE_FADE)
+        # Ce que le diaporama fera, à l'autre bout du même rang : le rythme et
+        # le fondu se lisent ensemble, et cette phrase n'a pas mérité une ligne
+        # à elle seule dans une fenêtre qui en compte déjà trente.
+        self._images_label = ttk.Label(self._slide_row, text="",
+                                       style="Muted.TLabel")
+        self._images_label.pack(side="right")
 
         # 3 — la destination.
         where = self._section(body, "3" if self._picker else "2", "Où")
@@ -318,10 +330,9 @@ class ExportDialog(tk.Toplevel):
                                wraplength=HINT_WIDTH, justify="left")
         self._hint.pack(anchor="w", fill="both", expand=True)
 
-        # Le champ montre d'emblée ce qui a été retenu du dernier export : un
+        # La liste montre d'emblée ce qui a été retenu du dernier export : un
         # diaporama de douze images ne se rechoisit pas de mémoire.
-        if len(self.video_images) > 1:
-            self.set_images(self.video_images)
+        self._paint_images()
 
         self.directory.trace_add("write", lambda *_: self._refresh())
         self.video_image.trace_add("write", lambda *_: self._refresh())
@@ -461,26 +472,62 @@ class ExportDialog(tk.Toplevel):
         self.directory.set(path)
 
     def set_image(self, path: str) -> None:
-        """Une image de fond, et une seule."""
+        """Une image de fond, et une seule. Remplace ce qui était choisi."""
         self.set_images([path] if path else [])
 
     def set_images(self, paths) -> None:
-        """Choisir des images sans avoir coché de vidéo en demande une.
+        """Fixe la liste entière, dans l'ordre donné.
 
-        Aller chercher un fond puis se voir répondre qu'il manque encore une
-        case serait absurde : le geste dit déjà ce qu'on veut.
+        Choisir des images sans avoir coché de vidéo en demande une : aller
+        chercher un fond puis se voir répondre qu'il manque encore une case
+        serait absurde, le geste dit déjà ce qu'on veut.
         """
-        chosen = tuple(str(path) for path in paths if str(path).strip())
-        self.video_images = chosen
-        self.video_image.set(chosen[0] if chosen else "")
-        self.image_shown.set(
-            chosen[0] if len(chosen) == 1
-            else (f"{len(chosen)} images : "
-                  + ", ".join(Path(path).name for path in chosen[:3])
-                  + ("…" if len(chosen) > 3 else "")) if chosen else "")
-        if chosen and not self._video_on():
+        self.video_images = tuple(str(path) for path in paths
+                                  if str(path).strip())
+        if self.video_images and not self._video_on():
             self.want_video_tracks.set(True)
-        self._refresh()
+        self._paint_images()
+
+    def add_images(self, paths) -> None:
+        """Ajoute à la suite, sans toucher à ce qui est déjà là.
+
+        C'était le défaut du champ précédent : chaque passage par le sélecteur
+        repartait de zéro, si bien qu'ajouter une photo oubliée obligeait à
+        retrouver les douze autres et à toutes les resélectionner. On revient
+        rarement chercher une image *à la place* des précédentes, presque
+        toujours *en plus*.
+
+        Un même fichier n'entre qu'une fois : le voir passer deux fois dans le
+        cycle se lirait comme un défaut du diaporama, pas comme une intention.
+        """
+        known = set(self.video_images)
+        added = [str(path) for path in paths
+                 if str(path).strip() and str(path) not in known]
+        self.set_images(self.video_images + tuple(added))
+
+    def remove_image(self, rank: int) -> None:
+        """Retire l'image de ce rang."""
+        if 0 <= rank < len(self.video_images):
+            kept = list(self.video_images)
+            del kept[rank]
+            self.set_images(kept)
+            self._select_image(min(rank, len(kept) - 1))
+
+    def move_image(self, rank: int, step: int) -> None:
+        """Déplace une image dans l'ordre du défilement.
+
+        L'ordre se voit sur la vidéo : les images se relaient dans celui de la
+        liste. Sans moyen de le corriger, il fallait renommer ses fichiers pour
+        décider par quoi le diaporama commence.
+        """
+        target = rank + step
+        if not (0 <= rank < len(self.video_images)
+                and 0 <= target < len(self.video_images)):
+            return
+        kept = list(self.video_images)
+        kept[rank], kept[target] = kept[target], kept[rank]
+        self.set_images(kept)
+        self._select_image(target)
 
     def browse(self) -> None:
         chosen = filedialog.askdirectory(
@@ -498,8 +545,87 @@ class ExportDialog(tk.Toplevel):
                        ("Tous les fichiers", "*.*")])
         if chosen:
             # Triées par nom : le sélecteur les rend dans l'ordre où l'on a
-            # cliqué, qui n'est pas celui qu'on veut voir défiler.
-            self.set_images(sorted(chosen))
+            # cliqué, qui n'est pas celui qu'on veut voir défiler. L'ordre se
+            # rattrape ensuite ligne à ligne, avec les flèches.
+            self.add_images(sorted(chosen))
+
+    # -- images ------------------------------------------------------------
+
+    def _build_images(self, parent) -> None:
+        """Les fonds, en liste ordonnée plutôt qu'en champ résumé.
+
+        Le champ précédent disait « 12 images : a.jpg, b.jpg, c.jpg… ». Il ne
+        permettait ni de voir la douzième, ni d'en retirer une, ni de savoir
+        laquelle passerait en premier — et le bouton remplaçait la sélection
+        entière à chaque fois. Une liste répond aux quatre : on voit l'ordre,
+        on ajoute à la suite, on retire d'un clic, on déplace aux flèches.
+        """
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(8, 0))
+        self._images = ttk.Treeview(row, show="tree", height=IMAGE_ROWS,
+                                    selectmode="browse")
+        self._images.column("#0", width=IMAGE_WIDTH, stretch=True)
+        self._images.pack(side="left", fill="x", expand=True)
+        self._images.bind("<<TreeviewSelect>>", lambda _e: self._refresh())
+        tooltip.attach(self._images, HELP_IMAGE)
+
+        buttons = ttk.Frame(row)
+        buttons.pack(side="left", fill="y", padx=(8, 0))
+        # « Ajouter » et non « Images… » : le libellé dit maintenant ce que le
+        # bouton fait de ce qui est déjà choisi.
+        self._image_button = ttk.Button(buttons, text="Ajouter…",
+                                        command=self.browse_image)
+        self._image_button.pack(fill="x")
+        tooltip.attach(self._image_button, HELP_IMAGE)
+        # Les trois commandes qui portent sur la ligne choisie tiennent sur un
+        # seul rang : empilées, elles rendaient la colonne de boutons plus haute
+        # que la liste, et c'est le vide à côté d'elle qui décidait de la
+        # hauteur de la fenêtre.
+        order = ttk.Frame(buttons)
+        order.pack(fill="x", pady=(4, 0))
+        self._image_remove = ttk.Button(
+            order, text="Retirer", style="Ghost.TButton",
+            command=lambda: self.remove_image(self._image_rank()))
+        self._image_remove.pack(side="left", expand=True, fill="x")
+        self._image_up = ttk.Button(
+            order, text="↑", width=2, style="Ghost.TButton",
+            command=lambda: self.move_image(self._image_rank(), -1))
+        self._image_up.pack(side="left", padx=(4, 0))
+        self._image_down = ttk.Button(
+            order, text="↓", width=2, style="Ghost.TButton",
+            command=lambda: self.move_image(self._image_rank(), 1))
+        self._image_down.pack(side="left", padx=(4, 0))
+
+    def _image_rank(self) -> int:
+        """Rang de l'image sélectionnée, ou -1."""
+        chosen = self._images.selection()
+        return int(chosen[0]) if chosen else -1
+
+    def _select_image(self, rank: int) -> None:
+        if 0 <= rank < len(self.video_images):
+            self._images.selection_set(str(rank))
+            self._images.see(str(rank))
+
+    def _paint_images(self) -> None:
+        """Réécrit la liste, et tout ce qui dépend d'elle."""
+        chosen = self.video_images
+        # `video_image` reste la première : tout ce qui n'attend qu'un fond
+        # continue de marcher, et c'est aussi ce qui dit à la fenêtre qu'une
+        # image a été choisie.
+        self.video_image.set(chosen[0] if chosen else "")
+        self._images.delete(*self._images.get_children())
+        for rank, path in enumerate(chosen):
+            self._images.insert("", "end", iid=str(rank),
+                                text=f"  {rank + 1}.   {Path(path).name}")
+        if len(chosen) > 1:
+            self._images_label.configure(
+                text=f"{len(chosen)} images, {video.SLIDE_S:g} s chacune, "
+                     "en boucle")
+        elif chosen:
+            self._images_label.configure(text="une seule image, fixe")
+        else:
+            self._images_label.configure(text="aucune image choisie")
+        self._refresh()
 
     # -- installation de ffmpeg --------------------------------------------
 
@@ -728,8 +854,17 @@ class ExportDialog(tk.Toplevel):
                 self._video_full_check, self._video_tracks_check)
         # L'image ne se choisit qu'une fois une vidéo demandée : sans ça, elle
         # n'irait nulle part.
-        self._image_button.configure(
-            state="normal" if self._video_on() else "disabled")
+        wanted = self._video_on()
+        self._image_button.configure(state="normal" if wanted else "disabled")
+        self._images.configure(selectmode="browse" if wanted else "none")
+        # Retirer et réordonner supposent une ligne choisie : les boutons le
+        # disent en restant gris tant qu'il n'y en a pas, plutôt que de ne rien
+        # faire au clic.
+        rank = self._image_rank()
+        _enable(wanted and rank >= 0, self._image_remove)
+        _enable(wanted and rank > 0, self._image_up)
+        _enable(wanted and 0 <= rank < len(self.video_images) - 1,
+                self._image_down)
         # Un réglage sans prise s'éteint, il ne disparaît pas : escamoté, il
         # faisait sauter la fenêtre sous la main à chaque case cochée — le
         # défaut que tout le reste de cette fenêtre évite. Éteint, il dit en

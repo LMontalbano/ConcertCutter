@@ -229,6 +229,11 @@ l'image changeait toutes les trois minutes et rien ne bougeait entre-temps. Un
 cycle qui tourne, quitte à repasser plusieurs fois dans un même morceau, est ce
 qui fait qu'il se passe quelque chose à l'écran.
 
+**Les images se tiennent en liste, pas en champ.** Le bouton *Ajouter* ajoute à
+la suite sans effacer ce qui est déjà choisi — on revient presque toujours pour
+ajouter, rarement pour tout remplacer —, *Retirer* enlève la ligne choisie, et
+les flèches ↑ ↓ décident de l'ordre du défilement.
+
 La fenêtre d'export tient en **quatre cases, une par fichier possible** : album
 continu et pistes séparées, en audio et en vidéo. Des cases plutôt que des
 boutons radio — « l'un, l'autre, ou les deux » est en réalité deux questions

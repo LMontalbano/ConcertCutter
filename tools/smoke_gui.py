@@ -867,6 +867,34 @@ def main(wav: Path) -> int:
                     seul.want_video_tracks.get())
         seul.cancel()
 
+        print("\nListe des fonds video")
+        # Le champ resume d'avant remplacait la selection entiere a chaque
+        # passage par le selecteur : ajouter une photo oubliee obligeait a
+        # retrouver les douze autres. La liste ajoute a la suite, et l'ordre —
+        # celui du defilement — se corrige ligne a ligne.
+        fonds = ExportDialog(app, directory="test/_smoke_export")
+        app.update()
+        fonds.want_video_tracks.set(True)
+        fonds.set_images(["a.png", "b.png"])
+        fonds.add_images(["c.png", "b.png"])
+        ok &= check(f"ajouter n'efface rien, et ne double rien "
+                    f"({fonds.video_images})",
+                    fonds.video_images == ("a.png", "b.png", "c.png"))
+        ok &= check("une ligne par image",
+                    len(fonds._images.get_children()) == 3)
+        fonds.move_image(2, -1)
+        ok &= check(f"l'ordre se corrige ({fonds.video_images})",
+                    fonds.video_images == ("a.png", "c.png", "b.png"))
+        fonds.remove_image(0)
+        ok &= check(f"et une image se retire ({fonds.video_images})",
+                    fonds.video_images == ("c.png", "b.png"))
+        ok &= check("la premiere image reste celle que lit le rendu",
+                    fonds.video_image.get() == "c.png")
+        fonds.set_images([])
+        ok &= check("liste vidée : plus rien à valider",
+                    bool(fonds._missing()))
+        fonds.cancel()
+
     print("\nDeux morceaux du meme numero n'empechent pas d'exporter")
     # Ils ne devraient plus arriver — le numero ne se reecrit plus — mais la
     # fenetre s'ouvrait autrefois sur « Item 1 already exists », c'est-a-dire
