@@ -31,7 +31,7 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
-from .. import project, video
+from .. import __version__, project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
@@ -113,7 +113,11 @@ GLYPH_PAUSE = "▮▮"
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("ConcertCutter")
+        # Le numéro de version dans la barre de titre : c'est la seule chose
+        # qui permette à un testeur de dire sur quelle version il a vu le
+        # défaut. Sans lui, le numéro ne vivait que dans le code — et il y a
+        # dormi à « 0.1.0 » pendant que la v1.0 était publiée.
+        self.title(f"ConcertCutter {__version__}")
         self.geometry("1340x880")
         self.minsize(1080, 720)
 
