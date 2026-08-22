@@ -1900,8 +1900,7 @@ class App(tk.Tk):
             return
         segment = self.analysis.segments[int(row)]
         share = max(0.0, min(1.0, (x - box[0]) / box[2]))
-        self.play_from(segment.start + share * segment.duration, segment.end,
-                       row=row)
+        self.play_from(segment.start + share * segment.duration, row=row)
 
     # -- saisie dans le tableau --------------------------------------------
 
@@ -2117,7 +2116,14 @@ class App(tk.Tk):
         return self.analysis.is_track_start(position)
 
     def _toggle_row_playback(self, row: str) -> None:
-        """Joue le segment de la ligne, ou le met en pause si c'est lui qu'on entend.
+        """Joue depuis le début de la ligne, ou met en pause si c'est elle qu'on entend.
+
+        La lecture ne s'arrête pas au bout du segment : elle enchaîne sur la
+        suite du concert, comme le ferait n'importe quel lecteur. Elle était
+        bornée à la fin du morceau — et la seule façon d'entendre la jointure
+        avec le suivant, c'est-à-dire ce qu'on est venu vérifier, était de
+        recliquer avant qu'elle ne retombe. La boucle (« B ») reste là pour qui
+        veut au contraire retenir le son dans un passage.
 
         La comparaison porte sur ce qui sort vraiment, et non sur la ligne dont
         on a cliqué le bouton la dernière fois : déplacer la tête de lecture
@@ -2139,7 +2145,7 @@ class App(tk.Tk):
             self._sync_playing_row()
             return
         segment = self.analysis.segments[int(row)]
-        self.play_from(segment.start, segment.end, row=row)
+        self.play_from(segment.start, row=row)
 
     def _on_click_anywhere(self, event) -> None:
         """Un clic hors du tableau relâche la ligne sélectionnée.

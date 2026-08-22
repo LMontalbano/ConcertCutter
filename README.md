@@ -78,7 +78,7 @@ d'une traite.
 | Revenir au début d'une section | Origine (Début) — deux fois de suite, la section précédente |
 | Aller de frontière en frontière | Flèches ← et → |
 | Répéter un passage | B, pour caler une coupe en le réécoutant |
-| Écouter un segment | Colonne ▶ de sa ligne — un second clic met en pause |
+| Écouter à partir d'un segment | Colonne ▶ de sa ligne — la lecture continue au-delà ; un second clic met en pause |
 | Se déplacer dans le concert | Clic n'importe où sur la barre de progression |
 | Zoomer | Molette sur la forme d'onde |
 | Naviguer | Maj+glisser, ou cliquer dans la vue d'ensemble |
