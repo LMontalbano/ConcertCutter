@@ -5,13 +5,9 @@ donnent plus de six secondes par pixel : impossible d'y placer une frontière
 au bon endroit. La vue principale montre donc une fenêtre déplaçable, et une
 bande de vue d'ensemble en dessous conserve le repère global.
 
-Deux sources de tracé selon l'échelle :
-
-- dézoomé, l'enveloppe déjà calculée pour l'analyse (0,25 s par point) — ce
-  qu'on voit est exactement ce sur quoi le détecteur a décidé ;
-- zoomé sous une minute et demie, les échantillons réels de la fenêtre visible,
-  relus à la volée. Sans ça, un placement à la demi-seconde se ferait à
-  l'aveugle sur un tracé en marches d'escalier.
+Le choix de la source du tracé — l'enveloppe de l'analyse, ou les échantillons
+réels relus à la volée quand on est zoomé — appartient à `peaks.py` : ce n'est
+pas une décision graphique, et l'interface web s'appuie sur la même.
 """
 
 from __future__ import annotations
@@ -22,7 +18,8 @@ import numpy as np
 import tkinter as tk
 from tkinter import ttk
 
-from ..audio import probe, read_span
+from ..audio import probe
+from ..peaks import columns as peak_columns, to_height
 from . import theme
 
 HANDLE_PX = 7           # tolérance de saisie d'une frontière
@@ -30,7 +27,6 @@ GRAB_PX = 8             # tolérance de saisie de la tête de lecture
 DRAG_PX = 3             # au-delà, on considère qu'il s'agit d'un déplacement
 OVERVIEW_HEIGHT = 36
 RULER_HEIGHT = 20
-DETAIL_MAX_S = 90.0     # au-delà, l'enveloppe grossière suffit
 MIN_VIEW_S = 4.0
 
 
@@ -59,6 +55,7 @@ class WaveformView(ttk.Frame):
         self.main.pack(side="top", fill="both", expand=True)
 
         self._envelope = np.zeros(0)
+        self._raw_envelope = np.zeros(0)
         self._fps = 4.0
         self._duration = 1.0
         self._segments: list = []
@@ -130,7 +127,11 @@ class WaveformView(ttk.Frame):
             self._samplerate = probe(path).samplerate
 
     def set_envelope(self, rms_db: np.ndarray, fps: float, duration: float) -> None:
-        self._envelope = _to_height(rms_db)
+        # Deux formes de la même enveloppe : les dBFS bruts pour `peaks`, qui
+        # décide lui-même du plancher, et les hauteurs pour la vue d'ensemble,
+        # qui les redessine à chaque image.
+        self._raw_envelope = np.asarray(rms_db)
+        self._envelope = to_height(rms_db)
         self._fps = fps
         self._duration = max(duration, 1e-6)
         self.reset_view()
@@ -397,34 +398,19 @@ class WaveformView(ttk.Frame):
         self.main.create_polygon(points, fill=colour, outline="")
 
     def _column_heights(self, width: int) -> np.ndarray | None:
-        if self._view_duration <= DETAIL_MAX_S and self._source:
-            detail = self._detail_heights(width)
-            if detail is not None:
-                return detail
-        start = self._view_start * self._fps
-        stop = (self._view_start + self._view_duration) * self._fps
-        edges = np.linspace(start, stop, width + 1)
-        indices = np.clip(edges.astype(int), 0, len(self._envelope) - 1)
-        return np.maximum.reduceat(self._envelope, indices[:-1])
+        """Hauteurs du tracé, mises en cache le temps d'une fenêtre.
 
-    def _detail_heights(self, width: int) -> np.ndarray | None:
-        """Crêtes réelles par colonne, relues sur la seule fenêtre visible."""
+        Le cache n'est pas une optimisation de confort : glisser une frontière
+        redessine à chaque pixel de souris, et sans lui la fenêtre zoomée
+        serait relue sur le disque quarante fois par seconde.
+        """
         key = (round(self._view_start, 2), round(self._view_duration, 2), width)
         if self._detail and self._detail[0] == key:
             return self._detail[1]
-        try:
-            first = int(self._view_start * self._samplerate)
-            last = int((self._view_start + self._view_duration) * self._samplerate)
-            audio = read_span(self._source, first, last)
-        except (OSError, RuntimeError, ValueError):
-            return None
-        if len(audio) < width:
-            return None
-        mono = np.abs(audio.mean(axis=1))
-        edges = np.linspace(0, len(mono), width + 1).astype(int)
-        edges[1:] = np.maximum(edges[1:], edges[:-1] + 1)
-        peaks = np.maximum.reduceat(mono, np.clip(edges[:-1], 0, len(mono) - 1))
-        heights = _to_height(20.0 * np.log10(peaks + 1e-10))
+        heights = peak_columns(
+            self._raw_envelope, self._fps, self._view_start, self._view_duration,
+            width, source=self._source, samplerate=self._samplerate,
+        )
         self._detail = (key, heights)
         return heights
 
@@ -533,15 +519,6 @@ class WaveformView(ttk.Frame):
             self.overview.create_polygon(x - 6, 0, x + 6, 0, x, 10,
                                          fill=theme.CURSOR,
                                          outline=theme.CURSOR_HALO)
-
-
-def _to_height(rms_db: np.ndarray) -> np.ndarray:
-    """-60 dBFS en bas, 0 en haut.
-
-    Sous -60 dB il n'y a que du bruit de fond, et étaler jusqu'au silence
-    numérique écraserait toute la dynamique utile contre l'axe.
-    """
-    return np.clip((np.asarray(rms_db) + 60.0) / 60.0, 0.0, 1.0)
 
 
 def _tick_step(duration: float) -> float:

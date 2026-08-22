@@ -431,8 +431,15 @@ def main(wav: Path) -> int:
     # interdisaient à la souris.
     row = app.tree.get_children()[0]
     index = int(row)
-    before, after = analysis.segments[index], analysis.segments[index + 1]
-    wanted = (before.start + before.end) / 2
+    # Relu à chaque fois, jamais gardé sous la main : les éditions rendent une
+    # liste neuve — `edits` ne modifie rien sur place — donc un segment gardé
+    # en variable montrerait l'état d'avant l'édition qu'on vient de vérifier.
+    def edge(offset: int = 0) -> float:
+        segment = analysis.segments[index + offset]
+        return segment.start if offset else segment.end
+
+    origin = edge()
+    wanted = (analysis.segments[index].start + origin) / 2
     app.edit_time(row, "end")
     app.update()
     ok &= check("éditeur ouvert sur la colonne Fin", app._title_editor is not None)
@@ -441,18 +448,17 @@ def main(wav: Path) -> int:
         app._title_editor.insert(0, _clock(wanted))
         app._title_editor.event_generate("<Return>")
         app.update()
-    ok &= check(f"frontière posée à {_clock(wanted)}",
-                abs(before.end - wanted) < 1.0)
-    ok &= check("le segment suivant a suivi", abs(after.start - before.end) < 1e-6)
+    ok &= check(f"frontière posée à {_clock(wanted)}", abs(edge() - wanted) < 1.0)
+    ok &= check("le segment suivant a suivi", abs(edge(1) - edge()) < 1e-6)
     ok &= check("segments toujours contigus", _contiguous(analysis.segments))
     app.undo()
     app.update()
-    ok &= check("saisie annulable", abs(after.start - before.end) < 1e-6)
+    ok &= check("saisie annulable", abs(edge() - origin) < 1e-6)
 
     # Un horaire hors des bornes ne doit rien écrire, et surtout pas se perdre :
     # celui qu'on vient de relever dans la forme d'onde n'est pas de ceux qu'on
     # retient par cœur.
-    keep = before.end
+    keep = edge()
     app.edit_time(row, "end")
     app.update()
     if app._title_editor is not None:
@@ -460,7 +466,7 @@ def main(wav: Path) -> int:
         app._title_editor.insert(0, "9:59:59")
         app._title_editor.event_generate("<Return>")
         app.update()
-    ok &= check("horaire hors bornes refusé", abs(before.end - keep) < 1e-6)
+    ok &= check("horaire hors bornes refusé", abs(edge() - keep) < 1e-6)
     ok &= check("la saisie reste ouverte pour être corrigée",
                 app._title_editor is not None)
     if app._title_editor is not None:
@@ -473,7 +479,7 @@ def main(wav: Path) -> int:
         app._title_editor.insert(0, "trois heures")
         app._title_editor.event_generate("<Return>")
         app.update()
-        ok &= check("horaire illisible refusé", abs(before.end - keep) < 1e-6)
+        ok &= check("horaire illisible refusé", abs(edge() - keep) < 1e-6)
         app._title_editor.event_generate("<Escape>")
         app.update()
 

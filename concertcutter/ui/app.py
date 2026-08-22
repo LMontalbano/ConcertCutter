@@ -31,7 +31,7 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
-from .. import __version__, project, video
+from .. import __version__, edits, project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
@@ -51,17 +51,6 @@ from .seekbar import SeekBar
 from .waveform import WaveformView
 
 PREVIEW_LEAD_S = 5.0
-SPLIT_GAP_S = 2.0
-
-# Ce qu'une coupe doit laisser de part et d'autre. Aligné sur la marge du
-# glissé de frontière : au-dessous, le segment produit ne serait plus
-# saisissable à la souris et il faudrait annuler pour s'en défaire.
-MIN_PIECE_S = 0.5
-
-# En deçà, « début de section » considère qu'on y est déjà et remonte à la
-# section précédente : sans ce jeu, la touche resterait bloquée sur place dès
-# que la lecture aurait franchi le début d'un cheveu.
-BACK_STEP_S = 1.5
 
 # Délai avant d'écrire le travail en cours. Assez long pour regrouper la rafale
 # d'un « tout décocher », assez court pour qu'une fermeture brutale ne coûte
@@ -454,7 +443,7 @@ class App(tk.Tk):
         split_button.pack(side="left", padx=(8, 0))
         tooltip.attach(split_button,
                        "Sépare le morceau sous le curseur en deux pistes "
-                       f"distinctes, en insérant un blanc de {SPLIT_GAP_S:.0f} s. "
+                       f"distinctes, en insérant un blanc de {edits.SPLIT_GAP_S:.0f} s. "
                        "Sans ce blanc, les deux moitiés resteraient un seul "
                        "morceau à l'export.")
         self._rule(tools)
@@ -1184,8 +1173,7 @@ class App(tk.Tk):
         """Tous les points d'ancrage du concert, dans l'ordre."""
         if not self.analysis:
             return [0.0]
-        return ([segment.start for segment in self.analysis.segments]
-                + [self.analysis.duration])
+        return edits.marks(self.analysis.segments, self.analysis.duration)
 
     def go_section_start(self) -> None:
         """Revient au début de la section écoutée ; deux fois de suite, à la précédente.
@@ -1196,12 +1184,8 @@ class App(tk.Tk):
         """
         if not self.analysis:
             return
-        moment = self._playhead()
-        starts = [mark for mark in self._marks() if mark <= moment + 1e-6]
-        target = starts[-1] if starts else 0.0
-        if moment - target < BACK_STEP_S:
-            earlier = [mark for mark in starts if mark < target - 1e-6]
-            target = earlier[-1] if earlier else 0.0
+        target = edits.section_start(self.analysis.segments,
+                                     self.analysis.duration, self._playhead())
         self._place_playhead(target)
         self._set_status(f"Début de section — {_hms(target)}.")
 
@@ -1209,13 +1193,9 @@ class App(tk.Tk):
         """Saute à la frontière suivante ou précédente."""
         if not self.analysis:
             return
-        moment = self._playhead()
-        marks = self._marks()
-        if forward:
-            target = next((mark for mark in marks if mark > moment + 1e-3), marks[-1])
-        else:
-            target = next((mark for mark in reversed(marks) if mark < moment - 1e-3),
-                          0.0)
+        target = edits.next_boundary(self.analysis.segments,
+                                     self.analysis.duration, self._playhead(),
+                                     forward)
         self._place_playhead(target)
 
     def toggle_loop(self) -> None:
@@ -1231,9 +1211,7 @@ class App(tk.Tk):
             self._loop_position = None
             self._set_status("Boucle arrêtée.")
             return
-        moment = self._playhead()
-        position = next((index for index, segment in enumerate(self.analysis.segments)
-                         if segment.start <= moment < segment.end), None)
+        position = edits.segment_at(self.analysis.segments, self._playhead())
         if position is None:
             self._set_status("Aucun segment sous le curseur.")
             return
@@ -1449,28 +1427,9 @@ class App(tk.Tk):
         index = self.wave.selected
         if not self.analysis or index is None:
             return
-        self._remember()
-        segments = self.analysis.segments
-        before, after = segments[index], segments[index + 1]
-        # Le segment fusionné prend le type du plus long des deux : supprimer la
-        # frontière entre un morceau et un blanc court signifie presque toujours
-        # que le blanc n'en était pas un.
-        kind = before.kind if before.duration >= after.duration else after.kind
-        # Le numéro et le titre survivent à la fusion : sans eux, supprimer la
-        # frontière d'entrée du morceau 7 en faisait un morceau neuf, qui
-        # prenait le numéro suivant le plus grand et sortait à l'export sous un
-        # nom que rien à l'écran n'avait annoncé.
-        segments[index : index + 2] = [Segment(
-            start=before.start, end=after.end, kind=kind,
-            confidence=min(before.confidence, after.confidence),
-            stats=before.stats if before.duration >= after.duration else after.stats,
-            title=before.title or after.title,
-            number=before.number or after.number,
-        )]
-        self.analysis.normalize()
+        if not self._edit(lambda segments: edits.delete_boundary(segments, index)):
+            return
         self.wave.select(None)
-        self.wave.set_segments(self.analysis.segments)
-        self._refresh_table()
         self._set_status(f"Frontière supprimée — "
                          f"{len(self.analysis.tracks)} morceaux.", log=True)
 
@@ -1507,47 +1466,34 @@ class App(tk.Tk):
         if not self.analysis or self.wave.cursor is None:
             self._set_status("Cliquer d'abord dans la forme d'onde.")
             return
-
         moment = self.wave.cursor
-        segments = self.analysis.segments
-        half = SPLIT_GAP_S / 2.0 if join else 0.0
-
-        for index, segment in enumerate(segments):
-            if not (segment.start < moment < segment.end):
-                continue
-            if join and segment.kind != MUSIC:
-                self._set_status("Un blanc n'a pas à être séparé en morceaux. "
-                                 "« Couper ici » y pose une frontière.")
-                return
-            if (moment - half - segment.start < MIN_PIECE_S
-                    or segment.end - (moment + half) < MIN_PIECE_S):
-                self._set_status("Trop près du bord du segment pour couper ici.")
-                return
-
-            self._remember()
-            pieces = [
-                # Le titre et le numéro restent à gauche : c'est là qu'ils ont
-                # été posés, et la moitié droite est une portion qu'on n'a pas
-                # encore nommée. Les laisser tomber renommait le morceau 3 en
-                # 26 au premier coup de ciseaux.
-                Segment(segment.start, moment - half, segment.kind,
-                        segment.confidence, dict(segment.stats), segment.title,
-                        segment.number),
-                Segment(moment + half, segment.end, segment.kind,
-                        segment.confidence, dict(segment.stats)),
-            ]
-            if join:
-                pieces.insert(1, Segment(moment - half, moment + half, GAP, 0.0,
-                                         dict(segment.stats)))
-            segments[index : index + 1] = pieces
-            self.wave.set_segments(segments)
-            self._refresh_table()
-            what = "Morceau séparé" if join else "Frontière posée"
-            self._set_status(f"{what} à {_hms(moment)} — "
-                             f"{len(self.analysis.tracks)} morceaux.", log=True)
+        operation = edits.split_track if join else edits.split_here
+        if not self._edit(lambda segments: operation(segments, moment)):
             return
+        what = "Morceau séparé" if join else "Frontière posée"
+        self._set_status(f"{what} à {_hms(moment)} — "
+                         f"{len(self.analysis.tracks)} morceaux.", log=True)
 
-        self._set_status("Aucun segment sous le curseur.")
+    def _edit(self, operation, quiet: bool = False) -> bool:
+        """Applique une opération de `edits` au concert ouvert.
+
+        Toute la couture entre les fonctions pures et la fenêtre tient ici :
+        mémoriser l'état d'avant, remplacer les segments, rafraîchir les vues,
+        et montrer le refus s'il y en a un.
+        """
+        if not self.analysis:
+            return False
+        try:
+            segments = operation(self.analysis.segments)
+        except edits.EditError as refusal:
+            if not quiet:
+                self._set_status(str(refusal))
+            return False
+        self._remember()
+        self.analysis.segments = segments
+        self.wave.set_segments(self.analysis.segments)
+        self._refresh_table()
+        return True
 
     def set_segment_kind(self, position: int, kind: str) -> None:
         """Fixe le sort d'un segment : conservé ou supprimé."""
@@ -1561,31 +1507,9 @@ class App(tk.Tk):
                          f"{len(self.analysis.tracks)} morceaux.", log=True)
 
     def _apply_kinds(self, wanted: dict[int, str]) -> bool:
-        """Écrit le sort de plusieurs segments d'un coup. Vrai si quelque chose a bougé.
-
-        Aucune fusion ici, contrairement aux autres éditions : les segments
-        changent de type mais restent des entités distinctes, donc l'opération
-        se défait. Les fusionner effacerait leurs frontières et rendrait le
-        geste irréversible — tout décocher réduirait le concert à un unique
-        blanc, et l'analyse serait à refaire.
-
-        Une seule mémorisation pour l'ensemble : sans elle, décocher vingt-cinq
-        segments demanderait vingt-cinq « Annuler » pour revenir en arrière.
-        """
-        if not self.analysis:
-            return False
-        segments = self.analysis.segments
-        changes = {position: kind for position, kind in wanted.items()
-                   if 0 <= position < len(segments)
-                   and segments[position].kind != kind}
-        if not changes:
-            return False
-        self._remember()
-        for position, kind in changes.items():
-            segments[position].kind = kind
-        self.wave.set_segments(segments)
-        self._refresh_table()
-        return True
+        """Écrit le sort de plusieurs segments d'un coup. Vrai si quelque chose a bougé."""
+        return self._edit(lambda segments: edits.set_kinds(segments, wanted),
+                          quiet=True)
 
     def toggle_segment(self, position: int) -> None:
         """Inverse le sort d'un segment."""
@@ -1972,23 +1896,22 @@ class App(tk.Tk):
             self._set_status("Le début du concert et sa fin ne se déplacent pas.")
             return
 
-        before, after = segments[index], segments[index + 1]
-        floor, ceiling = before.start + MIN_PIECE_S, after.end - MIN_PIECE_S
+        before = segments[index]
 
         def apply(value: str) -> str:
             try:
                 moment = parse_time(value)
             except ValueError:
                 return "Horaire illisible. Attendu : 12:34, 1:02:14 ou 754."
-            if not (floor <= moment <= ceiling):
-                return (f"À placer entre {_hms(floor)} et {_hms(ceiling)} — "
-                        "au-delà, la frontière traverserait un segment voisin.")
             if abs(moment - before.end) < 1e-6:
                 return ""
+            try:
+                moved = edits.move_boundary(self.analysis.segments, index, moment)
+            except edits.EditError as refusal:
+                return str(refusal)
             self._remember()
-            before.end = moment
-            after.start = moment
-            self.wave.set_segments(segments)
+            self.analysis.segments = moved
+            self.wave.set_segments(self.analysis.segments)
             self.wave.ensure_visible(moment)
             self._refresh_table()
             self._set_status(f"Frontière déplacée à {_hms(moment)}.", log=True)
