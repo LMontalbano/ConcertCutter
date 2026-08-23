@@ -17,7 +17,11 @@
   import { hms, parseTime, tenths, trackLabel } from '../lib/format'
   import { drawCursor, drawHandle, paint, palette, surface, type Palette } from '../lib/wave'
 
-  const STEP_S = 0.1
+  // Un demi-second par appui. Le dixième était plus fin que le geste : caler
+  // une coupe à l'oreille demande de bouger d'une demi-seconde, et il en
+  // fallait cinq clics. La frappe au clavier reste au dixième pour qui veut
+  // la précision, et « Caler » va la chercher tout seul.
+  const STEP_S = 0.5
 
   let canvas = $state<HTMLCanvasElement>(null!)
   let colours: Palette | null = null
@@ -25,6 +29,8 @@
   let width = $state(736)
   let dragging = $state<'start' | 'end' | null>(null)
   let preview = $state<{ edge: 'start' | 'end'; at: number } | null>(null)
+  let renaming = $state(false)
+  let draft = $state('')
   let pending = 0
 
   const segment = $derived(session.segment)
@@ -171,6 +177,35 @@
     await session.edit({ op: 'refine_boundary', index }, 'Coupe calée sur l\'attaque.')
   }
 
+  /* Nommer depuis la carte, et non plus seulement depuis la liste. Le titre
+     est ce qu'on décide en écoutant le morceau, c'est-à-dire ici — aller le
+     chercher dans la colonne de gauche demandait de quitter des yeux ce qu'on
+     était en train de juger. Le serveur écrit en tête de la suite, si bien
+     qu'on peut nommer depuis n'importe quel segment du morceau. */
+  function startRename(): void {
+    if (!segment || segment.kind !== 'music') return
+    draft = segment.trackTitle
+    renaming = true
+  }
+
+  async function rename(): Promise<void> {
+    if (!renaming || !segment) return
+    renaming = false
+    if (draft.trim() === segment.trackTitle) return
+    await session.edit(
+      { op: 'set_title', index: segment.index, title: draft },
+      'Titre enregistré.',
+    )
+  }
+
+  function onTitleKey(event: KeyboardEvent): void {
+    if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+    if (event.key === 'Escape') {
+      renaming = false
+      ;(event.target as HTMLInputElement).blur()
+    }
+  }
+
   async function setKind(kind: 'music' | 'gap'): Promise<void> {
     if (!segment || segment.kind === kind) return
     await session.edit({ op: 'set_kind', index: segment.index, kind })
@@ -224,7 +259,28 @@
       <div class="mono kind">
         {segment.kind === 'music' ? `MORCEAU ${trackLabel(segment.number)}` : 'BLANC'}
       </div>
-      <div class="name">{segment.trackTitle || 'Sans titre'}</div>
+      {#if renaming}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="name typing"
+          bind:value={draft}
+          onblur={rename}
+          onkeydown={onTitleKey}
+          autofocus
+          placeholder="Sans titre"
+          aria-label="Titre du morceau"
+        />
+      {:else}
+        <button
+          class="name"
+          class:empty={!segment.trackTitle}
+          onclick={startRename}
+          disabled={segment.kind !== 'music'}
+          title={segment.kind === 'music' ? 'Cliquer pour nommer' : "Un blanc ne se nomme pas"}
+        >
+          {segment.trackTitle || 'Sans titre'}
+        </button>
+      {/if}
     </div>
     {#if segment.confidence}
       <span class="pill">confiance {Math.round(segment.confidence * 100)} %</span>
@@ -259,30 +315,49 @@
     ></canvas>
 
     <div class="tools">
-      {#each [['start', 'début'], ['end', 'fin']] as [edge, label] (edge)}
-        <div class="stepper" class:off={(edge === 'start' ? edges.start : edges.end) < 0}>
-          <button onclick={() => nudge(edge as 'start' | 'end', -1)} title="Reculer d'un dixième">
-            −
-          </button>
-          <input
-            class="mono"
-            value={tenths(edge === 'start' ? segment.start : segment.end)}
-            onchange={(event) => typed(edge as 'start' | 'end', event)}
-          />
-          <button onclick={() => nudge(edge as 'start' | 'end', 1)} title="Avancer d'un dixième">
-            +
-          </button>
+      <!-- Chaque borne forme un groupe nommé : le libellé au-dessus de son
+           champ, et « Caler » attaché dessous. Il était auparavant posé après
+           l'un et avant l'autre, si bien qu'on lisait « début Caler » comme
+           une seule étiquette et qu'on ne savait pas à quelle borne le bouton
+           s'appliquait — ni qu'il était cliquable. -->
+      {#each [['start', 'Début'], ['end', 'Fin']] as [edge, label] (edge)}
+        {@const index = edge === 'start' ? edges.start : edges.end}
+        {@const fixed = index < 0 || index > lastEdge}
+        <div class="edge" class:off={fixed}>
+          <span class="label">{label}</span>
+          <div class="row">
+            <div class="stepper">
+              <button
+                onclick={() => nudge(edge as 'start' | 'end', -1)}
+                title="Reculer d'une demi-seconde"
+                aria-label="{label} : reculer d'une demi-seconde"
+              >
+                −
+              </button>
+              <input
+                class="mono"
+                value={tenths(edge === 'start' ? segment.start : segment.end)}
+                onchange={(event) => typed(edge as 'start' | 'end', event)}
+                aria-label="{label} du segment"
+              />
+              <button
+                onclick={() => nudge(edge as 'start' | 'end', 1)}
+                title="Avancer d'une demi-seconde"
+                aria-label="{label} : avancer d'une demi-seconde"
+              >
+                +
+              </button>
+            </div>
+            <button
+              class="btn snap"
+              disabled={fixed || !session.state?.hasLevels}
+              onclick={() => snap(edge as 'start' | 'end')}
+              title="Chercher la vraie attaque autour de cette coupe, comme le fait le détecteur"
+            >
+              Caler
+            </button>
+          </div>
         </div>
-        <span class="edge">{label}</span>
-        <button
-          class="btn quiet snap"
-          disabled={!session.state?.hasFeatures ||
-            (edge === 'start' ? edges.start : edges.end) < 0}
-          onclick={() => snap(edge as 'start' | 'end')}
-          title="Rejouer le recalage du détecteur sur cette coupe"
-        >
-          Caler
-        </button>
       {/each}
 
       <div class="spacer"></div>
@@ -311,13 +386,35 @@
     font: 600 26px/1.2 var(--sans);
     letter-spacing: -0.015em;
     color: var(--ink);
+    border: 0;
     border-bottom: 2px solid var(--accent);
     display: inline-block;
-    padding-bottom: 2px;
+    padding: 0 0 2px;
     max-width: 460px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: left;
+    background: none;
+  }
+
+  .name.empty {
+    color: var(--hint);
+    font-weight: 500;
+  }
+
+  button.name:hover:not(:disabled) {
+    border-bottom-color: var(--ink);
+  }
+
+  button.name:disabled {
+    opacity: 1;
+    border-bottom-color: var(--gap-rule);
+  }
+
+  input.name.typing {
+    outline: none;
+    min-width: 320px;
   }
 
   .pill {
@@ -383,10 +480,27 @@
 
   .tools {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 14px;
+    align-items: flex-end;
+    gap: 18px;
+    margin-top: 16px;
     flex-wrap: wrap;
+  }
+
+  .edge {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .edge.off {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  .edge .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
   .stepper {
@@ -395,11 +509,6 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     overflow: hidden;
-  }
-
-  .stepper.off {
-    opacity: 0.4;
-    pointer-events: none;
   }
 
   .stepper button {
@@ -427,15 +536,10 @@
     background: none;
   }
 
-  .edge {
-    font: 400 12px var(--sans);
-    color: var(--ink-3);
-  }
-
   .snap {
-    height: 26px;
-    padding: 0 9px;
-    font-size: 11.5px;
+    height: 32px;
+    padding: 0 11px;
+    font-size: 12px;
   }
 
   .spacer {

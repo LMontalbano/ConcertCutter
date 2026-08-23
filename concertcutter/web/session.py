@@ -236,22 +236,28 @@ class Session:
     def refine(self, index: int) -> dict:
         """Recale la frontière `index` sur l'attaque la plus proche.
 
-        Refusé tant que l'analyse n'a pas tourné : le recalage lit les
-        descripteurs, et les recalculer pour un clic prendrait la minute qu'on
-        vient justement d'économiser en reprenant un travail.
+        Ne demande que l'enveloppe, donc marche dès que la forme d'onde est à
+        l'écran — analyse ou pas, travail repris ou pas. Voir
+        `detect_hmm.refine_boundary` : le recalage n'a jamais lu que le niveau.
         """
         with self._lock:
             if self.analysis is None:
                 raise SessionError("Aucune segmentation.")
-            if self.features is None:
-                raise SessionError(
-                    "Le recalage a besoin des descripteurs : relancez l'analyse.")
+            if not len(self.levels):
+                raise SessionError("La forme d'onde n'est pas encore lue.")
             segments = self.analysis.segments
             if not (0 <= index < len(segments) - 1):
                 raise SessionError("Frontière inconnue.")
             entering = segments[index + 1].kind == MUSIC
-            moment = refine_boundary(self.features, segments[index].end,
+            here = segments[index].end
+            moment = refine_boundary(self.levels, self.levels_fps, here,
                                      entering, self.params())
+        # Un recalage qui ne déplace rien n'est pas un geste : sur un concert
+        # qu'on vient d'analyser, toutes les frontières sont déjà là où le
+        # détecteur les a recalées. Le dire, plutôt que d'empiler dans
+        # l'historique une annulation qui ne défait rien.
+        if abs(moment - here) < 1e-6:
+            raise SessionError("Cette coupe est déjà sur l'attaque.")
         return self.apply(
             lambda current: edits.move_boundary(current, index, moment))
 

@@ -181,6 +181,13 @@ def main(wav: Path) -> int:
             client.post("/api/undo")
             client.post("/api/undo")
 
+        # Une coupe qu'on n'a pas touchée est déjà là où le détecteur l'a
+        # recalée. Le bouton le disait autrefois par un silence, et empilait
+        # dans l'historique une annulation qui ne défaisait rien.
+        ok &= check("une coupe déjà calée le dit, au lieu de faire semblant",
+                    client.status("/api/edit",
+                                  {"op": "refine_boundary", "index": 1}) == 400)
+
         print("\nTitres et sort des segments")
         named = client.post("/api/edit",
                             {"op": "set_title", "index": 0, "title": "Ouverture"})
@@ -193,6 +200,23 @@ def main(wav: Path) -> int:
                     dropped["segments"][0]["title"] == "Ouverture")
         client.post("/api/undo")
 
+        # Un morceau peut compter plusieurs segments — c'est ce que « couper
+        # ici » produit. Le titre s'écrit alors en tête de la suite, quel que
+        # soit le segment depuis lequel on l'a saisi : ailleurs, `track_at` ne
+        # l'aurait jamais lu, la tête ayant la priorité.
+        head = next(index for index, segment in enumerate(
+            client.get("/api/state")["segments"]) if segment["kind"] == "music")
+        piece = client.get("/api/state")["segments"][head]
+        cut = client.post("/api/edit", {
+            "op": "split_here", "moment": (piece["start"] + piece["end"]) / 2})
+        if cut["segments"][head + 1]["kind"] == "music":
+            from_tail = client.post("/api/edit", {
+                "op": "set_title", "index": head + 1, "title": "Depuis la queue"})
+            ok &= check("nommer depuis la seconde moitié écrit en tête du morceau",
+                        from_tail["segments"][head]["title"] == "Depuis la queue")
+            client.post("/api/undo")
+        client.post("/api/undo")
+
         print("\nTravail en cours")
         saved = client.post("/api/save")
         ok &= check("un point de reprise est écrit",
@@ -200,6 +224,31 @@ def main(wav: Path) -> int:
         listed = client.get("/api/recent")["projects"]
         ok &= check("il figure dans les travaux récents",
                     any(entry["path"] == saved["saved"] for entry in listed))
+
+        print("\nUn travail repris cale ses coupes sans réanalyser")
+        # Le recalage ne lit que le niveau, et l'enveloppe calculée à
+        # l'ouverture *est* ce niveau — `audio.envelope` et
+        # `spectral.extract().rms_db` s'accordent au millionième de décibel.
+        # Rouvrir un travail le lendemain est le cas courant : y trouver le
+        # bouton « Caler » grisé pour toujours ne l'était pas moins.
+        client.wait(client.post("/api/open", {"path": saved["saved"]}))
+        resumed = client.get("/api/state")
+        ok &= check("les descripteurs ne sont pas rechargés",
+                    not resumed["hasFeatures"])
+        ok &= check("mais l'enveloppe est là", resumed["hasLevels"])
+        ok &= check(f"le découpage est retrouvé ({len(resumed['tracks'])} morceaux)",
+                    len(resumed["tracks"]) > 0)
+        edge = next(index for index, segment in enumerate(resumed["segments"])
+                    if segment["kind"] == "music")
+        nudged = client.post("/api/edit", {
+            "op": "move_boundary", "index": edge,
+            "moment": resumed["segments"][edge]["end"] + 0.4})
+        back = client.post("/api/edit", {"op": "refine_boundary", "index": edge})
+        ok &= check("« Caler » marche sans analyse",
+                    abs(back["segments"][edge]["end"]
+                        - resumed["segments"][edge]["end"])
+                    < abs(nudged["segments"][edge]["end"]
+                          - resumed["segments"][edge]["end"]))
     finally:
         httpd.shutdown()
 

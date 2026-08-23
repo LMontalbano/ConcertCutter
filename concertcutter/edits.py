@@ -197,17 +197,33 @@ def bounds(segments: list[Segment], index: int) -> tuple[float, float]:
 
 
 def set_title(segments: list[Segment], position: int, title: str) -> list[Segment]:
-    """Nomme le morceau ouvert par ce segment.
+    """Nomme le morceau auquel appartient ce segment.
 
-    Le titre est porté par le segment qui ouvre le morceau, jamais par le
+    Le titre est porté par le segment qui *ouvre* le morceau, jamais par le
     numéro de piste : il suit ainsi son morceau quoi qu'il arrive aux
-    frontières.
+    frontières. On écrit donc en tête de la suite, et non sur le segment
+    désigné — sinon nommer depuis un segment du milieu poserait un titre que
+    `Analysis.track_at` n'irait jamais lire, la tête ayant la priorité.
     """
     if not (0 <= position < len(segments)):
         raise EditError("Segment inconnu.")
     result = copy(segments)
-    result[position].title = title.strip()
+    result[track_start(segments, position)].title = title.strip()
     return result
+
+
+def track_start(segments: list[Segment], position: int) -> int:
+    """Rang du segment qui ouvre le morceau contenant celui-ci.
+
+    Un blanc n'ouvre rien : il se porte lui-même, et garde son titre en
+    réserve pour le jour où on le recoche.
+    """
+    if segments[position].kind != MUSIC:
+        return position
+    head = position
+    while head > 0 and segments[head - 1].kind == MUSIC:
+        head -= 1
+    return head
 
 
 # -- navigation ------------------------------------------------------------

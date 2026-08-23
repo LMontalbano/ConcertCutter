@@ -51,6 +51,10 @@
   }
 
   function startEdit(segment: Segment): void {
+    // Le simple clic lance le morceau ; le double clic vient le nommer, et
+    // taper un titre par-dessus le son qu'on vient de déclencher serait
+    // pénible.
+    session.stop()
     editing = segment.index
     draft = segment.trackTitle
   }
@@ -98,8 +102,8 @@
           aria-label="Morceau {trackLabel(segment.number)}{segment.trackTitle
             ? `, ${segment.trackTitle}`
             : ''}"
-          onclick={() => session.select(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
+          onclick={() => session.play(segment.index)}
+          onkeydown={(event) => event.key === 'Enter' && session.play(segment.index)}
         >
           <span class="mono number">{trackLabel(segment.number)}</span>
           <div class="body">
@@ -118,7 +122,7 @@
                 class="title"
                 class:empty={!segment.trackTitle}
                 ondblclick={() => startEdit(segment)}
-                onclick={() => session.select(segment.index)}
+                onclick={() => session.play(segment.index)}
                 title="Double-cliquer pour nommer"
               >
                 {segment.trackTitle || 'Sans titre'}
@@ -140,8 +144,8 @@
           role="button"
           tabindex="0"
           aria-label="Blanc de {spell(segment.end - segment.start)}"
-          onclick={() => session.select(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
+          onclick={() => session.play(segment.index)}
+          onkeydown={(event) => event.key === 'Enter' && session.play(segment.index)}
         >
           <span class="dash"></span>
           <span class="mono">blanc {spell(segment.end - segment.start)}</span>

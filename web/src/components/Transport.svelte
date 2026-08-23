@@ -76,20 +76,23 @@
 <style>
   footer {
     margin-top: auto;
-    height: 58px;
+    /* Assez haut pour que les commandes ne touchent pas le bord de la fenêtre.
+       À cinquante-huit pixels sans marge, le bouton de lecture rasait le bas
+       de l'écran : on visait un rond de trente-deux pixels posé sur l'arête. */
+    height: 76px;
     flex: none;
     border-top: 1px solid var(--border);
     background: var(--surface);
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 0 26px;
+    padding: 0 26px 8px;
   }
 
   .play {
-    width: 32px;
-    height: 32px;
-    border-radius: 17px;
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
     background: var(--ink);
     color: #fff;
     display: flex;
