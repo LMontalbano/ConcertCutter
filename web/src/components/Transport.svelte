@@ -94,7 +94,7 @@
     height: 36px;
     border-radius: 18px;
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     display: flex;
     align-items: center;
     justify-content: center;

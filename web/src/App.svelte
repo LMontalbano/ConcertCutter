@@ -233,7 +233,7 @@
     bottom: 74px;
     transform: translateX(-50%);
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     font-size: 12.5px;
     padding: 9px 16px;
     border-radius: 20px;
@@ -246,7 +246,7 @@
   .veil {
     position: fixed;
     inset: 0;
-    background: rgba(27, 32, 41, 0.28);
+    background: var(--veil);
     display: grid;
     place-items: center;
     z-index: 50;

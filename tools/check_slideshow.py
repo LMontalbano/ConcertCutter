@@ -35,7 +35,7 @@ import numpy as np
 import soundfile as sf
 
 from concertcutter import video
-from concertcutter.render import DATA_DIR, RenderParams, render
+from concertcutter.render import DATA_DIR, RenderParams, _video_params, render
 from concertcutter.segment import Analysis
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -52,7 +52,26 @@ def main(segments_path: Path, root: Path) -> int:
     titles = [f"Piste {number}"
               for number in range(1, len(analysis.tracks) + 1)]
 
-    print("Fondu enchaîné entre morceaux")
+    # Ce contrôle-ci ne coûte rien : il ne lit que la traduction des réglages,
+    # sans encoder. Il tient pourtant la promesse du réglage — « une image par
+    # morceau » veut dire *celle-là*, et pas une autre.
+    print("Une seule image par morceau, plutôt que le diaporama")
+    stills = ("un.jpg", "deux.jpg", "trois.jpg")
+    rolling = RenderParams(video_images=stills)
+    fixed = RenderParams(video_images=stills, video_one_per_track=True)
+    ok &= _check("sans l'option, chaque morceau reçoit toutes les images",
+                 _video_params(rolling, 0).stills() == list(stills))
+    ok &= _check("avec l'option, le morceau n reçoit la n-ième",
+                 [_video_params(fixed, rank).stills() for rank in range(3)]
+                 == [["un.jpg"], ["deux.jpg"], ["trois.jpg"]])
+    ok &= _check("et le cycle recommence s'il y a moins d'images que de morceaux",
+                 _video_params(fixed, 3).stills() == ["un.jpg"])
+    # La vidéo du concert entier n'a pas de morceau à suivre : son fond garde
+    # le diaporama, faute de quoi deux heures passeraient sur une seule photo.
+    ok &= _check("le concert entier garde son diaporama",
+                 _video_params(fixed).stills() == list(stills))
+
+    print("\nFondu enchaîné entre morceaux")
     plain = render(analysis, root / "sec", titles,
                    RenderParams(write_tracks=False))
     blended = render(analysis, root / "fondu", titles,

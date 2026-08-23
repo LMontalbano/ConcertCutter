@@ -176,7 +176,8 @@
         </button>
       </section>
 
-      <section>
+      <div class="right">
+      <section class="scrolls">
         <h2><span class="step">2</span> Sous quelle forme ?</h2>
 
         <span class="label">Audio</span>
@@ -266,40 +267,70 @@
               <button class="btn quiet" onclick={addImages}>Ajouter des images…</button>
             </div>
             {#if choice.images.length}
+              <!-- Des vignettes, et non des noms de fichiers. « DSC_0421.jpg »
+                   ne dit pas quelle photo c'est : on choisissait le fond de ses
+                   vidéos à l'aveugle, et l'ordre du diaporama encore plus. -->
               <ul>
                 {#each choice.images as image, index (image + index)}
                   <li>
+                    <img src={api.imageUrl(image)} alt={image.split(/[\\/]/).pop()} />
                     <span class="mono rank">{index + 1}</span>
-                    <span class="path" title={image}>{image.split(/[\\/]/).pop()}</span>
-                    <button onclick={() => moveImage(index, -1)} aria-label="Monter">↑</button>
-                    <button onclick={() => moveImage(index, 1)} aria-label="Descendre">↓</button>
-                    <button
-                      onclick={() =>
-                        (choice.images = choice.images.filter((_, rank) => rank !== index))}
-                      aria-label="Retirer"
-                    >
-                      ×
-                    </button>
+                    <div class="handles">
+                      <button onclick={() => moveImage(index, -1)} aria-label="Avancer dans l'ordre" title="Avancer">
+                        ‹
+                      </button>
+                      <button onclick={() => moveImage(index, 1)} aria-label="Reculer dans l'ordre" title="Reculer">
+                        ›
+                      </button>
+                      <button
+                        class="drop"
+                        onclick={() =>
+                          (choice.images = choice.images.filter((_, rank) => rank !== index))}
+                        aria-label="Retirer cette image"
+                        title="Retirer"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <span class="caption" title={image}>{image.split(/[\\/]/).pop()}</span>
                   </li>
                 {/each}
               </ul>
-              <em class="note">
-                Les images se relaient dans l'ordre de la liste, une toutes les
-                huit secondes, et le cycle recommence aussi longtemps que dure
-                le son. Chacune garde ses proportions et se centre sur du noir.
-              </em>
-              <div class="knob">
-                <label for="slide">Fondu entre images</label>
-                <input
-                  id="slide"
-                  class="mono"
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  bind:value={choice.slide_fade}
-                />
-                <span class="unit">s</span>
-              </div>
+
+              <label class="line tight">
+                <input type="checkbox" bind:checked={choice.one_per_track} />
+                <span>
+                  <b>Une seule image par morceau</b>
+                  <em>
+                    Le morceau 1 reçoit la première image, le 2 la deuxième, et
+                    ainsi de suite ; le cycle recommence s'il y a moins d'images
+                    que de morceaux. Sans cette case, les images défilent toutes
+                    sous chaque morceau — la douzième photo passe alors sous la
+                    vidéo du premier. Sans effet sur le concert en un seul
+                    fichier, où le fond n'a pas de morceau à suivre.
+                  </em>
+                </span>
+              </label>
+
+              {#if !choice.one_per_track}
+                <em class="note">
+                  Les images se relaient dans l'ordre ci-dessus, une toutes les
+                  huit secondes, et le cycle recommence aussi longtemps que dure
+                  le son. Chacune garde ses proportions et se centre sur du noir.
+                </em>
+                <div class="knob">
+                  <label for="slide">Fondu entre images</label>
+                  <input
+                    id="slide"
+                    class="mono"
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    bind:value={choice.slide_fade}
+                  />
+                  <span class="unit">s</span>
+                </div>
+              {/if}
             {:else}
               <em class="note">
                 Photos du concert, pochette, affiche. Le titre du morceau est
@@ -310,7 +341,7 @@
         {/if}
       </section>
 
-      <section>
+      <section class="anchored">
         <h2><span class="step">3</span> Où ?</h2>
         <p class="why">
           Le concert reçoit son propre dossier ici, nommé d'après
@@ -324,6 +355,7 @@
           {/if}
         </div>
       </section>
+      </div>
     </div>
 
     {#if conflict}
@@ -366,7 +398,7 @@
   .veil {
     position: fixed;
     inset: 0;
-    background: rgba(27, 32, 41, 0.28);
+    background: var(--veil);
     display: grid;
     place-items: center;
     padding: 28px;
@@ -401,24 +433,50 @@
     margin-left: auto;
   }
 
+  /* Deux colonnes, et **c'est la colonne de droite qui défile**, pas la
+     fenêtre. Tout défilait, et choisir six fonds vidéo poussait « Où ? » hors
+     de l'écran : la troisième question disparaissait au moment précis où l'on
+     venait de répondre à la deuxième. Elle est maintenant ancrée en bas de sa
+     colonne, toujours visible, quoi qu'on empile au-dessus. */
   .body {
     flex: 1;
-    overflow-y: auto;
-    padding: 4px 24px 20px;
+    min-height: 0;
+    padding: 4px 24px 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
     gap: 0 28px;
-    align-items: start;
+    align-items: stretch;
+  }
+
+  .right {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   section {
     padding: 20px 0 4px;
   }
 
-  /* La première question occupe la colonne de gauche sur toute la hauteur :
-     vingt-cinq morceaux ne tiennent pas sous un titre. */
-  section:first-child {
-    grid-row: span 2;
+  /* La première question occupe sa colonne entière : vingt-cinq morceaux ne
+     tiennent pas sous un titre. */
+  .body > section:first-child {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .scrolls {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+
+  .anchored {
+    flex: none;
+    border-top: 1px solid var(--rule);
+    padding-bottom: 18px;
   }
 
   h2 {
@@ -436,7 +494,7 @@
     height: 20px;
     border-radius: 10px;
     background: var(--ink);
-    color: #fff;
+    color: var(--on-ink);
     font: 600 11px var(--mono);
   }
 
@@ -448,7 +506,8 @@
   }
 
   .picks {
-    max-height: 320px;
+    flex: 1;
+    min-height: 120px;
     overflow-y: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -588,43 +647,89 @@
 
   .images ul {
     list-style: none;
-    margin: 0 0 8px;
+    margin: 0 0 10px;
     padding: 0;
-    max-height: 108px;
-    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+    gap: 8px;
   }
 
   .images li {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 0;
-    font-size: 12px;
+    position: relative;
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--rule);
+    border: 1px solid var(--border);
+  }
+
+  .images img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
   }
 
   .rank {
-    color: var(--ink-3);
-    font-size: 11px;
-    width: 14px;
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--ink);
+    color: var(--on-ink);
+    font-size: 10px;
+    font-weight: 500;
   }
 
-  .path {
-    flex: 1;
+  /* Les commandes n'apparaissent qu'au survol : douze vignettes couvertes de
+     six boutons chacune ne montreraient plus les photos. */
+  .handles {
+    position: absolute;
+    inset: 0 0 auto auto;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .images li:hover .handles,
+  .images li:focus-within .handles {
+    opacity: 1;
+  }
+
+  .handles button {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .handles button:hover {
+    background: var(--ink);
+    color: var(--on-ink);
+  }
+
+  .handles .drop:hover {
+    background: var(--gap);
+    color: var(--on-ink);
+  }
+
+  .caption {
+    display: block;
+    padding: 4px 6px;
+    font-size: 10.5px;
+    color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .images li button {
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
-    color: var(--ink-3);
-  }
-
-  .images li button:hover {
-    background: var(--rule);
-    color: var(--ink);
+  .line.tight {
+    padding: 12px 0 2px;
   }
 
   .note {

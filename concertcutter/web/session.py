@@ -16,6 +16,7 @@ termine pendant qu'on déplace une frontière écrirait sinon par-dessus.
 
 from __future__ import annotations
 
+import mimetypes
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -51,6 +52,7 @@ DEFAULT_EXPORT = {
     "dir": "", "image": "", "images": [], "crossfade": 0.0,
     "slide_fade": video.SLIDE_FADE_S, "selection": None,
     "full": True, "tracks": True, "video_full": False, "video_tracks": False,
+    "one_per_track": False,
 }
 
 
@@ -94,6 +96,12 @@ class Session:
         self.export = dict(DEFAULT_EXPORT)
         self.warnings: list[str] = []
         self.saved = ""
+        # Les fonds vidéo que l'utilisateur a effectivement désignés. Les
+        # afficher en vignette demande de les servir au navigateur, et servir
+        # un chemin quelconque rouvrirait la lecture de disque que le jeton
+        # ferme. On ne sert donc que ce qui est passé par le sélecteur, ou par
+        # un projet relu.
+        self.allowed_images: set[str] = set()
         self._save_timer: threading.Timer | None = None
 
     # -- ouverture ---------------------------------------------------------
@@ -298,6 +306,7 @@ class Session:
             video_images=tuple(choice.get("images") or ()),
             video_slide_fade_s=float(choice.get("slide_fade")
                                      or video.SLIDE_FADE_S),
+            video_one_per_track=bool(choice.get("one_per_track")),
             selection=(tuple(int(n) for n in selection)
                        if selection is not None else None),
         )
@@ -412,6 +421,29 @@ class Session:
             if name in saved:
                 self.settings[name] = _number(saved[name], DEFAULT_SETTINGS[name])
 
+    def allow_image(self, paths) -> list[str]:
+        """Autorise l'affichage de ces images, et rend celles qui existent."""
+        found = []
+        with self._lock:
+            for path in paths:
+                candidate = Path(str(path))
+                if candidate.is_file():
+                    self.allowed_images.add(str(candidate.resolve()))
+                    found.append(str(candidate))
+        return found
+
+    def image_bytes(self, path: str) -> tuple[bytes, str]:
+        """Une image de fond, pour la vignette. Refuse tout le reste."""
+        target = Path(path)
+        with self._lock:
+            known = str(target.resolve()) in self.allowed_images
+        if not known or not target.is_file():
+            raise SessionError("Cette image n'a pas été choisie dans l'export.")
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if not kind.startswith("image/"):
+            raise SessionError("Ce fichier n'est pas une image.")
+        return target.read_bytes(), kind
+
     def _apply_export(self, saved: dict) -> None:
         """Retrouve la destination et la forme du dernier export.
 
@@ -421,6 +453,9 @@ class Session:
         for name in DEFAULT_EXPORT:
             if name in saved:
                 self.export[name] = saved[name]
+        # Un travail repris rapporte ses fonds : ils doivent redevenir
+        # affichables, sinon la fenêtre d'export les listerait sans vignette.
+        self.allow_image(self.export.get("images") or [])
 
     def update_settings(self, wanted: dict) -> dict:
         with self._lock:

@@ -31,7 +31,7 @@
   .veil {
     position: fixed;
     inset: 0;
-    background: rgba(247, 248, 250, 0.72);
+    background: var(--glass);
     display: grid;
     place-items: center;
     z-index: 40;

@@ -15,7 +15,9 @@
   import { session } from '../lib/session.svelte'
   import { api } from '../lib/api'
   import { hms, parseTime, tenths, trackLabel } from '../lib/format'
-  import { drawCursor, drawHandle, paint, palette, surface, type Palette } from '../lib/wave'
+  import {
+    drawCursor, drawHandle, paint, palette, slice, surface, type Palette,
+  } from '../lib/wave'
 
   // Un demi-second par appui. Le dixième était plus fin que le geste : caler
   // une coupe à l'oreille demande de bouger d'une demi-seconde, et il en
@@ -24,7 +26,7 @@
   const STEP_S = 0.5
 
   let canvas = $state<HTMLCanvasElement>(null!)
-  let colours: Palette | null = null
+  let colours: Palette = palette()
   let heights = $state<Float32Array>(new Float32Array(0))
   let width = $state(736)
   let dragging = $state<'start' | 'end' | null>(null)
@@ -74,7 +76,7 @@
     if (!canvas || !segment) return
     const context = surface(canvas)
     if (!context) return
-    colours ??= palette()
+    colours = palette()
     const height = canvas.clientHeight
     paint(context, canvas.clientWidth, height, {
       heights,
@@ -87,13 +89,13 @@
 
     if (session.playhead >= session.viewStart &&
         session.playhead <= session.viewStart + session.viewSpan) {
-      drawCursor(context, x(session.playhead), height, colours.cursor)
+      drawCursor(context, x(session.playhead), height, colours)
     }
     if (edges.start >= 0) {
-      drawHandle(context, x(shown('start')), height, colours.handle, dragging === 'start')
+      drawHandle(context, x(shown('start')), height, colours, dragging === 'start')
     }
     if (edges.end >= 0 && edges.end <= lastEdge) {
-      drawHandle(context, x(shown('end')), height, colours.handle, dragging === 'end')
+      drawHandle(context, x(shown('end')), height, colours, dragging === 'end')
     }
   }
 
@@ -113,7 +115,23 @@
     }
     dragging = grip
     preview = { edge: grip, at: at(event.clientX) }
-    canvas.setPointerCapture(event.pointerId)
+    grab(event.pointerId, true)
+  }
+
+  /** Prend ou rend le pointeur, sans faire échouer le glissé si ça rate.
+
+      La capture n'est qu'un confort : elle permet de sortir du canevas en
+      tirant. Quand elle échoue — un pointeur déjà relâché, un événement qui ne
+      vient pas d'une vraie souris — une exception non rattrapée interrompait
+      `onPointerUp` avant l'enregistrement, et la coupe revenait à sa place
+      sans un mot. Le geste doit aboutir même sans capture. */
+  function grab(pointerId: number, take: boolean): void {
+    try {
+      if (take) canvas.setPointerCapture(pointerId)
+      else canvas.releasePointerCapture(pointerId)
+    } catch {
+      /* sans capture, le glissé marche encore tant qu'on reste sur le tracé */
+    }
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -129,7 +147,7 @@
     const edge = dragging
     const moment = at(event.clientX)
     dragging = null
-    canvas.releasePointerCapture(event.pointerId)
+    grab(event.pointerId, false)
     const index = edge === 'start' ? edges.start : edges.end
     // Le tracé provisoire ne s'efface qu'une fois la réponse arrivée, qu'elle
     // accepte ou qu'elle refuse : l'effacer avant ferait sauter la frontière à
@@ -227,10 +245,20 @@
   }
 
   $effect(() => {
-    void session.viewStart
-    void session.viewSpan
     void session.state?.source
-    void width
+    const columns = Math.max(1, Math.round(canvas?.clientWidth ?? width))
+    // Le tracé grossier d'abord, pris dans l'enveloppe déjà en mémoire ; les
+    // vrais pics ensuite, quand le serveur les rend. Sans ce relais, changer
+    // de morceau laissait pendant un aller-retour les pics de la fenêtre
+    // précédente étirés sur la nouvelle — un tracé faux, brièvement, et
+    // d'autant plus visible que les deux morceaux étaient de durées
+    // différentes.
+    if (session.envelope.length) {
+      heights = slice(
+        session.envelope, session.envelopeFps,
+        session.viewStart, session.viewSpan, columns,
+      )
+    }
     void fetchPeaks()
   })
 
@@ -446,7 +474,7 @@
 
   .fate button.on {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
 
   .card {
@@ -524,7 +552,9 @@
   }
 
   .stepper input {
-    width: 78px;
+    /* Assez large pour « 1:14:00,0 ». À soixante-dix-huit pixels, le dixième
+       d'un concert de plus d'une heure passait sous le bord droit. */
+    width: 118px;
     height: 32px;
     padding: 0 6px;
     border: 0;

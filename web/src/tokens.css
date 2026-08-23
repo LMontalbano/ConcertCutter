@@ -1,30 +1,77 @@
-/* Les jetons de la variante 2a, et rien d'autre.
+/* Les jetons de la variante 2a, en deux teintes.
 
    Ce fichier remplace `ui/theme.py`, `ui/skin.py` et les trente PNG de
    `ui/assets/` — des boutons en quatre états qui étaient des images parce que
    Tkinter ne sait pas styler un bouton.
 
-   Thème clair uniquement pour l'instant : c'est ce qui a été arrêté, et un
-   thème sombre à moitié fait serait pire que pas de thème sombre. Quand il
-   viendra, il se posera ici, en redéfinissant ces variables. */
+   **Le sombre est le défaut.** On découpe un concert le soir, longtemps, en
+   regardant un tracé lumineux sur fond de page : le blanc de 2a fatigue au
+   bout d'une heure. Le clair reste d'un clic, et la bascule est retenue.
 
-:root {
+   Les deux teintes partagent la même grammaire — fond, surface, filet, trois
+   niveaux d'encre, un accent, une couleur de blanc — si bien qu'aucun
+   composant n'a de règle propre à un thème. Deux jetons existent pour cela :
+   `--on-ink` et `--on-accent`, la couleur qui se lit *sur* un aplat sombre ou
+   accentué. Écrire `#fff` en dur y marchait tant que `--ink` était sombre ;
+   en thème sombre, `--ink` est presque blanc, et le libellé disparaissait. */
+
+:root,
+:root[data-theme='dark'] {
+  --app: #14171c;
+  --surface: #1b1f26;
+  --border: #2a303a;
+  --rule: #232830;
+  --hover: #202631;
+
+  --ink: #e8ecf2;
+  --ink-2: #a6afbc;
+  --ink-3: #7c8695;
+  --hint: #626c7a;
+  --on-ink: #14171c;
+  --on-accent: #08191d;
+
+  --accent: #34a8b8;
+  --accent-soft: #15323a;
+
+  /* Les blancs — c'est-à-dire les applaudissements. Une teinte à part, et non
+     un gris : c'est la seule chose qui permette de juger si une coupe tombe au
+     bon endroit, donc elle doit se voir. */
+  --gap: #d9895e;
+  --gap-row: #221b17;
+  --gap-rule: #4a3527;
+
+  --wave: #34a8b8;
+  --wave-bed: #16303a;
+  --wave-gap: #d9895e;
+  --wave-gap-bed: #2d201a;
+
+  --handle: #e8ecf2;
+  --veil: rgba(6, 8, 11, 0.62);
+  /* Plus discret qu'en clair : sur fond sombre, assombrir davantage ce qu'on
+     ne regarde pas efface le concert au lieu de le mettre en retrait. */
+  --ribbon-veil: rgba(20, 23, 28, 0.42);
+  --glass: rgba(20, 23, 28, 0.72);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-float: 0 14px 38px rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme='light'] {
   --app: #f7f8fa;
   --surface: #ffffff;
   --border: #e9ecf1;
   --rule: #f2f4f7;
+  --hover: #fbfcfd;
 
   --ink: #1b2029;
   --ink-2: #5b6472;
   --ink-3: #8a929f;
   --hint: #a8b0bb;
+  --on-ink: #ffffff;
+  --on-accent: #ffffff;
 
   --accent: #1e7f8c;
   --accent-soft: #e8f3f5;
 
-  /* Les blancs — c'est-à-dire les applaudissements. Une teinte à part, et non
-     un gris : c'est la seule chose qui permette de juger si une coupe tombe au
-     bon endroit, donc elle doit se voir. */
   --gap: #b4603a;
   --gap-row: #fcf9f7;
   --gap-rule: #e2c9b8;
@@ -35,14 +82,25 @@
   --wave-gap-bed: #faede6;
 
   --handle: #1b2029;
+  --veil: rgba(27, 32, 41, 0.28);
+  --ribbon-veil: rgba(247, 248, 250, 0.62);
+  --glass: rgba(247, 248, 250, 0.72);
+  --shadow: 0 1px 2px rgba(27, 32, 41, 0.04);
+  --shadow-float: 0 12px 32px rgba(27, 32, 41, 0.16);
+}
 
+:root {
   --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
   --radius: 8px;
   --radius-card: 14px;
-  --shadow: 0 1px 2px rgba(27, 32, 41, 0.04);
-  --shadow-float: 0 12px 32px rgba(27, 32, 41, 0.16);
+
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
 }
 
 * {
@@ -128,12 +186,11 @@ button:disabled {
 .btn.accent {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn.accent:hover:not(:disabled) {
-  background: #1a6f7a;
-  border-color: #1a6f7a;
+  filter: brightness(1.12);
 }
 
 .btn.strong {
@@ -141,13 +198,12 @@ button:disabled {
   padding: 0 18px;
   background: var(--ink);
   border-color: var(--ink);
-  color: #fff;
+  color: var(--on-ink);
   font: 600 13.5px var(--sans);
 }
 
 .btn.strong:hover:not(:disabled) {
-  background: #2a3140;
-  border-color: #2a3140;
+  filter: brightness(0.92);
 }
 
 .btn.quiet {
@@ -171,11 +227,11 @@ button:disabled {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #dfe3ea;
+  background: var(--border);
   border: 3px solid var(--surface);
   border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #c7cdd7;
+  background: var(--ink-3);
 }

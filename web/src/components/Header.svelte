@@ -3,7 +3,10 @@
   import { session } from '../lib/session.svelte'
   import { hms, savedAgo } from '../lib/format'
 
-  let { onExport, onOptions }: { onExport: () => void; onOptions: () => void } = $props()
+  let {
+    onExport,
+    onOptions,
+  }: { onExport: () => void; onOptions: () => void } = $props()
 
   // Relu chaque minute : « à l'instant » cesse d'être vrai sans que rien ne se
   // passe à l'écran, et un « à l'instant » d'il y a une heure serait un
@@ -27,6 +30,21 @@
 
   <div class="right">
     {#if saved}<span class="saved">{saved}</span>{/if}
+    <button
+      class="btn quiet"
+      onclick={() => session.openFile('wav')}
+      title="Ouvrir un autre enregistrement, ou reprendre un travail"
+    >
+      Importer
+    </button>
+    <button
+      class="btn quiet theme"
+      onclick={() => session.flip()}
+      aria-label={session.theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
+      title={session.theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
+    >
+      {session.theme === 'dark' ? '☀' : '☾'}
+    </button>
     <button
       class="btn quiet"
       disabled={!session.state?.canUndo}
@@ -101,5 +119,12 @@
     color: var(--ink-2);
     white-space: nowrap;
     margin-right: 4px;
+  }
+
+  .theme {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+    font-size: 14px;
   }
 </style>

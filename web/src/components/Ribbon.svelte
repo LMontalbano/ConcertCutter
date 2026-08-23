@@ -11,14 +11,14 @@
   const HEIGHT = 46
 
   let canvas: HTMLCanvasElement
-  let colours: Palette | null = null
+  let colours: Palette = palette()
   let width = $state(1196)
 
   function draw(): void {
     if (!canvas) return
     const context = surface(canvas)
     if (!context) return
-    colours ??= palette()
+    colours = palette()
     const columns = Math.max(1, Math.round(canvas.clientWidth))
     const duration = session.duration || 1
     paint(context, canvas.clientWidth, HEIGHT, {
@@ -35,7 +35,11 @@
     // tracé dès que la fenêtre devenait étroite.
     const left = (session.viewStart / duration) * canvas.clientWidth
     const right = ((session.viewStart + session.viewSpan) / duration) * canvas.clientWidth
-    context.fillStyle = 'rgba(247,248,250,.62)'
+    // Assombrir ce qu'on ne regarde pas, plutôt qu'encadrer ce qu'on regarde :
+    // le cadre se perdait dans le tracé dès que la fenêtre devenait étroite.
+    // La teinte suit le thème — un voile clair sur fond sombre effacerait le
+    // concert au lieu de le mettre en retrait.
+    context.fillStyle = colours.veil
     context.fillRect(0, 0, left, HEIGHT)
     context.fillRect(right, 0, canvas.clientWidth - right, HEIGHT)
     context.strokeStyle = colours.handle

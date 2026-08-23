@@ -15,7 +15,7 @@
 
   const THUMB = { width: 88, height: 26 }
 
-  let colours: Palette | null = null
+  let colours: Palette = palette()
   let editing = $state(-1)
   let draft = $state('')
 
@@ -23,7 +23,7 @@
     const render = () => {
       const context = surface(canvas)
       if (!context) return
-      colours ??= palette()
+      colours = palette()
       const span = Math.max(0.1, segment.end - segment.start)
       paint(context, canvas.clientWidth, canvas.clientHeight, {
         heights: slice(
@@ -102,9 +102,20 @@
           aria-label="Morceau {trackLabel(segment.number)}{segment.trackTitle
             ? `, ${segment.trackTitle}`
             : ''}"
-          onclick={() => session.play(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.play(segment.index)}
+          onclick={() => session.select(segment.index)}
+          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
         >
+          <button
+            class="listen"
+            class:sounding={session.playing_at(segment.index)}
+            onclick={(event) => (event.stopPropagation(), session.play(segment.index))}
+            aria-label="{session.playing_at(segment.index)
+              ? 'Arrêter'
+              : 'Écouter'} le morceau {trackLabel(segment.number)}"
+            title={session.playing_at(segment.index) ? 'Arrêter' : 'Écouter ce morceau'}
+          >
+            {session.playing_at(segment.index) ? '❚❚' : '▶'}
+          </button>
           <span class="mono number">{trackLabel(segment.number)}</span>
           <div class="body">
             {#if editing === segment.index}
@@ -122,7 +133,7 @@
                 class="title"
                 class:empty={!segment.trackTitle}
                 ondblclick={() => startEdit(segment)}
-                onclick={() => session.play(segment.index)}
+                onclick={() => session.select(segment.index)}
                 title="Double-cliquer pour nommer"
               >
                 {segment.trackTitle || 'Sans titre'}
@@ -144,10 +155,18 @@
           role="button"
           tabindex="0"
           aria-label="Blanc de {spell(segment.end - segment.start)}"
-          onclick={() => session.play(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.play(segment.index)}
+          onclick={() => session.select(segment.index)}
+          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
         >
-          <span class="dash"></span>
+          <button
+            class="listen thin"
+            class:sounding={session.playing_at(segment.index)}
+            onclick={(event) => (event.stopPropagation(), session.play(segment.index))}
+            aria-label="Écouter ce blanc"
+            title="Écouter ce blanc"
+          >
+            {session.playing_at(segment.index) ? '❚❚' : '▶'}
+          </button>
           <span class="mono">blanc {spell(segment.end - segment.start)}</span>
           <button class="keep" onclick={(event) => (event.stopPropagation(), keep(segment))}>
             garder
@@ -184,18 +203,55 @@
     min-height: 0;
   }
 
+  /* Un rond de lecture par ligne. Sélectionner et écouter n'en faisaient
+     qu'un : parcourir la liste pour regarder les découpes déclenchait le son
+     vingt-cinq fois de suite. Ce sont deux intentions différentes, et elles
+     ont maintenant deux cibles différentes. */
+  .listen {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    font-size: 8px;
+    color: var(--ink-3);
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .listen:hover {
+    color: var(--surface);
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .listen.sounding {
+    color: var(--surface);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .listen.thin {
+    width: 20px;
+    height: 20px;
+    font-size: 7px;
+    border-color: var(--gap-rule);
+    background: transparent;
+  }
+
   .track {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 13px 18px;
+    gap: 12px;
+    padding: 13px 16px;
     border-bottom: 1px solid var(--rule);
     border-left: 3px solid transparent;
     cursor: default;
   }
 
   .track:hover {
-    background: #fbfcfd;
+    background: var(--hover);
   }
 
   .track.current {
@@ -265,7 +321,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 18px;
+    padding: 8px 16px;
     border-bottom: 1px solid var(--rule);
     border-left: 3px solid transparent;
     background: var(--gap-row);
@@ -278,12 +334,6 @@
     border-left-color: var(--gap);
   }
 
-  .dash {
-    width: 22px;
-    height: 1px;
-    background: var(--gap-rule);
-  }
-
   .keep {
     margin-left: auto;
     font: 500 11.5px var(--sans);
@@ -293,7 +343,7 @@
   }
 
   .keep:hover {
-    background: #fff;
+    background: var(--surface);
     color: var(--ink);
   }
 </style>

@@ -180,6 +180,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(session.segments_payload())
         elif route == "/api/navigate":
             self._send({"moment": self._navigate(query)})
+        elif route == "/api/image":
+            raw, kind = session.image_bytes(query.get("path", [""])[0])
+            self._send_bytes(raw, kind)
         else:
             self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
 
@@ -254,7 +257,10 @@ class Handler(BaseHTTPRequestHandler):
         if kind == "dir":
             self._send({"path": dialogs.ask_dir(body.get("start", "")) or ""})
         elif kind == "images":
-            self._send({"paths": dialogs.ask_images()})
+            # Passées par la liste blanche au passage : ce sont les seules que
+            # `/api/image` acceptera de servir en vignette.
+            self._send({"paths": self.app.session.allow_image(
+                dialogs.ask_images())})
         elif kind == "source":
             self._send({"path": dialogs.ask_source(body.get("name", "")) or ""})
         elif kind == "project":

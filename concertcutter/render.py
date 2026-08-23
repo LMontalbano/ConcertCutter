@@ -109,6 +109,13 @@ class RenderParams:
     # heures. Vide, `video_image` fait seule le fond, comme avant.
     video_images: tuple[str, ...] = ()
     video_slide_fade_s: float = 0.0
+    # Une image fixe par morceau, au lieu du diaporama. Les vingt-cinq photos
+    # d'un concert sont souvent une par morceau : les faire toutes défiler sous
+    # chacune des vingt-cinq vidéos montre le morceau 12 sous la photo du 3.
+    # Les images sont prises dans l'ordre de la liste, et le cycle recommence
+    # s'il y en a moins que de morceaux. Sans effet sur la vidéo du concert
+    # entier, où le fond n'a pas de morceau à suivre : elle garde le diaporama.
+    video_one_per_track: bool = False
     # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
     # toujours à sortir en entier — trois titres pour une maquette, le rappel
     # seul pour l'envoyer à quelqu'un. Décocher les autres dans le tableau
@@ -220,9 +227,10 @@ def render(
             if params.video_tracks else None)
     jobs = []
 
-    def encode(track_path: Path, label: str, target: str, temporary: bool) -> None:
+    def encode(track_path: Path, label: str, target: str, temporary: bool,
+               rank: int) -> None:
         video.write_video(track_path, label, out_dir / target,
-                          _video_params(params))
+                          _video_params(params, rank))
         if temporary:
             track_path.unlink(missing_ok=True)
         step(target)
@@ -270,7 +278,7 @@ def render(
                 written[-1]["video"] = video_name
                 jobs.append(pool.submit(encode, track_path,
                                         _track_label(number, title),
-                                        video_name, temporary))
+                                        video_name, temporary, rank))
 
         # Les vidéos des pistes finissent ici : la vidéo du concert entier a
         # besoin de l'album continu refermé, et une exception d'un fil doit
@@ -356,11 +364,20 @@ def _check_video(params: RenderParams) -> None:
         raise ValueError(reason)
 
 
-def _video_params(params: RenderParams) -> video.VideoParams:
-    """Traduit les réglages d'export en réglages de rendu vidéo."""
+def _video_params(params: RenderParams,
+                  rank: int | None = None) -> video.VideoParams:
+    """Traduit les réglages d'export en réglages de rendu vidéo.
+
+    `rank` est le rang du morceau, quand la vidéo n'en couvre qu'un. Avec
+    `video_one_per_track`, il désigne l'image que ce morceau reçoit — et lui
+    seule, si bien que la vidéo n'a plus de diaporama à encoder.
+    """
+    stills = tuple(str(path) for path in params.video_images)
+    if params.video_one_per_track and rank is not None and stills:
+        stills = (stills[rank % len(stills)],)
     return video.VideoParams(
         image=str(params.video_image or ""),
-        images=tuple(str(path) for path in params.video_images),
+        images=stills,
         slide_fade_s=params.video_slide_fade_s,
     )
 
