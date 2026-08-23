@@ -25,12 +25,12 @@ import numpy as np
 from .. import edits, peaks, project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze, refine_boundary
+from ..history import History
 from ..render import (
     ExportConflict, RenderParams, check_output, concert_dir, render, unique_dir,
 )
 from ..segment import MUSIC, Analysis
 from ..spectral import SpectralFeatures, extract
-from ..ui.history import History
 from .jobs import Job
 
 # Délai avant d'écrire le travail en cours. Assez long pour regrouper la rafale

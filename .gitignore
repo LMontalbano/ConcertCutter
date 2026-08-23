@@ -164,3 +164,12 @@ cython_debug/
 
 # Custom
 test/
+
+# --- interface web -------------------------------------------------------
+
+# Les dépendances du front, et ce que Vite en produit. `concertcutter/web/
+# static` est un résultat de compilation, pas une source : il se refait par
+# `cd web && npm install && npm run build`, et le versionner ferait apparaître
+# quatre-vingts kilo-octets de JavaScript minifié dans chaque diff.
+web/node_modules/
+concertcutter/web/static/

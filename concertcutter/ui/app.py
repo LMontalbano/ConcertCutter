@@ -39,13 +39,13 @@ from ..render import (
     concert_dir, render, unique_dir,
 )
 from ..excerpts import parse_time
+from ..history import History
 from ..segment import GAP, MUSIC, Analysis, Segment
 from ..spectral import SpectralFeatures, extract
 from . import assets, theme, tooltip
 from .card import Card
 from .collapsible import CHEVRON_OPEN, CHEVRON_SHUT, Section
 from .export_dialog import ask_export
-from .history import History
 from .player import PAUSED, PLAYING, STOPPED, Player
 from .seekbar import SeekBar
 from .waveform import WaveformView

@@ -27,6 +27,7 @@ import json
 import mimetypes
 import os
 import secrets
+import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                         "dialogs": dialogs.available()})
         elif route == "/api/segments":
             self._send(session.segments_payload())
+        elif route == "/api/navigate":
+            self._send({"moment": self._navigate(query)})
         else:
             self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
 
@@ -295,6 +298,24 @@ class Handler(BaseHTTPRequestHandler):
             return session.apply(lambda s: edits.set_title(s, index, title))
         raise SessionError(f"Geste inconnu : {operation}")
 
+    def _navigate(self, query: dict) -> float:
+        """Où portent les flèches et la touche Origine.
+
+        Un aller-retour par touche, sur une boucle locale, plutôt qu'une copie
+        de `edits.section_start` en JavaScript : le « deux fois de suite,
+        remonte à la section précédente » tient à un seuil d'une seconde et
+        demie, et deux implémentations d'un seuil finissent toujours par
+        diverger.
+        """
+        session = self.app.session
+        moment = float(query.get("from", ["0"])[0])
+        where = query.get("to", ["next"])[0]
+        segments = session.analysis.segments if session.analysis else []
+        if where == "section":
+            return edits.section_start(segments, session.duration, moment)
+        return edits.next_boundary(segments, session.duration, moment,
+                                   where == "next")
+
     def _install_ffmpeg(self) -> None:
         if not ffmpeg_install.supported():
             self._fail("L'installation automatique n'existe que sous Windows.")
@@ -400,28 +421,60 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(raw)))
-        self.send_header("Cache-Control",
-                         "no-store" if target.name == "index.html" else
-                         "public, max-age=3600")
+        # Rien n'est mis en cache, pas même les polices : tout vient du disque
+        # local, l'économie serait nulle, et un fichier recompilé qui ne
+        # remplace pas celui du navigateur coûte une heure à comprendre.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(raw)
 
 
-def serve(port: int = 0) -> tuple[ThreadingHTTPServer, Application]:
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:
+        """Une connexion coupée par le lecteur n'est pas une erreur.
+
+        La balise `<audio>` demande une tranche, en prend ce qu'il lui faut, et
+        raccroche — à chaque déplacement dans le morceau, donc dix fois par
+        minute quand on cale une coupe. `socketserver` en imprimait une trace
+        d'appels de vingt lignes, qui noyait les vraies.
+        """
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionAbortedError,
+                                          ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+    # Windows laisse deux sockets prendre le même port quand `SO_REUSEADDR` est
+    # posé — ce que `HTTPServer` fait par défaut. Deux ConcertCutter lancés
+    # coup sur coup écoutaient alors tous les deux sur 8722, chacun avec son
+    # jeton, et une requête sur deux tombait chez le mauvais : la fenêtre
+    # affichait « jeton invalide » sur un jeton parfaitement valide. Un port
+    # déjà pris doit refuser la liaison, pour qu'on puisse en essayer un autre.
+    allow_reuse_address = False
+
+
+def serve(port: int = 0) -> tuple[Server, Application]:
     """Ouvre le serveur sur la boucle locale. Port 0 : le système en choisit un.
 
-    Choisir soi-même un port fixe, c'est tomber un jour sur celui qu'un autre
-    programme occupe déjà, et faire échouer le lancement pour une raison que
-    personne ne peut deviner.
+    Un port imposé qui n'est pas libre ne fait pas échouer le lancement : on
+    retombe sur le choix du système. Refuser de démarrer parce qu'un autre
+    programme occupe un numéro serait incompréhensible pour qui double-clique
+    un exécutable.
     """
     app = Application()
     handler = type("BoundHandler", (Handler,), {"app": app})
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    httpd.daemon_threads = True
-    return httpd, app
+    try:
+        return Server(("127.0.0.1", port), handler), app
+    except OSError:
+        if not port:
+            raise
+        print(f"Le port {port} est déjà pris : le système en choisit un autre.",
+              flush=True)
+        return Server(("127.0.0.1", 0), handler), app
 
 
-def url_for(httpd: ThreadingHTTPServer) -> str:
+def url_for(httpd: Server) -> str:
     host, port = httpd.socket.getsockname()[:2]
     return f"http://{host}:{port}/"
 
