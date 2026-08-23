@@ -489,16 +489,12 @@ avance d'un pas fixe quand on clique dans son couloir, ce qui demandait une
 dizaine de clics pour atteindre une minute précise sur un concert de deux
 heures. Ici, un clic vaut un déplacement direct.
 
-**Le lecteur** passe par l'interface MCI de Windows (`winmm.dll` via `ctypes`),
-et non par `winsound` qui ne sait que jouer un fichier entier — sans pause, ni
-position, ni intervalle. MCI lit **en flux** : mesuré à 0,06 s pour ouvrir un
-WAV de 1,86 Go, sans le charger en mémoire. On obtient donc lecture depuis un
-instant, intervalle borné, pause, reprise et position réelle, toujours sans
-aucune dépendance.
-
-Tkinter et `ctypes` sont dans la bibliothèque standard : l'interface n'ajoute
-rien à installer et reste empaquetable sans effort. La lecture n'existe que
-sous Windows ; ailleurs, tout le reste fonctionne.
+**Le lecteur** est la balise `<audio>` du navigateur, servie par tranches. Il
+ne lit donc que ce qu'il joue — un WAV de 1,86 Go s'ouvre sans être chargé en
+mémoire, et l'on obtient lecture depuis un instant, intervalle borné, pause,
+reprise et position réelle. Il a remplacé cent soixante lignes d'interface MCI
+de Windows pilotée par `ctypes`, qui rendaient l'écoute possible sous Windows
+seulement.
 
 ## Ce que le matériel réel a appris
 
@@ -563,15 +559,37 @@ TensorFlow dépasse 500 Mo, un export ONNX serait préférable.
 
 # Développement
 
+## Deux interfaces, le temps du portage
+
+L'interface est passée de Tkinter au web, servie par un serveur local sur
+`127.0.0.1` — aucun fichier ne quitte la machine, et l'algorithme reste en
+Python. Le plan et ses arbitrages sont dans
+[`docs/portage-web.md`](docs/portage-web.md), l'interface elle-même dans
+[`web/`](web/README.md).
+
+```bash
+python gui_web.py [concert.wav]     # la nouvelle : WebView2, ou le navigateur
+python gui.py     [concert.wav]     # l'ancienne : Tkinter
+```
+
+Les deux tournent sur le même cœur et sur les mêmes fichiers de travail : un
+`.ccproj.json` écrit par l'une se reprend dans l'autre. L'ancienne reste le
+temps de vérifier la parité à l'usage ; les captures de ce README sont encore
+les siennes.
+
 ## Construire l'exécutable
 
 Utile seulement pour publier une version, ou après avoir modifié le code :
 
 ```bash
+cd web && npm install && npm run build && cd ..
 build_exe.bat
 ```
 
-Le script installe PyInstaller au besoin et écrit `dist\ConcertCutter.exe`.
+La première ligne compile l'interface dans `concertcutter/web/static`, que
+l'exécutable embarque ; sans elle, on empaquette l'interface précédente, ou
+aucune. Le script installe ensuite PyInstaller au besoin et écrit
+`dist\ConcertCutter.exe`.
 Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos. Un simple `.bat`
 qui appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et
 les bibliothèques déjà installés sur la machine.
@@ -617,7 +635,10 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
   Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
   fait pas échouer ffmpeg, elle sort une vidéo vierge. Le test s'annonce ignoré
   si ffmpeg manque, il n'échoue pas
-- `smoke_gui.py` — l'interface entière parcourue sans souris
+- `check_web_api.py` — le serveur local : le jeton qui garde la porte, les
+  tranches `Range` du WAV, et l'édition passée par HTTP qui doit donner
+  exactement ce que donne l'appel direct à `edits`
+- `smoke_gui.py` — l'ancienne interface Tkinter parcourue sans souris
 - `make_screenshots.py` — refait les captures de ce README. Une capture prise à
   la main vieillit sans prévenir
 

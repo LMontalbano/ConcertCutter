@@ -257,6 +257,32 @@ en extrait. Puis README et captures.
 
 ---
 
+## 5 bis. Où en est le chantier
+
+Les lots 1 à 5 sont faits, sur la branche `portage-web`. Ce qui a été appris en
+chemin, et qui ne figurait pas au plan :
+
+- **`history.py` a dû quitter `ui/`.** Les deux interfaces s'en servent, et l'y
+  laisser obligeait le serveur web à importer Tkinter — donc à l'embarquer dans
+  l'exécutable — pour soixante lignes de listes d'instantanés. Les icônes ont
+  suivi le même chemin, de `ui/assets/` vers `assets/`.
+- **Le port déjà pris était pire que prévu.** Sous Windows, `SO_REUSEADDR` —
+  que `HTTPServer` pose par défaut — laisse deux sockets se lier au même port.
+  Deux ConcertCutter lancés coup sur coup écoutaient tous les deux, chacun avec
+  son jeton, et une requête sur deux tombait chez le mauvais.
+- **Les noms de fichiers compilés portent une empreinte.** Sans elle, une
+  version suivante sert `app.js` à un navigateur qui garde l'ancien en cache et
+  ne le redemande pas : la fenêtre affiche l'interface d'avant, sans rien dire.
+- **`detect_hmm.refine_boundary`** ouvre au geste manuel le recalage que le
+  détecteur faisait déjà sur chacune de ses frontières. C'est ce qui fait
+  fonctionner « Caler sur l'attaque » sans calcul nouveau, comme prévu.
+
+Reste le **lot 6** : la parité se juge à l'usage, sur un vrai concert. Tant
+qu'elle n'est pas constatée, `concertcutter/ui/` reste en place — les deux
+interfaces partagent le cœur et les fichiers de reprise, donc rien n'oblige à
+choisir tout de suite. Après quoi : suppression de `ui/` et de ses PNG,
+nouvelles captures, README.
+
 ## 6. La règle qui ne bouge pas
 
 **Les résultats de détection ne changent pas d'un octet.** La référence est
