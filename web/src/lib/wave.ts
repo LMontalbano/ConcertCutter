@@ -175,6 +175,84 @@ export function slice(
   return out
 }
 
+/** Silhouette d'un segment, pour une vignette de quatre-vingt-huit pixels.
+
+    Trois choses la séparent du tracé principal, et chacune a sa raison.
+
+    **La moyenne, et non la crête.** Une vignette de 88 colonnes sur un morceau
+    de trois minutes couvre deux secondes et demie par colonne ; en musique, la
+    crête de deux secondes et demie ne bouge pratiquement pas, et toutes les
+    colonnes sortent à la même hauteur. C'est ce qui donnait un rectangle. La
+    moyenne, elle, suit ce qu'on entend : un couplet est plus bas qu'un refrain.
+
+    **L'amplitude, et non les décibels.** L'échelle en décibels range un morceau
+    de concert entre −20 et −6 dB, soit entre 0,66 et 0,90 de la hauteur. Sur
+    vingt-six pixels, six centièmes d'écart ne se voient pas.
+
+    **Étirée sur la dynamique du morceau**, du plus bas au plus haut de ses
+    propres colonnes. C'est là qu'on triche, et c'est assumé : la vignette ne
+    dit rien de juste sur les niveaux absolus, et n'a pas à le faire. Elle sert
+    à distinguer un morceau d'un autre du coin de l'œil, ce qu'un rectangle ne
+    faisait pas. Le tracé de la carte d'édition, lui, reste en décibels — ce
+    qu'on y voit est exactement ce sur quoi le détecteur a décidé.
+
+    Un morceau dont le niveau ne bouge pas — un bourdon, une nappe — n'est pas
+    étiré : sans ce garde-fou, on amplifierait son bruit de fond en zigzag et
+    la vignette montrerait une agitation qui n'existe pas. Il retombe alors sur
+    une simple mise à l'échelle, et reste franchement plat, ce qu'il est.
+
+    Le plancher garde un corps visible là où le son se tait, plutôt qu'un
+    trait interrompu. */
+export function silhouette(
+  envelope: Float32Array,
+  fps: number,
+  start: number,
+  span: number,
+  columns: number,
+): Float32Array {
+  const out = new Float32Array(columns)
+  if (!envelope.length || span <= 0) return out
+
+  let peak = 0
+  for (let column = 0; column < columns; column += 1) {
+    const from = Math.max(0, Math.floor((start + (column / columns) * span) * fps))
+    const to = Math.min(
+      envelope.length,
+      Math.max(from + 1, Math.floor((start + ((column + 1) / columns) * span) * fps)),
+    )
+    let total = 0
+    let count = 0
+    for (let index = from; index < to; index += 1) {
+      // `to_height` a posé −60 dBFS à 0 et 0 dBFS à 1 : on refait le chemin
+      // inverse pour retrouver une amplitude, seule grandeur qui se moyenne.
+      total += 10 ** ((envelope[index] * 60 - 60) / 20)
+      count += 1
+    }
+    const mean = count ? total / count : 0
+    out[column] = mean
+    if (mean > peak) peak = mean
+  }
+
+  if (peak <= 0) return out
+
+  let floor = Infinity
+  for (let column = 0; column < columns; column += 1) {
+    if (out[column] < floor) floor = out[column]
+  }
+
+  // Moins d'un dixième d'écart entre le plus fort et le plus faible : il n'y a
+  // pas de relief à montrer, et l'étirement ne montrerait que du bruit.
+  const flat = peak - floor < peak * 0.1
+  const BODY = 0.16
+  for (let column = 0; column < columns; column += 1) {
+    const share = flat
+      ? out[column] / peak
+      : (out[column] - floor) / (peak - floor)
+    out[column] = BODY + (1 - BODY) * Math.sqrt(Math.max(0, share))
+  }
+  return out
+}
+
 export function drawCursor(
   context: CanvasRenderingContext2D,
   x: number,

@@ -55,6 +55,10 @@
       'Sans cette case, les images défilent toutes sous chaque morceau — la ' +
       'douzième photo passe alors sous la vidéo du premier. Sans effet sur le ' +
       "concert en un seul fichier, où le fond n'a pas de morceau à suivre.",
+    slideOnly:
+      'Avec une image par morceau, les vidéos de morceaux ne font plus défiler ' +
+      "d'images : ce fondu ne concerne plus que la vidéo du concert entier, où " +
+      'le diaporama continue de tourner.',
     slideshow:
       "Les images se relaient dans l'ordre ci-dessus, une toutes les huit " +
       'secondes, et le cycle recommence aussi longtemps que dure le son. ' +
@@ -209,7 +213,7 @@
           {/each}
         </div>
         <button
-          class="btn quiet all"
+          class="btn all"
           onclick={() =>
             (picked =
               picked.size === tracks.length
@@ -225,16 +229,20 @@
         <h2><span class="step">2</span> Sous quelle forme ?</h2>
 
         <span class="label">Audio</span>
-        <label class="line">
-          <input type="checkbox" bind:checked={choice.full} />
-          <b>Le concert en un seul fichier</b>
+        <div class="line">
+          <label>
+            <input type="checkbox" bind:checked={choice.full} />
+            <b>Le concert en un seul fichier</b>
+          </label>
           <Hint text={WHY.full} />
-        </label>
-        <label class="line">
-          <input type="checkbox" bind:checked={choice.tracks} />
-          <b>Un fichier par morceau</b>
+        </div>
+        <div class="line">
+          <label>
+            <input type="checkbox" bind:checked={choice.tracks} />
+            <b>Un fichier par morceau</b>
+          </label>
           <Hint text={WHY.tracks} />
-        </label>
+        </div>
 
         <div class="knob" class:off={!choice.full}>
           <label for="crossfade">Fondu enchaîné<Hint text={WHY.crossfade} /></label>
@@ -268,21 +276,25 @@
             <button class="btn" onclick={installFfmpeg}>Installer ffmpeg (110 Mo)</button>
           {/if}
         {:else}
-          <label class="line">
-            <input type="checkbox" bind:checked={choice.video_full} />
-            <b>Un MP4 du concert entier</b>
+          <div class="line">
+            <label>
+              <input type="checkbox" bind:checked={choice.video_full} />
+              <b>Un MP4 du concert entier</b>
+            </label>
             <Hint text={WHY.videoFull} />
-          </label>
-          <label class="line">
-            <input type="checkbox" bind:checked={choice.video_tracks} />
-            <b>Un MP4 par morceau</b>
+          </div>
+          <div class="line">
+            <label>
+              <input type="checkbox" bind:checked={choice.video_tracks} />
+              <b>Un MP4 par morceau</b>
+            </label>
             <Hint text={WHY.videoTracks} />
-          </label>
+          </div>
 
           <div class="images" class:off={!choice.video_full && !choice.video_tracks}>
             <div class="images-head">
               <span class="label">Fonds</span>
-              <button class="btn quiet" onclick={addImages}>Ajouter des images…</button>
+              <button class="btn" onclick={addImages}>Ajouter des images…</button>
             </div>
             {#if choice.images.length}
               <!-- Des vignettes, et non des noms de fichiers. « DSC_0421.jpg »
@@ -315,28 +327,34 @@
                 {/each}
               </ul>
 
-              <label class="line tight">
-                <input type="checkbox" bind:checked={choice.one_per_track} />
-                <b>Une seule image par morceau</b>
+              <div class="line tight">
+                <label>
+                  <input type="checkbox" bind:checked={choice.one_per_track} />
+                  <b>Une seule image par morceau</b>
+                </label>
                 <Hint text={WHY.onePerTrack} />
-              </label>
+              </div>
 
-              {#if !choice.one_per_track}
-                <div class="knob">
-                  <label for="slide">
-                    Fondu entre images<Hint text={WHY.slideshow} />
-                  </label>
-                  <input
-                    id="slide"
-                    class="mono"
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    bind:value={choice.slide_fade}
+              <!-- Toujours là, y compris avec « une image par morceau » : la
+                   vidéo du concert entier garde son diaporama, donc le fondu
+                   la concerne encore. Il ne s'éteint que lorsque plus aucune
+                   sortie ne fait défiler d'images. -->
+              <div class="knob" class:off={choice.one_per_track && !choice.video_full}>
+                <label for="slide">
+                  Fondu entre images<Hint
+                    text={choice.one_per_track ? WHY.slideOnly : WHY.slideshow}
                   />
-                  <span class="unit">s</span>
-                </div>
-              {/if}
+                </label>
+                <input
+                  id="slide"
+                  class="mono"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  bind:value={choice.slide_fade}
+                />
+                <span class="unit">s</span>
+              </div>
             {:else}
               <em class="note">
                 Photos du concert, pochette, affiche.<Hint text={WHY.stills} />
@@ -557,11 +575,20 @@
     margin-top: 20px;
   }
 
+  /* La case et son libellé forment le seul point de clic. L'étiquette portait
+     toute la ligne, large de sa colonne : un clic dans le vide à droite du
+     texte cochait la case sans qu'on l'ait voulu. */
   .line {
     display: flex;
-    gap: 10px;
-    padding: 7px 0;
     align-items: center;
+    padding: 7px 0;
+  }
+
+  .line label {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
   }
 
   .line b {

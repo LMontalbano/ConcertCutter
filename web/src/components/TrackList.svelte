@@ -10,7 +10,7 @@
      applaudissements, et « garder » les recolle au morceau voisin. */
   import { session } from '../lib/session.svelte'
   import { hms, duration as spell, trackLabel } from '../lib/format'
-  import { paint, palette, slice, surface, type Palette } from '../lib/wave'
+  import { paint, palette, silhouette, surface, type Palette } from '../lib/wave'
   import type { Segment } from '../lib/api'
 
   const THUMB = { width: 88, height: 26 }
@@ -19,11 +19,20 @@
   let editing = $state(-1)
   let draft = $state('')
 
-  /* Les vignettes se repeignent aussi au changement de thème. Le paramètre
-     porte donc la teinte en plus du segment : sans elle, l'action ne serait
-     pas rappelée, et vingt-cinq vignettes garderaient leur lit sombre sur
-     fond clair. */
-  function thumb(canvas: HTMLCanvasElement, at: { segment: Segment; theme: string }) {
+  /* Le paramètre de l'action porte tout ce dont la vignette dépend, parce que
+     c'est lui qui décide des repeintes.
+
+     L'enveloppe surtout : elle arrive quelques secondes après la liste, et
+     sans elle dans le paramètre, les vignettes restaient telles qu'elles
+     avaient été peintes avant son arrivée — c'est-à-dire plates. C'était là
+     l'origine des « rectangles ».
+
+     Et le thème, sans quoi vingt-cinq vignettes garderaient leur lit sombre
+     sur fond clair. */
+  function thumb(
+    canvas: HTMLCanvasElement,
+    at: { segment: Segment; theme: string; envelope: Float32Array },
+  ) {
     let segment = at.segment
     const render = () => {
       const context = surface(canvas)
@@ -31,7 +40,10 @@
       colours = palette()
       const span = Math.max(0.1, segment.end - segment.start)
       paint(context, canvas.clientWidth, canvas.clientHeight, {
-        heights: slice(
+        // `silhouette` et non `slice` : la crête d'une colonne de deux
+        // secondes ne bouge pas en musique, et les vignettes sortaient toutes
+        // en rectangle plein.
+        heights: silhouette(
           session.envelope,
           session.envelopeFps,
           segment.start,
@@ -42,13 +54,13 @@
         span,
         segments: [segment],
         palette: colours,
-        fill: 0.86,
+        fill: 0.92,
         radius: 3,
       })
     }
     render()
     return {
-      update(next: { segment: Segment; theme: string }) {
+      update(next: { segment: Segment; theme: string; envelope: Float32Array }) {
         segment = next.segment
         render()
       },
@@ -81,6 +93,19 @@
     }
   }
 
+  let rows: HTMLDivElement
+
+  /* La liste suit la sélection. Cliquer dans le ruban ou déplacer la tête de
+     lecture change le morceau regardé ; la ligne correspondante restait hors
+     de vue, et il fallait la chercher à la molette pour retrouver où l'on en
+     était. `nearest` ne fait rien quand elle est déjà visible : la liste ne
+     saute pas sous les doigts de qui la parcourt. */
+  $effect(() => {
+    const index = session.selected
+    const row = rows?.querySelector<HTMLElement>(`[data-rank="${index}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  })
+
   async function keep(segment: Segment): Promise<void> {
     await session.edit(
       { op: 'toggle_kind', index: segment.index },
@@ -96,11 +121,12 @@
     </span>
   </header>
 
-  <div class="rows">
+  <div class="rows" bind:this={rows}>
     {#each session.segments as segment (segment.index)}
       {#if segment.kind === 'music'}
         <div
           class="track"
+          data-rank={segment.index}
           class:current={session.selected === segment.index}
           role="button"
           tabindex="0"
@@ -149,13 +175,14 @@
             </div>
           </div>
           <canvas
-            use:thumb={{ segment, theme: session.theme }}
+            use:thumb={{ segment, theme: session.theme, envelope: session.envelope }}
             style="width:{THUMB.width}px;height:{THUMB.height}px"
           ></canvas>
         </div>
       {:else}
         <div
           class="gap"
+          data-rank={segment.index}
           class:current={session.selected === segment.index}
           role="button"
           tabindex="0"
@@ -227,27 +254,44 @@
     display: grid;
     place-items: center;
     font-size: 8px;
-    color: var(--ink-3);
+    color: var(--ink-2);
     border: 1px solid var(--border);
     background: var(--surface);
   }
 
   .listen:hover {
-    color: var(--surface);
+    color: var(--on-ink);
     background: var(--ink);
     border-color: var(--ink);
   }
 
   .listen.sounding {
-    color: var(--surface);
+    color: var(--on-accent);
     background: var(--accent);
     border-color: var(--accent);
   }
 
+  /* Le rond d'un blanc emprunte la teinte des blancs. Il était en encre
+     sourdine sur un fond déjà brun : la pause s'y devinait plus qu'elle ne s'y
+     lisait, et c'est justement sur les segments qu'on écarte qu'on réécoute le
+     plus. Fond plein plutôt que transparent, pour la même raison. */
   .listen.thin {
     font-size: 7px;
+    color: var(--gap);
     border-color: var(--gap-rule);
-    background: transparent;
+    background: var(--surface);
+  }
+
+  .listen.thin:hover {
+    color: var(--on-ink);
+    background: var(--gap);
+    border-color: var(--gap);
+  }
+
+  .listen.thin.sounding {
+    color: var(--on-ink);
+    background: var(--gap);
+    border-color: var(--gap);
   }
 
   .track {

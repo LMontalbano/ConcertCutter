@@ -178,7 +178,12 @@ button:disabled {
   white-space: nowrap;
 }
 
-.btn:hover:not(:disabled) {
+/* Le survol du bouton de contour ne vaut que pour lui. Cette règle portait
+   sur `.btn` tout court, donc aussi sur les deux variantes pleines : sur le
+   bouton sombre, elle repeignait le texte en `--ink` — c'est-à-dire, en thème
+   sombre, presque blanc sur presque blanc. « Exporter » disparaissait au
+   survol. */
+.btn:not(.strong):not(.accent):hover:not(:disabled) {
   border-color: var(--ink-3);
   color: var(--ink);
 }
@@ -190,7 +195,9 @@ button:disabled {
 }
 
 .btn.accent:hover:not(:disabled) {
-  filter: brightness(1.12);
+  background: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  color: var(--on-accent);
 }
 
 .btn.strong {
@@ -203,7 +210,9 @@ button:disabled {
 }
 
 .btn.strong:hover:not(:disabled) {
-  filter: brightness(0.92);
+  background: color-mix(in srgb, var(--ink) 86%, var(--accent));
+  border-color: color-mix(in srgb, var(--ink) 86%, var(--accent));
+  color: var(--on-ink);
 }
 
 .btn.quiet {

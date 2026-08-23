@@ -13,9 +13,13 @@
      le bord de sa zone de défilement au lieu de flotter par-dessus. */
   let { text, side = 'top' }: { text: string; side?: 'top' | 'right' } = $props()
 
+  const MARGIN = 12
+
   let badge: HTMLButtonElement
+  let bubble = $state<HTMLElement | null>(null)
   let open = $state(false)
   let at = $state({ x: 0, y: 0 })
+  let placed = false
 
   function show(): void {
     const box = badge.getBoundingClientRect()
@@ -23,8 +27,32 @@
       side === 'right'
         ? { x: box.right + 10, y: box.top + box.height / 2 }
         : { x: box.left + box.width / 2, y: box.top - 10 }
+    placed = false
     open = true
   }
+
+  /* Ramenée dans l'écran une fois mesurée. Les bulles sont centrées sur leur
+     « ? » et montent au-dessus : celles des deux réglages de fondu, posés près
+     du bord de leur colonne, débordaient du panneau par la droite. On ne peut
+     pas le savoir avant de connaître la largeur du texte, d'où ce second
+     temps — invisible, la bulle n'ayant pas encore été peinte à sa première
+     position. */
+  $effect(() => {
+    if (!open || !bubble || placed) return
+    // Une seule fois par ouverture : le recadrage écrit la position qu'il
+    // vient de lire, et sans ce garde-fou l'effet se rappellerait lui-même.
+    placed = true
+    const box = bubble.getBoundingClientRect()
+    let { x, y } = at
+    const tooFarRight = box.right - (window.innerWidth - MARGIN)
+    const tooFarLeft = MARGIN - box.left
+    if (tooFarRight > 0) x -= tooFarRight
+    else if (tooFarLeft > 0) x += tooFarLeft
+    // Trop haut : la bulle bascule sous son « ? » plutôt que de sortir par le
+    // haut de la fenêtre.
+    if (box.top < MARGIN) y += box.height + 2 * MARGIN
+    at = { x, y }
+  })
 </script>
 
 <button
@@ -43,6 +71,7 @@
 
 {#if open}
   <span
+    bind:this={bubble}
     class="bubble"
     class:right={side === 'right'}
     role="tooltip"
