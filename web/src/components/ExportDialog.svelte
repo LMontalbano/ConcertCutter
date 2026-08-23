@@ -21,6 +21,52 @@
   import { api, follow, type ExportChoice, type Job } from '../lib/api'
   import { session, message } from '../lib/session.svelte'
   import { duration as spell, trackLabel } from '../lib/format'
+  import Hint from './Hint.svelte'
+
+  /* Les explications, à part du balisage : elles restent aussi longues et
+     aussi précises qu'avant, mais se lisent à la demande. Les rassembler ici
+     les rend aussi relisibles d'un coup d'œil, ce qu'elles n'étaient plus une
+     fois dispersées entre les cases. */
+  const WHY = {
+    pieces:
+      "Décocher un morceau ne change ni le découpage ni la numérotation : la " +
+      "piste 7 s'appellera « 07 » même si elle part seule. Pour retirer un " +
+      "passage du concert lui-même, c'est la carte d'édition.",
+    full:
+      "Un seul WAV : les morceaux bout à bout, blancs retirés. Une cue sheet " +
+      "l'accompagne dans « infos », pour retrouver les morceaux à la lecture " +
+      'ou à la gravure.',
+    tracks:
+      "Numéroté et nommé d'après le titre saisi. C'est ce qu'attend un lecteur " +
+      'ou une clé USB.',
+    crossfade:
+      "N'agit que sur le concert en un seul fichier : la fin d'un morceau se " +
+      'fond dans le début du suivant. À zéro, ils se suivent bout à bout, ' +
+      'comme sur un disque.',
+    videoFull:
+      "Sur l'image de fond. Le titre affiché suit le morceau en cours plutôt " +
+      'que de rester figé deux heures.',
+    videoTracks:
+      "Son titre incrusté. C'est la forme qu'attendent les plateformes qui " +
+      "n'acceptent que de la vidéo.",
+    onePerTrack:
+      'Le morceau 1 reçoit la première image, le 2 la deuxième, et ainsi de ' +
+      "suite ; le cycle recommence s'il y a moins d'images que de morceaux. " +
+      'Sans cette case, les images défilent toutes sous chaque morceau — la ' +
+      'douzième photo passe alors sous la vidéo du premier. Sans effet sur le ' +
+      "concert en un seul fichier, où le fond n'a pas de morceau à suivre.",
+    slideshow:
+      "Les images se relaient dans l'ordre ci-dessus, une toutes les huit " +
+      'secondes, et le cycle recommence aussi longtemps que dure le son. ' +
+      'Chacune garde ses proportions et se centre sur du noir.',
+    stills:
+      'Photos du concert, pochette, affiche. Le titre du morceau est incrusté ' +
+      'par-dessus.',
+    dir:
+      "Le concert reçoit son propre dossier ici, nommé d'après " +
+      "l'enregistrement. Un export déjà présent n'est jamais écrasé sans qu'on " +
+      'le demande.',
+  }
 
   let { onClose, onBusy }: { onClose: () => void; onBusy: (job: Job | null) => void } =
     $props()
@@ -144,12 +190,10 @@
 
     <div class="body">
       <section>
-        <h2><span class="step">1</span> Quels morceaux ?</h2>
-        <p class="why">
-          Décocher un morceau ici ne change ni le découpage ni la numérotation :
-          la piste 7 s'appellera « 07 » même si elle part seule. Pour retirer un
-          passage du concert lui-même, c'est la carte d'édition.
-        </p>
+        <h2>
+          <span class="step">1</span> Quels morceaux ?
+          <Hint text={WHY.pieces} side="right" />
+        </h2>
         <div class="picks">
           {#each tracks as track (track.number)}
             <label class="pick">
@@ -183,28 +227,17 @@
         <span class="label">Audio</span>
         <label class="line">
           <input type="checkbox" bind:checked={choice.full} />
-          <span>
-            <b>Le concert en un seul fichier</b>
-            <em>
-              Un seul WAV : les morceaux bout à bout, blancs retirés. Une cue
-              sheet l'accompagne dans « infos », pour retrouver les morceaux à
-              la lecture ou à la gravure.
-            </em>
-          </span>
+          <b>Le concert en un seul fichier</b>
+          <Hint text={WHY.full} />
         </label>
         <label class="line">
           <input type="checkbox" bind:checked={choice.tracks} />
-          <span>
-            <b>Un fichier par morceau</b>
-            <em>
-              Numéroté et nommé d'après le titre saisi. C'est ce qu'attend un
-              lecteur ou une clé USB.
-            </em>
-          </span>
+          <b>Un fichier par morceau</b>
+          <Hint text={WHY.tracks} />
         </label>
 
         <div class="knob" class:off={!choice.full}>
-          <label for="crossfade">Fondu enchaîné</label>
+          <label for="crossfade">Fondu enchaîné<Hint text={WHY.crossfade} /></label>
           <input
             id="crossfade"
             class="mono"
@@ -214,11 +247,6 @@
             bind:value={choice.crossfade}
           />
           <span class="unit">s</span>
-          <em>
-            N'agit que sur le concert en un seul fichier : la fin d'un morceau
-            se fond dans le début du suivant. À zéro, ils se suivent bout à
-            bout, comme sur un disque.
-          </em>
         </div>
 
         <span class="label vid">Vidéo</span>
@@ -242,23 +270,13 @@
         {:else}
           <label class="line">
             <input type="checkbox" bind:checked={choice.video_full} />
-            <span>
-              <b>Un MP4 du concert entier</b>
-              <em>
-                Sur l'image de fond. Le titre affiché suit le morceau en cours
-                plutôt que de rester figé deux heures.
-              </em>
-            </span>
+            <b>Un MP4 du concert entier</b>
+            <Hint text={WHY.videoFull} />
           </label>
           <label class="line">
             <input type="checkbox" bind:checked={choice.video_tracks} />
-            <span>
-              <b>Un MP4 par morceau</b>
-              <em>
-                Son titre incrusté. C'est la forme qu'attendent les plateformes
-                qui n'acceptent que de la vidéo.
-              </em>
-            </span>
+            <b>Un MP4 par morceau</b>
+            <Hint text={WHY.videoTracks} />
           </label>
 
           <div class="images" class:off={!choice.video_full && !choice.video_tracks}>
@@ -299,27 +317,15 @@
 
               <label class="line tight">
                 <input type="checkbox" bind:checked={choice.one_per_track} />
-                <span>
-                  <b>Une seule image par morceau</b>
-                  <em>
-                    Le morceau 1 reçoit la première image, le 2 la deuxième, et
-                    ainsi de suite ; le cycle recommence s'il y a moins d'images
-                    que de morceaux. Sans cette case, les images défilent toutes
-                    sous chaque morceau — la douzième photo passe alors sous la
-                    vidéo du premier. Sans effet sur le concert en un seul
-                    fichier, où le fond n'a pas de morceau à suivre.
-                  </em>
-                </span>
+                <b>Une seule image par morceau</b>
+                <Hint text={WHY.onePerTrack} />
               </label>
 
               {#if !choice.one_per_track}
-                <em class="note">
-                  Les images se relaient dans l'ordre ci-dessus, une toutes les
-                  huit secondes, et le cycle recommence aussi longtemps que dure
-                  le son. Chacune garde ses proportions et se centre sur du noir.
-                </em>
                 <div class="knob">
-                  <label for="slide">Fondu entre images</label>
+                  <label for="slide">
+                    Fondu entre images<Hint text={WHY.slideshow} />
+                  </label>
                   <input
                     id="slide"
                     class="mono"
@@ -333,8 +339,7 @@
               {/if}
             {:else}
               <em class="note">
-                Photos du concert, pochette, affiche. Le titre du morceau est
-                incrusté par-dessus.
+                Photos du concert, pochette, affiche.<Hint text={WHY.stills} />
               </em>
             {/if}
           </div>
@@ -342,12 +347,10 @@
       </section>
 
       <section class="anchored">
-        <h2><span class="step">3</span> Où ?</h2>
-        <p class="why">
-          Le concert reçoit son propre dossier ici, nommé d'après
-          l'enregistrement. Un export déjà présent n'est jamais écrasé sans
-          qu'on le demande.
-        </p>
+        <h2>
+          <span class="step">3</span> Où ?
+          <Hint text={WHY.dir} />
+        </h2>
         <div class="dir">
           <input class="mono" bind:value={choice.dir} placeholder="Aucun dossier choisi" />
           {#if session.dialogs}
@@ -483,7 +486,7 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    margin: 0 0 10px;
+    margin: 0 0 12px;
     font: 600 14px var(--sans);
   }
 
@@ -557,16 +560,11 @@
   .line {
     display: flex;
     gap: 10px;
-    padding: 9px 0;
-    align-items: flex-start;
-  }
-
-  .line input {
-    margin-top: 2px;
+    padding: 7px 0;
+    align-items: center;
   }
 
   .line b {
-    display: block;
     font: 500 13px var(--sans);
   }
 
@@ -587,14 +585,10 @@
     padding: 10px 0 6px 26px;
   }
 
-  .knob em {
-    grid-column: 1 / -1;
-    margin-top: 2px;
-  }
-
   .knob label {
     font-size: 12.5px;
     font-weight: 500;
+    white-space: nowrap;
   }
 
   .knob input,

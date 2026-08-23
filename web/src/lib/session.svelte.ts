@@ -33,6 +33,8 @@ class Session {
   viewStart = $state(0)
   viewSpan = $state(60)
   zoomed = $state(false)
+  /** Vrai quand la vue a été choisie à la main, et ne doit plus suivre le son. */
+  pinned = $state(false)
 
   screen = $state<'empty' | 'main' | 'options'>('empty')
   theme = $state<'dark' | 'light'>('dark')
@@ -228,6 +230,11 @@ class Session {
   select(index: number): void {
     if (index < 0 || index >= this.segments.length) return
     this.selected = index
+    // Désigner un segment, c'est vouloir le regarder — y compris pendant que
+    // le son avance ailleurs. La lecture cessait sinon de laisser choisir :
+    // elle ramenait la vue sur le morceau en cours à chaque battement, et
+    // cliquer sur un autre dans la liste ne tenait pas une demi-seconde.
+    this.pinned = true
     this.zoomed = false
     this.frame()
   }
@@ -265,7 +272,10 @@ class Session {
       La vue d'ensemble déplace la loupe quand on y clique ; le transport doit
       faire de même, sinon écouter un concert d'un bout à l'autre laisse la
       carte d'édition sur le premier morceau. Le zoom, lui, est respecté : on
-      ne recadre que si l'utilisateur ne s'est pas placé lui-même. */
+      ne recadre que si l'utilisateur ne s'est pas placé lui-même.
+
+      Et la vue ne suit plus quand on l'a choisie à la main : `pinned` tient
+      jusqu'au prochain déplacement volontaire de la tête de lecture. */
   private follow(): void {
     const index = this.segments.findIndex(
       (segment) => segment.start <= this.playhead && this.playhead < segment.end,
@@ -311,6 +321,9 @@ class Session {
   seek(seconds: number): void {
     this.playhead = Math.max(0, Math.min(this.duration, seconds))
     if (this.audio) this.audio.currentTime = this.playhead
+    // Déplacer la tête soi-même, c'est demander à voir là où l'on va : la vue
+    // reprend sa liberté de suivre.
+    this.pinned = false
     this.follow()
   }
 
@@ -356,7 +369,7 @@ class Session {
       précisément ce qu'on cherche à juger. */
   tick(seconds: number): void {
     this.playhead = seconds
-    this.follow()
+    if (!this.pinned) this.follow()
     if (this.loop === null) return
     const segment = this.segments[this.loop]
     if (!segment) {

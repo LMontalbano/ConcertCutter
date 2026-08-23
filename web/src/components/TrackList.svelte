@@ -19,7 +19,12 @@
   let editing = $state(-1)
   let draft = $state('')
 
-  function thumb(canvas: HTMLCanvasElement, segment: Segment) {
+  /* Les vignettes se repeignent aussi au changement de thème. Le paramètre
+     porte donc la teinte en plus du segment : sans elle, l'action ne serait
+     pas rappelée, et vingt-cinq vignettes garderaient leur lit sombre sur
+     fond clair. */
+  function thumb(canvas: HTMLCanvasElement, at: { segment: Segment; theme: string }) {
+    let segment = at.segment
     const render = () => {
       const context = surface(canvas)
       if (!context) return
@@ -43,8 +48,8 @@
     }
     render()
     return {
-      update(next: Segment) {
-        segment = next
+      update(next: { segment: Segment; theme: string }) {
+        segment = next.segment
         render()
       },
     }
@@ -144,7 +149,7 @@
             </div>
           </div>
           <canvas
-            use:thumb={segment}
+            use:thumb={{ segment, theme: session.theme }}
             style="width:{THUMB.width}px;height:{THUMB.height}px"
           ></canvas>
         </div>

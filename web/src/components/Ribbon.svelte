@@ -77,6 +77,10 @@
   $effect(() => {
     // Toutes les dépendances lues ici déclenchent le redessin : l'enveloppe,
     // les segments, la fenêtre, la tête de lecture.
+    // Le thème repeint : les couleurs du tracé sont lues au moment de
+    // peindre, mais rien ne redemandait de peindre. Basculer en clair
+    // laissait le lit des ondes en sombre jusqu'au geste suivant.
+    void session.theme
     void session.envelope
     void session.segments
     void session.viewStart

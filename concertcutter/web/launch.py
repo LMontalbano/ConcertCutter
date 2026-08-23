@@ -27,6 +27,11 @@ from pathlib import Path
 from .. import __version__
 from . import dialogs, server
 
+# Ce que Windows affiche dans la barre des tâches quand il regroupe les
+# fenêtres. Sans identité propre, le regroupement se fait sous l'exécutable qui
+# tourne — c'est-à-dire `python.exe` en développement, avec son icône.
+APP_ID = "ConcertCutter.ConcertCutter"
+
 TITLE = f"ConcertCutter {__version__}"
 
 # La fenêtre s'ouvre agrandie : découper un concert se fait sur toute la
@@ -76,6 +81,59 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def icon_path() -> Path:
+    """L'icône de l'application, dans l'arborescence ou dans l'exécutable.
+
+    PyInstaller déplie ses données dans un dossier temporaire dont le chemin
+    n'est connu qu'au lancement : `sys._MEIPASS` est le seul point fixe.
+    """
+    root = Path(getattr(sys, "_MEIPASS",
+                        Path(__file__).resolve().parent.parent.parent))
+    return root / "concertcutter" / "assets" / "icon.ico"
+
+
+def _dress_window(window, *_) -> None:
+    """Pose l'icône sur la fenêtre, sous Windows.
+
+    L'exécutable construit porte la sienne, et la fenêtre en hérite ; lancée
+    par `python gui_web.py`, elle héritait de celle de l'interpréteur. Ce sont
+    pourtant les deux mêmes fenêtres, et la seconde est celle qu'on regarde
+    pendant tout le développement.
+
+    Par la propriété `Icon` du formulaire, et non par un message `WM_SETICON` :
+    WinForms tient l'icône de sa fenêtre et la repose à chaque fois qu'il la
+    redessine, si bien que le message passait — il rendait bien l'ancienne
+    poignée — sans que la barre de titre change.
+
+    Rien d'obligatoire ici : une icône manquante ne doit pas empêcher
+    l'application de démarrer, elle doit juste ne pas s'afficher.
+    """
+    if sys.platform != "win32":
+        return
+    icon = icon_path()
+    native = getattr(window, "native", None)
+    if not icon.is_file() or native is None:
+        return
+    try:
+        from System.Drawing import Icon   # pythonnet, apporté par pywebview
+
+        native.Icon = Icon(str(icon))
+    except Exception as failure:  # noqa: BLE001 — autre coquille, autre monde
+        print(f"Icône non posée ({failure}).", flush=True)
+
+
+def _claim_identity() -> None:
+    """Donne au processus son identité de barre des tâches, avant toute fenêtre."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:  # noqa: BLE001 — une vieille version de Windows suffit
+        pass
+
+
 def _webview():
     """pywebview, s'il est installé et qu'une coquille native répond."""
     try:
@@ -87,10 +145,15 @@ def _webview():
 
 def _in_window(page: str, app) -> None:
     webview = _webview()
+    _claim_identity()
     window = webview.create_window(
         TITLE, page, width=WIDTH, height=HEIGHT,
         min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True)
     dialogs.use(dialogs.WebviewDialogs(window))
+
+    # La fenêtre n'existe pas encore ici : son icône se pose une fois qu'elle
+    # est à l'écran.
+    window.events.shown += lambda *_: _dress_window(window)
 
     # Fermer la fenêtre doit arrêter le serveur, et non laisser un processus
     # sans fenêtre tenir un port jusqu'au prochain redémarrage.
