@@ -31,7 +31,9 @@
   --on-accent: #08191d;
 
   --accent: #34a8b8;
+  --accent-hover: #4cc3d4;
   --accent-soft: #15323a;
+  --ink-hover: #ffffff;
 
   /* Les blancs — c'est-à-dire les applaudissements. Une teinte à part, et non
      un gris : c'est la seule chose qui permette de juger si une coupe tombe au
@@ -70,7 +72,9 @@
   --on-accent: #ffffff;
 
   --accent: #1e7f8c;
+  --accent-hover: #176571;
   --accent-soft: #e8f3f5;
+  --ink-hover: #2c3341;
 
   --gap: #b4603a;
   --gap-row: #fcf9f7;
@@ -183,7 +187,7 @@ button:disabled {
    bouton sombre, elle repeignait le texte en `--ink` — c'est-à-dire, en thème
    sombre, presque blanc sur presque blanc. « Exporter » disparaissait au
    survol. */
-.btn:not(.strong):not(.accent):hover:not(:disabled) {
+.btn:not(.strong):not(.accent):not(.tonal):hover:not(:disabled) {
   border-color: var(--ink-3);
   color: var(--ink);
 }
@@ -195,8 +199,8 @@ button:disabled {
 }
 
 .btn.accent:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 82%, var(--ink));
-  border-color: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
   color: var(--on-accent);
 }
 
@@ -209,10 +213,33 @@ button:disabled {
   font: 600 13.5px var(--sans);
 }
 
+/* Une teinte nommée par thème, plutôt qu'un mélange calculé : `color-mix`
+   entre l'encre et l'accent donnait un bleu-gris terne, ni encre ni accent. Le
+   survol d'un bouton plein éclaircit son fond en thème sombre et le fonce en
+   clair — dans les deux cas, il s'écarte du repos dans le sens où va la
+   lumière. */
 .btn.strong:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ink) 86%, var(--accent));
-  border-color: color-mix(in srgb, var(--ink) 86%, var(--accent));
+  background: var(--ink-hover);
+  border-color: var(--ink-hover);
   color: var(--on-ink);
+}
+
+/* Tonale : un aplat d'accent très pâle, sans bordure. Assez présente pour
+   qu'on la voie du premier coup d'œil, assez discrète pour ne pas disputer
+   « Exporter ». C'est ce qu'il fallait aux deux actions de la fenêtre d'export
+   — cocher tous les morceaux, ajouter des images — qui étaient d'abord
+   invisibles, puis de simples contours perdus parmi les champs. */
+.btn.tonal {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.btn.tonal:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 
 .btn.quiet {

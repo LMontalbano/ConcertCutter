@@ -109,12 +109,12 @@ class RenderParams:
     # heures. Vide, `video_image` fait seule le fond, comme avant.
     video_images: tuple[str, ...] = ()
     video_slide_fade_s: float = 0.0
-    # Une image fixe par morceau, au lieu du diaporama. Les vingt-cinq photos
-    # d'un concert sont souvent une par morceau : les faire toutes défiler sous
-    # chacune des vingt-cinq vidéos montre le morceau 12 sous la photo du 3.
-    # Les images sont prises dans l'ordre de la liste, et le cycle recommence
-    # s'il y en a moins que de morceaux. Sans effet sur la vidéo du concert
-    # entier, où le fond n'a pas de morceau à suivre : elle garde le diaporama.
+    # Une image par morceau, au lieu du diaporama à l'horloge. La règle est la
+    # même pour les deux sorties, seule sa mise en œuvre diffère : la vidéo
+    # d'un morceau reçoit *son* image et la garde ; celle du concert entier
+    # change de fond à chaque morceau. Dans les deux cas les images sont prises
+    # dans l'ordre de la liste, et le cycle recommence s'il y en a moins que de
+    # morceaux. Décochée, c'est le diaporama qui tourne — partout.
     video_one_per_track: bool = False
     # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
     # toujours à sortir en entier — trois titres pour une maquette, le rappel
@@ -368,17 +368,21 @@ def _video_params(params: RenderParams,
                   rank: int | None = None) -> video.VideoParams:
     """Traduit les réglages d'export en réglages de rendu vidéo.
 
-    `rank` est le rang du morceau, quand la vidéo n'en couvre qu'un. Avec
-    `video_one_per_track`, il désigne l'image que ce morceau reçoit — et lui
-    seule, si bien que la vidéo n'a plus de diaporama à encoder.
+    `rank` est le rang du morceau, quand la vidéo n'en couvre qu'un — sans lui,
+    c'est la vidéo du concert entier. C'est cette distinction qui donne à
+    « une image par morceau » ses deux mises en œuvre : le morceau de rang `n`
+    reçoit la `n`-ième image et la garde, tandis que le concert entier les
+    reçoit toutes et change de fond au morceau.
     """
     stills = tuple(str(path) for path in params.video_images)
-    if params.video_one_per_track and rank is not None and stills:
+    one = params.video_one_per_track and bool(stills)
+    if one and rank is not None:
         stills = (stills[rank % len(stills)],)
     return video.VideoParams(
         image=str(params.video_image or ""),
         images=stills,
         slide_fade_s=params.video_slide_fade_s,
+        per_caption=one and rank is None,
     )
 
 

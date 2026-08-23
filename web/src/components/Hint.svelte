@@ -31,26 +31,37 @@
     open = true
   }
 
-  /* Ramenée dans l'écran une fois mesurée. Les bulles sont centrées sur leur
-     « ? » et montent au-dessus : celles des deux réglages de fondu, posés près
-     du bord de leur colonne, débordaient du panneau par la droite. On ne peut
-     pas le savoir avant de connaître la largeur du texte, d'où ce second
-     temps — invisible, la bulle n'ayant pas encore été peinte à sa première
-     position. */
+  /* Ramenée dans son cadre une fois mesurée.
+
+     Le cadre, c'est le panneau de dialogue quand il y en a un, et la fenêtre
+     sinon. Se contenter de la fenêtre ne suffisait pas : les bulles des deux
+     réglages de fondu tenaient dans l'écran tout en débordant du panneau, et
+     une explication qui déborde sur le fond assombri se lit mal — elle n'a
+     plus l'air d'appartenir à ce qu'elle explique.
+
+     On ne peut pas le savoir avant de connaître la largeur du texte, d'où ce
+     second temps — invisible, la bulle n'ayant pas encore été peinte à sa
+     première position. */
   $effect(() => {
     if (!open || !bubble || placed) return
     // Une seule fois par ouverture : le recadrage écrit la position qu'il
     // vient de lire, et sans ce garde-fou l'effet se rappellerait lui-même.
     placed = true
+
+    const panel = badge.closest('[role="dialog"]')
+    const frame = panel
+      ? panel.getBoundingClientRect()
+      : new DOMRect(0, 0, window.innerWidth, window.innerHeight)
     const box = bubble.getBoundingClientRect()
     let { x, y } = at
-    const tooFarRight = box.right - (window.innerWidth - MARGIN)
-    const tooFarLeft = MARGIN - box.left
+
+    const tooFarRight = box.right - (frame.right - MARGIN)
+    const tooFarLeft = frame.left + MARGIN - box.left
     if (tooFarRight > 0) x -= tooFarRight
     else if (tooFarLeft > 0) x += tooFarLeft
     // Trop haut : la bulle bascule sous son « ? » plutôt que de sortir par le
-    // haut de la fenêtre.
-    if (box.top < MARGIN) y += box.height + 2 * MARGIN
+    // haut du cadre.
+    if (box.top < frame.top + MARGIN) y += box.height + 2 * MARGIN
     at = { x, y }
   })
 </script>
@@ -106,7 +117,7 @@
     position: fixed;
     z-index: 60;
     transform: translate(-50%, -100%);
-    max-width: 300px;
+    max-width: 280px;
     padding: 9px 12px;
     border-radius: 9px;
     background: var(--ink);

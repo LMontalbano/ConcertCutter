@@ -103,7 +103,15 @@
   $effect(() => {
     const index = session.selected
     const row = rows?.querySelector<HTMLElement>(`[data-rank="${index}"]`)
-    row?.scrollIntoView({ block: 'nearest' })
+    if (!row || !rows) return
+    const line = row.getBoundingClientRect()
+    const frame = rows.getBoundingClientRect()
+    // Rien tant qu'elle est déjà sous les yeux : la liste ne saute pas sous
+    // les doigts de qui la parcourt. Sinon on la ramène au milieu, et non au
+    // plus court — `nearest` la collait au bord bas, d'où l'on ne voit pas ce
+    // qui suit.
+    if (line.top >= frame.top && line.bottom <= frame.bottom) return
+    row.scrollIntoView({ block: 'center' })
   })
 
   async function keep(segment: Segment): Promise<void> {
@@ -259,10 +267,14 @@
     background: var(--surface);
   }
 
+  /* Le survol annonce ce que le clic va donner : la même teinte que le rond
+     en train de jouer. Il empruntait l'encre, c'est-à-dire presque blanc en
+     thème sombre — un aplat qui n'avait rapport ni avec la lecture ni avec le
+     reste de la ligne. */
   .listen:hover {
-    color: var(--on-ink);
-    background: var(--ink);
-    border-color: var(--ink);
+    color: var(--on-accent);
+    background: var(--accent);
+    border-color: var(--accent);
   }
 
   .listen.sounding {
@@ -287,6 +299,7 @@
     background: var(--gap);
     border-color: var(--gap);
   }
+
 
   .listen.thin.sounding {
     color: var(--on-ink);

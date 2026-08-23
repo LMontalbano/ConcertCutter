@@ -52,13 +52,13 @@
     onePerTrack:
       'Le morceau 1 reçoit la première image, le 2 la deuxième, et ainsi de ' +
       "suite ; le cycle recommence s'il y a moins d'images que de morceaux. " +
-      'Sans cette case, les images défilent toutes sous chaque morceau — la ' +
-      'douzième photo passe alors sous la vidéo du premier. Sans effet sur le ' +
-      "concert en un seul fichier, où le fond n'a pas de morceau à suivre.",
+      'Dans la vidéo du concert entier, le fond change donc au morceau ; dans ' +
+      'les vidéos de morceaux, chacune garde la sienne. Décochée, les images ' +
+      'défilent au chronomètre, ici comme là.',
     slideOnly:
-      'Avec une image par morceau, les vidéos de morceaux ne font plus défiler ' +
-      "d'images : ce fondu ne concerne plus que la vidéo du concert entier, où " +
-      'le diaporama continue de tourner.',
+      'Durée du fondu entre deux images. Avec une image par morceau, il joue ' +
+      'aux frontières de morceaux, dans la vidéo du concert entier ; une vidéo ' +
+      "de morceau n'a qu'une image, donc rien à fondre.",
     slideshow:
       "Les images se relaient dans l'ordre ci-dessus, une toutes les huit " +
       'secondes, et le cycle recommence aussi longtemps que dure le son. ' +
@@ -213,7 +213,7 @@
           {/each}
         </div>
         <button
-          class="btn all"
+          class="btn tonal all"
           onclick={() =>
             (picked =
               picked.size === tracks.length
@@ -294,7 +294,7 @@
           <div class="images" class:off={!choice.video_full && !choice.video_tracks}>
             <div class="images-head">
               <span class="label">Fonds</span>
-              <button class="btn" onclick={addImages}>Ajouter des images…</button>
+              <button class="btn tonal" onclick={addImages}>Ajouter des images…</button>
             </div>
             {#if choice.images.length}
               <!-- Des vignettes, et non des noms de fichiers. « DSC_0421.jpg »
@@ -335,10 +335,11 @@
                 <Hint text={WHY.onePerTrack} />
               </div>
 
-              <!-- Toujours là, y compris avec « une image par morceau » : la
-                   vidéo du concert entier garde son diaporama, donc le fondu
-                   la concerne encore. Il ne s'éteint que lorsque plus aucune
-                   sortie ne fait défiler d'images. -->
+              <!-- Le fondu sert dans les deux règles : entre deux images du
+                   diaporama, ou à la frontière de deux morceaux quand le fond
+                   les suit. Il ne s'éteint que si plus aucune image n'en
+                   remplace une autre — une seule image par morceau, et pas de
+                   vidéo du concert entier. -->
               <div class="knob" class:off={choice.one_per_track && !choice.video_full}>
                 <label for="slide">
                   Fondu entre images<Hint

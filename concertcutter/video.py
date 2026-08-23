@@ -110,12 +110,20 @@ class VideoParams:
     au lieu d'une seule photo tenue deux heures. `image` reste la première
     d'entre elles, pour que tout ce qui n'en demande qu'une continue de marcher
     sans rien changer.
+
+    `per_caption` change la règle du fond : au lieu de tourner sur une horloge,
+    les images suivent les morceaux — la première sous le premier, la deuxième
+    sous le deuxième, et le cycle recommence s'il y en a moins que de morceaux.
+    Cela ne vaut que pour une vidéo qui couvre plusieurs morceaux, c'est-à-dire
+    le concert entier : une vidéo de morceau n'a qu'un morceau, et reçoit
+    directement son image.
     """
 
     image: str
     images: tuple[str, ...] = ()
     slide_s: float = SLIDE_S        # durée d'affichage d'une image
     slide_fade_s: float = 0.0       # fondu vers la suivante ; 0 = coupe franche
+    per_caption: bool = False       # une image par morceau, au lieu de l'horloge
     width: int = WIDTH
     height: int = HEIGHT
     fps: int = FPS
@@ -285,7 +293,12 @@ def write_video(audio: str | Path, captions: str | list[Caption],
         # boucle. Le dérouler d'un bout à l'autre du concert demanderait neuf
         # cents entrées ffmpeg pour deux heures — et la ligne de commande de
         # Windows lâche bien avant, vers la centième.
-        if len(stills) > 1:
+        chapters = _chapters(captions, params) if params.per_caption else None
+        if chapters is not None:
+            # Le fond suit les morceaux : il dure ce que dure le concert, et
+            # ne boucle donc pas.
+            background = ["-i", str(chapters)]
+        elif len(stills) > 1:
             background = ["-stream_loop", "-1", "-i", str(_slideshow(params))]
         else:
             background = ["-loop", "1", "-framerate", str(params.fps),
@@ -329,6 +342,91 @@ def _seconds(audio: str | Path) -> float:
         return float(sf.info(str(audio)).duration)
     except (RuntimeError, OSError):
         return 0.0
+
+
+def _chapters(captions: list[Caption], params: VideoParams) -> Path | None:
+    """Fond dont l'image change au morceau, encodé pour la durée du concert.
+
+    C'est l'autre règle possible pour un fond : au lieu de tourner sur une
+    horloge — une image toutes les huit secondes, sans rapport avec ce qu'on
+    entend —, chaque morceau reçoit la sienne. Sur un concert dont on a pris
+    une photo par morceau, c'est la seule qui ait un sens.
+
+    Le cycle recommence s'il y a moins d'images que de morceaux : mieux vaut
+    revoir la troisième photo au vingt-sixième morceau que ne rien afficher.
+
+    Rend None quand la question ne se pose pas : un seul morceau, une seule
+    image, ou des titres sans bornes — auquel cas l'appelant retombe sur le
+    diaporama ou sur l'image fixe.
+
+    Une entrée ffmpeg par morceau, soit vingt-cinq : c'est le diaporama déroulé
+    qui était impraticable, avec ses neuf cents entrées pour deux heures.
+    """
+    global _cycle_dir
+    stills = params.stills()
+    spans = [(caption.start or 0.0, caption.end) for caption in captions]
+    if len(stills) < 2 or len(captions) < 2 or any(end is None for _, end in spans):
+        return None
+
+    lengths = [max(0.2, float(end) - start) for start, end in spans]
+    fade = max(0.0, min(params.slide_fade_s, min(lengths) / 2))
+    chosen = [stills[rank % len(stills)] for rank in range(len(lengths))]
+    signature = (tuple(chosen), tuple(round(value, 3) for value in lengths), fade,
+                 params.width, params.height, params.fps, params.crf)
+
+    with _cycle_lock:
+        known = _cycles.get(signature)
+        if known is not None and known.exists():
+            return known
+        if _cycle_dir is None:
+            _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
+
+        # Chaque image tient son morceau, plus de quoi fondre vers la suivante
+        # — la dernière comprise, dont le rabiot est coupé par `-t`. Uniforme,
+        # parce que le calcul des offsets qui suit l'est aussi : une exception
+        # sur la dernière décalait tout le fond, et le concert perdait une
+        # seconde de fond par morceau.
+        inputs: list[str] = []
+        for still, length in zip(chosen, lengths):
+            inputs += ["-loop", "1", "-t", f"{length + fade:.3f}",
+                       "-framerate", str(params.fps), "-i", still]
+
+        chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
+                 for index in range(len(chosen))]
+        if fade:
+            previous = "[s0]"
+            elapsed = 0.0
+            for index in range(1, len(chosen)):
+                elapsed += lengths[index - 1]
+                label = f"[x{index}]"
+                # Le fondu se termine pile à la frontière : l'image du morceau
+                # suivant est pleinement là quand il commence. L'offset se
+                # compte sur le flux déjà assemblé, dont la longueur vaut la
+                # somme des morceaux servis plus le rabiot d'un fondu.
+                chain.append(f"{previous}[s{index}]xfade=transition=fade"
+                             f":duration={fade:.3f}"
+                             f":offset={elapsed - fade:.3f}{label}")
+                previous = label
+            last = previous
+        else:
+            joined = "".join(f"[s{index}]" for index in range(len(chosen)))
+            chain.append(f"{joined}concat=n={len(chosen)}:v=1:a=0[x]")
+            last = "[x]"
+
+        out_path = Path(_cycle_dir.name) / f"morceaux{len(_cycles)}.mp4"
+        _run([
+            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            *inputs,
+            "-filter_complex", ";".join(chain),
+            "-map", last,
+            "-t", f"{sum(lengths):.3f}",
+            "-c:v", _video_encoder(), "-crf", str(params.crf),
+            "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
+            str(out_path),
+        ])
+        _cycles[signature] = out_path
+        return out_path
 
 
 def _slideshow(params: VideoParams) -> Path:
