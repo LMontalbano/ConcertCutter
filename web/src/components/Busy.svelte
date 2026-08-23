@@ -19,10 +19,12 @@
     <div class="track" class:endless={job.total === 0}>
       <div class="fill" style={job.total > 0 ? `width:${share * 100}%` : ''}></div>
     </div>
+    <!-- Rien sous la barre quand on ne compte pas d'étapes. « Durée inconnue »
+         y figurait, et c'était la seule chose que la fenêtre disait pendant
+         une lecture de quinze secondes : une phrase qui n'apprend rien vaut
+         moins que le silence. -->
     {#if job.total > 0}
       <div class="mono count">{job.done} sur {job.total}</div>
-    {:else}
-      <div class="mono count">durée inconnue</div>
     {/if}
   </div>
 </div>
@@ -80,7 +82,7 @@
   }
 
   .count {
-    margin-top: 10px;
+    margin-top: 12px;
     font-size: 11.5px;
     color: var(--ink-3);
   }

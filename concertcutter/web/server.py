@@ -249,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
             "open",
             lambda work: (self.app.session.open(path, work, body.get("source")),
                           self.app.session.state())[1],
-            "Ouverture…")
+            "Import en cours…")
         self._send(job.payload())
 
     def _pick(self, body: dict) -> None:

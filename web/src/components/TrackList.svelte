@@ -179,7 +179,10 @@
 
 <style>
   aside {
-    width: 400px;
+    /* Quatre cents pixels sur un écran de portable, un peu plus sur un grand :
+       la colonne porte des titres, et un titre coupé au milieu ne se lit pas
+       mieux parce que l'écran est large. */
+    width: clamp(400px, 24%, 560px);
     flex: none;
     border-right: 1px solid var(--border);
     background: var(--surface);
@@ -207,11 +210,15 @@
      qu'un : parcourir la liste pour regarder les découpes déclenchait le son
      vingt-cinq fois de suite. Ce sont deux intentions différentes, et elles
      ont maintenant deux cibles différentes. */
+  /* Même diamètre pour un morceau et pour un blanc : les deux ronds ne
+     faisaient pas la même taille, si bien que leurs centres — et donc la
+     colonne qu'ils dessinent le long de la liste — se décalaient de trois
+     pixels d'une ligne à l'autre. */
   .listen {
     flex: none;
-    width: 26px;
-    height: 26px;
-    border-radius: 13px;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
     display: grid;
     place-items: center;
     font-size: 8px;
@@ -233,8 +240,6 @@
   }
 
   .listen.thin {
-    width: 20px;
-    height: 20px;
     font-size: 7px;
     border-color: var(--gap-rule);
     background: transparent;
@@ -320,7 +325,7 @@
   .gap {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     padding: 8px 16px;
     border-bottom: 1px solid var(--rule);
     border-left: 3px solid transparent;

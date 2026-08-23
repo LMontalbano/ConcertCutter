@@ -28,7 +28,11 @@ from .. import __version__
 from . import dialogs, server
 
 TITLE = f"ConcertCutter {__version__}"
-WIDTH, HEIGHT = 1280, 820
+
+# La fenêtre s'ouvre agrandie : découper un concert se fait sur toute la
+# largeur qu'on a — vingt-cinq morceaux à gauche, la loupe à droite. Ces deux
+# valeurs sont celles qu'elle retrouve quand on la restaure.
+WIDTH, HEIGHT = 1920, 1080
 MIN_WIDTH, MIN_HEIGHT = 1040, 680
 
 
@@ -85,7 +89,7 @@ def _in_window(page: str, app) -> None:
     webview = _webview()
     window = webview.create_window(
         TITLE, page, width=WIDTH, height=HEIGHT,
-        min_size=(MIN_WIDTH, MIN_HEIGHT), text_select=True)
+        min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True)
     dialogs.use(dialogs.WebviewDialogs(window))
 
     # Fermer la fenêtre doit arrêter le serveur, et non laisser un processus

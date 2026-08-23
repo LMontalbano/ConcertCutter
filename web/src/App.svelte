@@ -123,7 +123,11 @@
       {#if session.analysed}
         <TrackList />
         <div class="detail">
-          <EditCard />
+          <!-- La carte d'édition remplit la hauteur disponible : c'est elle
+               qu'on regarde, et le tracé gagne à être haut. -->
+          <div class="card-slot">
+            <EditCard />
+          </div>
           <Transport />
         </div>
       {:else}
@@ -208,6 +212,13 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+  }
+
+  .card-slot {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .waiting {

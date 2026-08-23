@@ -9,9 +9,8 @@
      juger si elle tombe au bon endroit.
 
      Trois façons de corriger, par précision croissante : les poignées à la
-     souris, la molette pour zoomer, les steppers au dixième de seconde. Plus
-     « Caler sur l'attaque », qui ne devine rien — il rejoue le calcul que le
-     détecteur fait déjà sur chacune de ses frontières. */
+     souris, la molette pour zoomer, les steppers d'une demi-seconde — et la
+     frappe au clavier dans le champ, pour qui veut le dixième. */
   import { session } from '../lib/session.svelte'
   import { api } from '../lib/api'
   import { hms, parseTime, tenths, trackLabel } from '../lib/format'
@@ -19,10 +18,10 @@
     drawCursor, drawHandle, paint, palette, slice, surface, type Palette,
   } from '../lib/wave'
 
-  // Un demi-second par appui. Le dixième était plus fin que le geste : caler
+  // Une demi-seconde par appui. Le dixième était plus fin que le geste : caler
   // une coupe à l'oreille demande de bouger d'une demi-seconde, et il en
-  // fallait cinq clics. La frappe au clavier reste au dixième pour qui veut
-  // la précision, et « Caler » va la chercher tout seul.
+  // fallait cinq clics. La frappe au clavier reste au dixième, pour qui veut
+  // la précision.
   const STEP_S = 0.5
 
   let canvas = $state<HTMLCanvasElement>(null!)
@@ -189,12 +188,6 @@
     await session.edit({ op: 'move_boundary', index, moment })
   }
 
-  async function snap(edge: 'start' | 'end'): Promise<void> {
-    const index = edge === 'start' ? edges.start : edges.end
-    if (index < 0) return
-    await session.edit({ op: 'refine_boundary', index }, 'Coupe calée sur l\'attaque.')
-  }
-
   /* Nommer depuis la carte, et non plus seulement depuis la liste. Le titre
      est ce qu'on décide en écoutant le morceau, c'est-à-dire ici — aller le
      chercher dans la colonne de gauche demandait de quitter des yeux ce qu'on
@@ -343,11 +336,10 @@
     ></canvas>
 
     <div class="tools">
-      <!-- Chaque borne forme un groupe nommé : le libellé au-dessus de son
-           champ, et « Caler » attaché dessous. Il était auparavant posé après
-           l'un et avant l'autre, si bien qu'on lisait « début Caler » comme
-           une seule étiquette et qu'on ne savait pas à quelle borne le bouton
-           s'appliquait — ni qu'il était cliquable. -->
+      <!-- Chaque borne forme un groupe nommé, son libellé au-dessus de son
+           champ. Les libellés suivaient leur champ et précédaient le bouton
+           suivant, si bien qu'on lisait « début » comme l'étiquette de ce qui
+           venait après. -->
       {#each [['start', 'Début'], ['end', 'Fin']] as [edge, label] (edge)}
         {@const index = edge === 'start' ? edges.start : edges.end}
         {@const fixed = index < 0 || index > lastEdge}
@@ -376,14 +368,6 @@
                 +
               </button>
             </div>
-            <button
-              class="btn snap"
-              disabled={fixed || !session.state?.hasLevels}
-              onclick={() => snap(edge as 'start' | 'end')}
-              title="Chercher la vraie attaque autour de cette coupe, comme le fait le détecteur"
-            >
-              Caler
-            </button>
           </div>
         </div>
       {/each}
@@ -401,6 +385,7 @@
     display: flex;
     align-items: flex-end;
     gap: 12px;
+    flex: none;
   }
 
   .kind {
@@ -477,8 +462,21 @@
     color: var(--on-accent);
   }
 
+  /* La carte prend la hauteur qui reste, et le tracé la remplit : elle était
+     haute de son contenu — cent cinquante pixels de tracé — et laissait sous
+     elle un vide qui grandissait avec la fenêtre.
+
+     Plafonnée tout de même. Au-delà d'environ sept cents pixels la hauteur
+     n'apprend plus rien sur une attaque, et le morceau devient un mur de
+     couleur. Ce qui reste au-delà se pose sous la carte, en marge, plutôt
+     qu'entre le tracé et ses commandes. */
   .card {
-    margin: 18px 26px 0;
+    margin: 18px 26px 22px;
+    flex: 1;
+    min-height: 0;
+    max-height: 700px;
+    display: flex;
+    flex-direction: column;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
@@ -491,6 +489,7 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 12px;
+    flex: none;
   }
 
   .card-head .hint {
@@ -500,7 +499,8 @@
   canvas {
     display: block;
     width: 100%;
-    height: 150px;
+    flex: 1;
+    min-height: 170px;
     border-radius: 8px;
     cursor: crosshair;
     touch-action: none;
@@ -511,6 +511,7 @@
     align-items: flex-end;
     gap: 18px;
     margin-top: 16px;
+    flex: none;
     flex-wrap: wrap;
   }
 
@@ -564,12 +565,6 @@
     text-align: center;
     outline: none;
     background: none;
-  }
-
-  .snap {
-    height: 32px;
-    padding: 0 11px;
-    font-size: 12px;
   }
 
   .spacer {

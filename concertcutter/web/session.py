@@ -155,7 +155,7 @@ class Session:
                 analysis.assign_numbers()
 
         if job is not None:
-            job.phase = "Lecture de la forme d'onde…"
+            job.phase = "Import en cours…"
         levels, fps = envelope(path)
         with self._lock:
             # Un autre fichier a pu être ouvert pendant les cinq secondes de
