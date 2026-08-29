@@ -7,18 +7,13 @@ choisi. Faire remonter deux gigaoctets dans le navigateur pour les redescendre
 ensuite serait absurde là où le fichier est déjà sur le disque du serveur.
 
 C'est donc Python qui ouvre le dialogue, et le navigateur qui reçoit un chemin.
-Deux implémentations selon la coquille : celle de WebView2 quand pywebview
-tient la fenêtre, celle de Tk sinon — le navigateur du système n'a pas de
-dialogue à prêter.
-
-Le dialogue Tk doit s'ouvrir sur le fil principal ; les requêtes arrivent sur
-un fil de serveur. D'où la file : on dépose la demande, on attend la réponse.
+La fenêtre native fournit ces sélecteurs par WebView2. Dans le navigateur du
+système, qui n'a pas de dialogue à prêter au serveur local, l'interface propose
+un champ de saisie de chemin.
 """
 
 from __future__ import annotations
 
-import queue
-import threading
 from pathlib import Path
 
 WAV_TYPES = ("Fichiers WAV", "*.wav *.WAV")
@@ -57,79 +52,6 @@ class NoDialogs(Dialogs):
         return None
 
 
-class TkDialogs(Dialogs):
-    """Les dialogues de Tk, ouverts depuis le fil principal.
-
-    Tkinter n'est pas dépaysé ici : il ne dessine plus l'application, il ne
-    prête que ses trois sélecteurs — c'est-à-dire, sous Windows, ceux du
-    système. La fenêtre racine reste cachée.
-    """
-
-    def __init__(self) -> None:
-        import tkinter as tk
-
-        self._root = tk.Tk()
-        self._root.withdraw()
-        self._asks: queue.Queue = queue.Queue()
-        self._stop = threading.Event()
-
-    def run(self) -> None:
-        """Boucle du fil principal : sert les demandes jusqu'à l'arrêt."""
-        self._root.after(50, self._pump)
-        self._root.mainloop()
-
-    def stop(self) -> None:
-        self._stop.set()
-        try:
-            self._root.after(0, self._root.quit)
-        except RuntimeError:
-            pass
-
-    def _pump(self) -> None:
-        try:
-            while True:
-                work, answer = self._asks.get_nowait()
-                try:
-                    answer.put(work())
-                except Exception as failure:  # noqa: BLE001
-                    answer.put(failure)
-        except queue.Empty:
-            pass
-        if not self._stop.is_set():
-            self._root.after(50, self._pump)
-
-    def _ask(self, work):
-        answer: queue.Queue = queue.Queue()
-        self._asks.put((work, answer))
-        # Sans plafond, une coquille fermée pendant qu'un dialogue attend
-        # bloquerait le fil du serveur pour toujours.
-        try:
-            found = answer.get(timeout=600)
-        except queue.Empty:
-            return None
-        if isinstance(found, Exception):
-            raise found
-        return found
-
-    def open_file(self, title: str, types) -> str | None:
-        from tkinter import filedialog
-
-        return self._ask(lambda: filedialog.askopenfilename(
-            title=title, filetypes=list(types)) or None)
-
-    def open_files(self, title: str, types) -> list[str]:
-        from tkinter import filedialog
-
-        return list(self._ask(lambda: filedialog.askopenfilenames(
-            title=title, filetypes=list(types))) or [])
-
-    def choose_dir(self, title: str, start: str = "") -> str | None:
-        from tkinter import filedialog
-
-        return self._ask(lambda: filedialog.askdirectory(
-            title=title, initialdir=start or None, mustexist=False) or None)
-
-
 class WebviewDialogs(Dialogs):
     """Les dialogues de la fenêtre WebView2, quand pywebview la tient."""
 
@@ -137,8 +59,8 @@ class WebviewDialogs(Dialogs):
         self._window = window
 
     def _filters(self, types) -> list[str]:
-        # pywebview attend « Libellé (*.ext;*.ext) », Tk attend deux champs :
-        # on part du second, qui porte les deux informations.
+        # pywebview attend « Libellé (*.ext;*.ext) » : le second champ porte
+        # les motifs à réunir dans cette forme.
         return [f"{label} ({';'.join(patterns.split())})"
                 for label, patterns in types]
 

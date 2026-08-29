@@ -252,8 +252,7 @@ class Session:
         """Applique une opération de `edits` et rend le nouvel état.
 
         Toute la couture tient ici : mémoriser l'état d'avant, remplacer les
-        segments, réenregistrer le travail. C'est le pendant exact du `_edit`
-        de la fenêtre Tkinter, et les deux appellent les mêmes fonctions.
+        segments, réenregistrer le travail.
         """
         with self._lock:
             if self.analysis is None:
@@ -626,12 +625,7 @@ class Session:
 
 
 def _number(value, fallback: float) -> float:
-    """Un réglage relu, qu'il vienne d'un JSON ou d'un champ Tkinter.
-
-    Les projets écrits par la fenêtre Tkinter portent des chaînes — c'était le
-    contenu des champs, y compris à moitié rempli. Les refuser rendrait
-    illisibles les travaux d'avant le portage.
-    """
+    """Relit un réglage JSON, y compris dans les anciens formats textuels."""
     try:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):

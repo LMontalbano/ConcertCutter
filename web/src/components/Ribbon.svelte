@@ -1,9 +1,6 @@
 <script lang="ts">
-  /* Le concert entier, en une bande.
-
-     C'est ce qui manquait à l'interface Tkinter zoomée : savoir où l'on est.
-     Cliquer y déplace la loupe, et le rectangle clair montre ce que la carte
-     d'édition regarde en ce moment. */
+  /* Le concert entier, en une bande. Cliquer y déplace la loupe, et le
+     rectangle clair montre ce que la carte d'édition regarde en ce moment. */
   import { session } from '../lib/session.svelte'
   import { paint, palette, slice, surface, type Palette } from '../lib/wave'
   import { hms } from '../lib/format'

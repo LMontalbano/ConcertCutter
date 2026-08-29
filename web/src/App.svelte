@@ -1,9 +1,8 @@
 <script lang="ts">
   /* L'assemblage, et les raccourcis.
 
-     Les raccourcis sont ceux de l'application Tkinter, à l'identique — garde-fou
-     compris : ils sont neutralisés pendant une saisie, faute de quoi taper « c »
-     dans un titre de morceau le couperait en deux. */
+     Ils sont neutralisés pendant une saisie, faute de quoi taper « c » dans un
+     titre de morceau le couperait en deux. */
   import { api, type Job } from './lib/api'
   import { session } from './lib/session.svelte'
   import Header from './components/Header.svelte'

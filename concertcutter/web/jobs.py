@@ -1,10 +1,9 @@
 """Travaux longs, suivis à distance.
 
-Analyser deux heures de concert prend une minute, l'exporter en prend cinq. En
-Tkinter, l'avancement remontait par une file d'événements drainée toutes les
-80 ms ; ici il faut le traverser une frontière HTTP. La forme la plus simple
-qui marche : le travail tourne dans un fil, dépose son avancement dans un
-dictionnaire, et le navigateur va le lire toutes les 500 ms.
+Analyser deux heures de concert prend une minute, l'exporter en prend cinq.
+L'avancement doit traverser une frontière HTTP : le travail tourne dans un fil,
+dépose son avancement dans un dictionnaire, et le navigateur va le lire toutes
+les 500 ms.
 
 Pas de SSE ni de WebSocket. Ils économiseraient deux requêtes par seconde sur
 une boucle locale, au prix d'une connexion à tenir ouverte et à rétablir — pour

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import contextlib
 import io
@@ -23,6 +24,31 @@ from concertcutter.spectral import SpectralFeatures, extract
 from concertcutter.web import server
 from concertcutter.web.jobs import Jobs
 from concertcutter.web.session import MissingSource, Session, SessionError
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class ArchitectureTests(unittest.TestCase):
+    def test_python_sources_do_not_import_removed_desktop_toolkit(self) -> None:
+        forbidden = "tkin" + "ter"
+        sources = [ROOT / "gui.py"]
+        for folder in ("concertcutter", "tools", "tests"):
+            sources.extend((ROOT / folder).rglob("*.py"))
+
+        offenders: list[str] = []
+        for path in sources:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = [node.module]
+                if any(name == forbidden or name.startswith(forbidden + ".")
+                       for name in names):
+                    offenders.append(str(path.relative_to(ROOT)))
+
+        self.assertEqual(offenders, [])
 
 
 def make_wav(path: Path, seconds: float = 1.0) -> None:

@@ -20,7 +20,7 @@ ici reste utile pour travailler sur l'interface seule.
 Deux processus. Le serveur Python d'un côté, sur un port fixe :
 
 ```bash
-python gui_web.py --headless --port 8722 "test/faux_concert.wav"
+python gui.py --headless --port 8722 "test/faux_concert.wav"
 ```
 
 Vite de l'autre, qui sert la page avec rechargement à chaud et renvoie `/api`
@@ -60,5 +60,5 @@ PYTHONPATH=. python tools/check_web_api.py test/faux_concert.wav
 | `src/components/TrackList.svelte` | morceaux et blancs, avec leurs vignettes |
 | `src/components/EditCard.svelte` | le segment sous la loupe et ses deux coupes |
 | `src/components/ExportDialog.svelte` | les trois questions de l'export |
-| `src/tokens.css` | ce qui remplace `ui/theme.py`, `ui/skin.py` et trente PNG |
+| `src/tokens.css` | couleurs, dimensions et thèmes partagés |
 | `public/fonts/` | Instrument Sans et JetBrains Mono, embarquées |

@@ -3,8 +3,6 @@
 Découpe un concert enregistré en morceaux, en retirant les blancs — discussions
 avec le public, applaudissements, accordage.
 
-![L'interface, un concert de 2 h 05 analysé](docs/interface.png)
-
 **État : V3.** Détection par mélange gaussien + Viterbi, aucun seuil réglé à la
 main, plus une interface graphique pour corriger les frontières à la souris.
 Validé sur un concert réel de 2 h 05 : 25 morceaux sur 25.
@@ -164,8 +162,6 @@ autres éditions.
 
 ## Exporter
 
-<img src="docs/export.png" alt="La fenêtre d'export" width="420">
-
 La fenêtre pose **trois questions numérotées**, dans l'ordre où on se les pose :
 quels morceaux, sous quelle forme, où. Les morceaux passent en premier — c'est
 la seule décision qui porte sur le concert, les deux autres portent sur des
@@ -280,8 +276,6 @@ Compter environ une minute de calcul pour trente minutes de concert.
 
 ### ffmpeg s'installe d'un bouton
 
-<img src="docs/export-ffmpeg.png" alt="La fenêtre d'export sans ffmpeg" width="420">
-
 **La vidéo demande ffmpeg**, la seule dépendance externe du projet — 100 Mo,
 contre 25 pour ConcertCutter tout entier, donc il n'est pas embarqué.
 
@@ -321,7 +315,7 @@ lot, et à la mise au point.
 
 ```bash
 pip install -r requirements.txt
-python gui_web.py [concert.wav]
+python gui.py [concert.wav]
 ```
 
 Aucune dépendance système : `numpy` et `soundfile` suffisent. Entrée et sortie
@@ -488,10 +482,8 @@ produire.
 d'ensemble — parce que la seconde est la seule à montrer le concert entier, donc
 la seule qui situe l'écoute dans l'ensemble dès qu'on est zoomé.
 
-**La barre de progression est un canevas**, pas un `ttk.Scale` : cette dernière
-avance d'un pas fixe quand on clique dans son couloir, ce qui demandait une
-dizaine de clics pour atteindre une minute précise sur un concert de deux
-heures. Ici, un clic vaut un déplacement direct.
+**La barre de progression accepte un déplacement direct** : un clic mène
+immédiatement à l'instant choisi, même sur un concert de deux heures.
 
 **Le lecteur** est la balise `<audio>` du navigateur, servie par tranches. Il
 ne lit donc que ce qu'il joue — un WAV de 1,86 Go s'ouvre sans être chargé en
@@ -563,24 +555,15 @@ TensorFlow dépasse 500 Mo, un export ONNX serait préférable.
 
 # Développement
 
-## Interface web et secours historique
+## Interface web
 
-L'interface est passée de Tkinter au web, servie par un serveur local sur
-`127.0.0.1` — aucun fichier ne quitte la machine, et l'algorithme reste en
-Python. Le plan et ses arbitrages sont dans
-[`docs/portage-web.md`](docs/portage-web.md), l'interface elle-même dans
-[`web/`](web/README.md).
+L'interface est servie par un serveur local sur `127.0.0.1` — aucun fichier ne
+quitte la machine, et l'algorithme reste en Python. Son code et ses instructions
+de développement sont dans [`web/`](web/README.md).
 
 ```bash
-python gui_web.py [concert.wav]     # la nouvelle : WebView2, ou le navigateur
-python gui.py     [concert.wav]     # l'ancienne : Tkinter
+python gui.py [concert.wav]     # WebView2, ou le navigateur
 ```
-
-Les deux tournent sur le même cœur et sur les mêmes fichiers de travail. La
-version Tkinter est désormais un secours historique : aucun nouveau
-comportement ne doit y être ajouté. Elle sera retirée après validation d'une
-version publiée de l'interface web, afin de ne pas entretenir durablement deux
-applications qui finiraient par diverger.
 
 ## Construire l'exécutable
 
@@ -640,9 +623,8 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
   large, et pas seulement sur 2 dB
 - `check_output.py` — durées, écrêtage, et bords à zéro (un fondu manquant
   s'entend comme un clic)
-- `check_ffmpeg_install.py` — le bouton d'installation : emplacement, sources
-  joignables, ménage d'un téléchargement abandonné, et la fenêtre qui ne bouge
-  pas pendant le travail. Le téléchargement y est simulé, sauf avec
+- `check_ffmpeg_install.py` — l'installation : emplacement, sources joignables
+  et ménage d'un téléchargement abandonné. Sauf avec
   `--vraiment` qui installe pour de bon puis remet la machine en état
 - `check_video_export.py` — de bout en bout : le titre saisi finit-il écrit sur
   l'image du MP4, et change-t-il bien au morceau suivant sur l'album continu ?
@@ -652,9 +634,6 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
 - `check_web_api.py` — le serveur local : le jeton qui garde la porte, les
   tranches `Range` du WAV, et l'édition passée par HTTP qui doit donner
   exactement ce que donne l'appel direct à `edits`
-- `smoke_gui.py` — l'ancienne interface Tkinter parcourue sans souris
-- `make_screenshots.py` — refait les captures de ce README. Une capture prise à
-  la main vieillit sans prévenir
 
 Ces scripts demandent le paquet sur le `PYTHONPATH` :
 
