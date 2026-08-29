@@ -23,6 +23,8 @@
     label: string
     unit: string
     help: string
+    max: number
+    step?: number
   }> = [
     {
       key: 'min_gap',
@@ -30,6 +32,7 @@
       label: 'Blanc minimum',
       unit: 's',
       help: "En dessous, un silence n'est pas compté comme une coupure : c'est une respiration au milieu d'un morceau.",
+      max: 3600,
     },
     {
       key: 'min_song',
@@ -37,6 +40,7 @@
       label: 'Morceau minimum',
       unit: 's',
       help: "En dessous, un passage n'est pas compté comme un morceau. Soixante-quinze secondes écartent les annonces sans écarter les rappels courts.",
+      max: 7200,
     },
     {
       key: 'expected',
@@ -44,6 +48,8 @@
       label: 'Morceaux attendus',
       unit: '',
       help: 'Si vous savez combien le concert en compte, la détection s\'y tient. Zéro la laisse décider.',
+      max: 10000,
+      step: 1,
     },
     {
       key: 'pad_start',
@@ -51,6 +57,7 @@
       label: 'Amorce avant',
       unit: 's',
       help: "Conservée avant l'entrée du morceau. Elle mord sur la fin du blanc précédent, donc elle rattrape le retard de la détection sans coûter d'applaudissements.",
+      max: 60,
     },
     {
       key: 'pad_end',
@@ -58,6 +65,7 @@
       label: 'Queue après',
       unit: 's',
       help: 'Conservée après la fin du morceau : la note qui traîne, et le début des applaudissements.',
+      max: 60,
     },
     {
       key: 'fade_ms',
@@ -65,6 +73,7 @@
       label: 'Fondus',
       unit: 'ms',
       help: 'Très courts, et inaudibles : ils suppriment le clic que produirait une coupe franche au milieu d\'une onde.',
+      max: 10000,
     },
   ]
 
@@ -108,8 +117,9 @@
                 id={field.key}
                 class="mono"
                 type="number"
-                step="0.1"
+                step={field.step ?? 0.1}
                 min="0"
+                max={field.max}
                 bind:value={draft[field.key]}
               />
               <span class="unit">{field.unit}</span>

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from concertcutter import video
 from concertcutter.render import (
-    VIDEO_DIR, ExportConflict, RenderParams, check_output, render,
+    AUDIO_DIR, VIDEO_DIR, ExportConflict, RenderParams, check_output, render,
 )
 from concertcutter.segment import GAP, MUSIC, Analysis, Segment
 
@@ -54,8 +54,13 @@ def main(segments_path: Path, out_dir: Path) -> int:
                  result["videos"] == expected)
     ok &= _check("fichiers réellement écrits",
                  all((target / name).exists() for name in expected))
+    # Récursif : les WAV ont leur sous-dossier maintenant, et le chercher à la
+    # racine seule ne prouverait plus rien. Le dossier « audio » lui-même ne
+    # doit pas être là, vide, pour un export qui n'écrit aucun son.
     ok &= _check("aucun WAV écrit quand on ne demande que la vidéo",
-                 not list(target.glob("*.wav")))
+                 not list(target.rglob("*.wav")))
+    ok &= _check("et pas de dossier « audio » vide laissé derrière",
+                 not (target / AUDIO_DIR).exists())
 
     for name in expected:
         streams = _streams(target / name)

@@ -161,18 +161,24 @@
         <b>Quelque chose n'a pas marché</b>
         <p>{session.problem}</p>
         <div class="issues">
-          {#if session.problem.includes('introuvable')}
+          {#if session.missingSource?.project}
             <button
               class="btn accent"
               onclick={() => {
-                session.problem = ''
-                void session.openFile('project')
+                const recovery = session.missingSource
+                if (recovery) void session.relocate(recovery.project, recovery.missing)
               }}
             >
               Choisir un autre fichier…
             </button>
           {/if}
-          <button class="btn" onclick={() => (session.problem = '')}>Fermer</button>
+          <button
+            class="btn"
+            onclick={() => {
+              session.problem = ''
+              session.missingSource = null
+            }}>Fermer</button
+          >
         </div>
       </div>
     </div>

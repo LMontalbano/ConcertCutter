@@ -16,8 +16,10 @@ termine pendant qu'on déplace une frontière écrirait sinon par-dessus.
 
 from __future__ import annotations
 
+import math
 import mimetypes
 import threading
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 
@@ -48,12 +50,42 @@ DEFAULT_SETTINGS = {
     "fade_ms": RenderParams().fade_ms,
 }
 
+SETTING_LIMITS = {
+    "min_gap": (0.1, 3600.0, "Blanc minimum"),
+    "min_song": (1.0, 7200.0, "Morceau minimum"),
+    "expected": (0.0, 10_000.0, "Morceaux attendus"),
+    "pad_start": (0.0, 60.0, "Amorce"),
+    "pad_end": (0.0, 60.0, "Queue"),
+    "fade_ms": (0.0, 10_000.0, "Fondus"),
+}
+
+# Aucune sortie n'est cochée d'avance, pas même les deux audio. Elles
+# l'étaient, et l'export partait donc avec un WAV du concert entier et
+# vingt-cinq fichiers de morceaux même quand on n'était venu chercher qu'une
+# vidéo : on décochait avant de choisir. La fenêtre demande maintenant ce
+# qu'on veut écrire au lieu de le supposer — « Exporter » reste éteint tant
+# qu'aucune case n'est prise, avec la phrase qui le dit.
+#
+# Voir `NOT_REMEMBERED` juste dessous : ces quatre cases-là ne se retiennent
+# nulle part, sans quoi ce départ ne vaudrait que pour un concert jamais
+# ouvert auparavant.
 DEFAULT_EXPORT = {
     "dir": "", "image": "", "images": [], "crossfade": 0.0,
     "slide_fade": video.SLIDE_FADE_S, "selection": None,
-    "full": True, "tracks": True, "video_full": False, "video_tracks": False,
+    "full": False, "tracks": False, "video_full": False, "video_tracks": False,
     "one_per_track": False,
 }
+
+# Les quatre sorties ne se retiennent pas d'un travail à l'autre : elles
+# repartent décochées, y compris quand le projet rouvert garde la trace de son
+# dernier export. Un projet enregistré avant ce changement porte
+# « full: true, tracks: true » ; sans cette exception, il les ramènerait et la
+# fenêtre recocherait toute seule ce qu'on venait de lui retirer.
+#
+# Le reste de la reprise tient : la destination, les fonds, l'ordre, les durées
+# de fondu reviennent comme avant. C'est bien ce qu'on refait à l'identique —
+# ce qu'on écrit, on le redemande.
+NOT_REMEMBERED = ("full", "tracks", "video_full", "video_tracks")
 
 
 class SessionError(Exception):
@@ -70,10 +102,15 @@ class MissingSource(SessionError):
     l'enregistrement au lieu d'afficher une erreur.
     """
 
-    def __init__(self, source: Path) -> None:
+    def __init__(self, source: Path, project_path: Path | None = None) -> None:
         super().__init__("L'enregistrement de ce travail est introuvable : "
                          f"{source}")
         self.source = source
+        self.project_path = project_path
+        self.job_payload = {
+            "missing": str(source),
+            "project": str(project_path) if project_path else "",
+        }
 
 
 class Session:
@@ -103,6 +140,8 @@ class Session:
         # un projet relu.
         self.allowed_images: set[str] = set()
         self._save_timer: threading.Timer | None = None
+        self._peaks_gate = threading.BoundedSemaphore(2)
+        self._peaks_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
 
     # -- ouverture ---------------------------------------------------------
 
@@ -130,7 +169,10 @@ class Session:
             raise SessionError(str(failure)) from failure
         wav = Path(source) if source else found.source
         if not wav.exists():
-            raise MissingSource(found.source)
+            raise MissingSource(found.source, path)
+        # Une relocalisation ne change pas seulement le lecteur : la source
+        # sérialisée dans l'analyse est celle que le rendu relira ensuite.
+        found.analysis.source = str(wav.resolve())
         self._open_source(wav, found.analysis, job)
         with self._lock:
             self._apply_settings(found.settings)
@@ -148,6 +190,7 @@ class Session:
             self.analysis = analysis
             self.features = None
             self.levels = np.zeros(0)
+            self._peaks_cache.clear()
             self.warnings = []
             self.history.clear()
             self.saved = ""
@@ -197,6 +240,7 @@ class Session:
             self.duration = found.duration
             self.levels = features.rms_db
             self.levels_fps = features.fps
+            self._peaks_cache.clear()
             self.warnings = list(found.params.get("warnings", []))
             self.history.clear()  # une nouvelle analyse rend l'historique caduc
         self.touch()
@@ -286,30 +330,65 @@ class Session:
         with self._lock:
             levels, fps = self.levels, self.levels_fps
             source, rate = self.source, self.samplerate
-        return peaks.columns(levels, fps, start, duration, width,
-                             source=source, samplerate=rate)
+            key = (str(source), round(start, 3), round(duration, 3), width,
+                   len(levels), fps)
+            cached = self._peaks_cache.get(key)
+            if cached is not None:
+                self._peaks_cache.move_to_end(key)
+                return cached.copy()
+        # Les connexions HTTP sont multi-fils. Deux lectures fines suffisent à
+        # garder l'interface fluide ; au-delà, les zooms périmés ne doivent pas
+        # lancer autant de lectures concurrentes du même gros fichier.
+        with self._peaks_gate:
+            found = peaks.columns(levels, fps, start, duration, width,
+                                  source=source, samplerate=rate)
+        with self._lock:
+            self._peaks_cache[key] = found
+            self._peaks_cache.move_to_end(key)
+            while len(self._peaks_cache) > 12:
+                self._peaks_cache.popitem(last=False)
+        return found.copy()
 
     # -- export ------------------------------------------------------------
 
-    def render_params(self, choice: dict) -> RenderParams:
-        selection = choice.get("selection")
+    def render_params(self, choice: dict, analysis: Analysis | None = None) -> RenderParams:
+        selection = self._selection(choice.get("selection"), analysis)
         return RenderParams(
-            fade_ms=float(self.settings["fade_ms"]),
-            pad_start_s=float(self.settings["pad_start"]),
-            pad_end_s=float(self.settings["pad_end"]),
-            crossfade_s=float(choice.get("crossfade") or 0.0),
-            write_full=bool(choice.get("full", True)),
-            write_tracks=bool(choice.get("tracks", True)),
-            video_full=bool(choice.get("video_full")),
-            video_tracks=bool(choice.get("video_tracks")),
+            fade_ms=_bounded(self.settings["fade_ms"], "Fondus", 0.0, 10_000.0),
+            pad_start_s=_bounded(self.settings["pad_start"], "Amorce", 0.0, 60.0),
+            pad_end_s=_bounded(self.settings["pad_end"], "Queue", 0.0, 60.0),
+            crossfade_s=_bounded(choice.get("crossfade") or 0.0,
+                                 "Fondu enchaîné", 0.0, 60.0),
+            write_full=_flag(choice, "full"),
+            write_tracks=_flag(choice, "tracks"),
+            video_full=_flag(choice, "video_full"),
+            video_tracks=_flag(choice, "video_tracks"),
             video_image=(choice.get("image") or None),
-            video_images=tuple(choice.get("images") or ()),
-            video_slide_fade_s=float(choice.get("slide_fade")
-                                     or video.SLIDE_FADE_S),
-            video_one_per_track=bool(choice.get("one_per_track")),
-            selection=(tuple(int(n) for n in selection)
-                       if selection is not None else None),
+            video_images=_images(choice.get("images")),
+            video_slide_fade_s=_bounded(
+                choice.get("slide_fade") or video.SLIDE_FADE_S,
+                "Fondu entre images", 0.0, 60.0),
+            video_one_per_track=_flag(choice, "one_per_track"),
+            selection=selection,
         )
+
+    def _selection(self, selection, analysis: Analysis | None) -> tuple[int, ...] | None:
+        if selection is None:
+            return None
+        if not isinstance(selection, (list, tuple)) or not selection:
+            raise SessionError("Choisir au moins un morceau à exporter.")
+        if analysis is None:
+            analysis = self.analysis
+        allowed = {track.number for track in analysis.tracks} if analysis else set()
+        numbers: list[int] = []
+        for value in selection:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(float(value)) or int(value) != value:
+                raise SessionError("La sélection de morceaux est illisible.")
+            numbers.append(int(value))
+        if len(set(numbers)) != len(numbers) or not set(numbers) <= allowed:
+            raise SessionError("La sélection contient un morceau inconnu.")
+        return tuple(numbers)
 
     def plan_export(self, choice: dict) -> dict:
         """Prépare l'export sans rien écrire, et dit ce qu'il rencontrerait.
@@ -328,7 +407,7 @@ class Session:
         # désigne un emplacement une fois, sans préparer un dossier vierge à
         # chaque export.
         target = concert_dir(directory, analysis)
-        params = self.render_params(choice)
+        params = self.render_params(choice, analysis)
         titles = [track.title for track in analysis.tracks]
         try:
             check_output(analysis, target, titles, params)
@@ -339,8 +418,8 @@ class Session:
                 "overwritten": len(conflict.overwritten),
                 "leftovers": len(conflict.leftovers),
             }
-        except (ValueError, OSError):
-            pass  # les vrais problèmes remonteront au rendu, avec leur message
+        except (ValueError, OSError) as failure:
+            raise SessionError(str(failure)) from failure
         return {"target": str(target), "conflict": False}
 
     def render(self, choice: dict, job: Job) -> dict:
@@ -348,9 +427,13 @@ class Session:
             if self.analysis is None:
                 raise SessionError("Rien à exporter.")
             analysis = self.analysis
+            # Même exception qu'à la reprise : l'export retient où il a écrit
+            # et avec quoi, pas ce qu'il a écrit. Sans quoi la fenêtre
+            # rouverte juste après recocherait ce qu'on vient d'exporter.
             self.export.update({key: choice.get(key, self.export.get(key))
-                                for key in DEFAULT_EXPORT})
-        params = self.render_params(choice)
+                                for key in DEFAULT_EXPORT
+                                if key not in NOT_REMEMBERED})
+        params = self.render_params(choice, analysis)
         titles = [track.title for track in analysis.tracks]
         target = Path(choice.get("target") or concert_dir(choice["dir"], analysis))
         replace = bool(choice.get("replace"))
@@ -419,7 +502,13 @@ class Session:
     def _apply_settings(self, saved: dict) -> None:
         for name in DEFAULT_SETTINGS:
             if name in saved:
-                self.settings[name] = _number(saved[name], DEFAULT_SETTINGS[name])
+                number = _number(saved[name], DEFAULT_SETTINGS[name])
+                low, high, _label = SETTING_LIMITS[name]
+                if not math.isfinite(number) or not low <= number <= high:
+                    number = float(DEFAULT_SETTINGS[name])
+                if name == "expected":
+                    number = int(number) if int(number) == number else 0
+                self.settings[name] = number
 
     def allow_image(self, paths) -> list[str]:
         """Autorise l'affichage de ces images, et rend celles qui existent."""
@@ -448,18 +537,31 @@ class Session:
         """Retrouve la destination et la forme du dernier export.
 
         C'est la moitié du travail de reprise : refaire le même export au même
-        endroit est le geste qui suit presque toujours la reprise.
+        endroit est le geste qui suit presque toujours la reprise. Les quatre
+        cases de sortie font exception — voir `NOT_REMEMBERED`.
         """
         for name in DEFAULT_EXPORT:
-            if name in saved:
+            if name in saved and name not in NOT_REMEMBERED:
                 self.export[name] = saved[name]
         # Un travail repris rapporte ses fonds : ils doivent redevenir
         # affichables, sinon la fenêtre d'export les listerait sans vignette.
         self.allow_image(self.export.get("images") or [])
 
     def update_settings(self, wanted: dict) -> dict:
+        clean: dict[str, float | int] = {}
+        for name, value in wanted.items():
+            if name not in SETTING_LIMITS:
+                continue
+            low, high, label = SETTING_LIMITS[name]
+            number = _bounded(value, label, low, high)
+            if name == "expected":
+                if int(number) != number:
+                    raise SessionError("Morceaux attendus doit être un entier.")
+                clean[name] = int(number)
+            else:
+                clean[name] = number
         with self._lock:
-            self._apply_settings(wanted)
+            self.settings.update(clean)
         self.touch()
         return dict(self.settings)
 
@@ -534,3 +636,29 @@ def _number(value, fallback: float) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return float(fallback)
+
+
+def _bounded(value, label: str, low: float, high: float) -> float:
+    try:
+        number = float(str(value).replace(",", "."))
+    except (TypeError, ValueError) as error:
+        raise SessionError(f"{label} doit être un nombre.") from error
+    if not math.isfinite(number) or not low <= number <= high:
+        raise SessionError(f"{label} doit être compris entre {low:g} et {high:g}.")
+    return number
+
+
+def _flag(choice: dict, name: str) -> bool:
+    value = choice.get(name, False)
+    if not isinstance(value, bool):
+        raise SessionError(f"Le choix « {name} » doit être vrai ou faux.")
+    return value
+
+
+def _images(value) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)) or any(
+            not isinstance(path, str) or not path for path in value):
+        raise SessionError("La liste des images est illisible.")
+    return tuple(value)

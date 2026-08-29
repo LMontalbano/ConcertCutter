@@ -61,10 +61,14 @@ def main(argv: list[str] | None = None) -> int:
                      name="http").start()
 
     if chosen.input:
-        # Ouvert avant la fenêtre : le concert est là dès la première image,
-        # au lieu d'apparaître une seconde après un écran vide.
-        threading.Thread(target=app.session.open, args=(chosen.input,),
-                         daemon=True).start()
+        # Le travail passe par le même registre que ceux lancés depuis la
+        # page. Ainsi le premier `/api/state` peut annoncer l'ouverture en
+        # cours et le client l'attend, au lieu de conclure trop tôt que la
+        # séance est vide.
+        app.startup = app.jobs.start(
+            "open", lambda job: (app.session.open(chosen.input, job),
+                                  app.session.state())[1],
+            "Import en cours…")
 
     page = f"{address}?token={app.token}"
     try:

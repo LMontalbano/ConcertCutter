@@ -15,7 +15,10 @@ explicite, et tient un manifeste pour savoir exactement ce qu'il avait écrit.
 from __future__ import annotations
 
 import json
+import math
+import os
 import re
+import shutil
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -34,13 +37,19 @@ from .segment import Analysis, Segment
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
-# Sous-dossier des fichiers non audio. Les regrouper laisse à la racine du
-# dossier du concert uniquement ce qui s'écoute, ce qui rend l'export directement
-# utilisable dans un lecteur ou sur une clé.
+# Le dossier d'un concert n'est plus qu'une table des matières : trois
+# sous-dossiers, et rien d'autre à sa racine.
+#
+# L'audio y était posé en vrac — un album continu et vingt-cinq morceaux —
+# tandis que le reste avait déjà sa place. Le rangement tenait tant qu'on
+# n'exportait que des WAV ; depuis que la vidéo existe, la racine mélangeait un
+# dossier « video », un dossier « infos » et vingt-six fichiers. Ce qui
+# s'écoute a maintenant son dossier comme ce qui se regarde.
 DATA_DIR = "infos"
-# Les vidéos ont leur propre sous-dossier : elles doublent chaque morceau, et
-# mêlées aux WAV à la racine on ne saurait plus lequel des deux on écoute.
+# Les vidéos : elles doublent chaque morceau, et mêlées aux WAV on ne saurait
+# plus lequel des deux on ouvre.
 VIDEO_DIR = "video"
+AUDIO_DIR = "audio"
 MANIFEST = ".concertcutter-export.json"
 
 # Encodages vidéo menés de front.
@@ -128,6 +137,15 @@ class RenderParams:
         return self.video_full or self.video_tracks
 
     @property
+    def audio_name(self) -> str:
+        """L'album continu, rangé comme tout le reste de ce qui s'écoute.
+
+        `full_name` reste le nom nu du fichier : c'est de lui que la cue et la
+        vidéo du concert tirent le leur, et un chemin s'y glisserait.
+        """
+        return f"{AUDIO_DIR}/{self.full_name}"
+
+    @property
     def video_name(self) -> str:
         """La vidéo du concert entier porte le nom de l'album continu."""
         return f"{VIDEO_DIR}/{Path(self.full_name).stem}.mp4"
@@ -141,16 +159,72 @@ def render(
     on_progress: Callable[[int, int, str], None] | None = None,
     replace: bool = False,
 ) -> dict:
+    """Construit à part, puis publie l'export achevé d'un seul basculement.
+
+    Une erreur de lecture ou de vidéo laisse ainsi l'export précédent intact.
+    Les fichiers étrangers déjà déposés dans le dossier sont recopiés dans la
+    nouvelle version ; seuls ceux suivis par l'ancien manifeste sont retirés.
+    """
+    params = params or RenderParams()
+    _validate_params(analysis, params)
+    out_dir = Path(out_dir)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise NotADirectoryError(f"La destination n'est pas un dossier : {out_dir}")
+
+    info = probe(analysis.source)
+    spans = _padded_spans(analysis, params, info.samplerate, info.frames)
+    names = _planned_names(spans, titles, params, analysis.tracks)
+    _guard_output(out_dir, names, replace)
+
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    prefix = f".{out_dir.name or 'concert'}-export-"
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=out_dir.parent) as temporary:
+        root = Path(temporary)
+        staged = root / "new"
+        result = _render_into(analysis, staged, titles, params, on_progress)
+
+        candidate = root / "complete"
+        if out_dir.exists():
+            shutil.copytree(out_dir, candidate, copy_function=_link_or_copy)
+            for name in previous_export(out_dir):
+                target = candidate / name
+                if target.is_file():
+                    target.unlink()
+        else:
+            candidate.mkdir()
+        shutil.copytree(staged, candidate, dirs_exist_ok=True,
+                        copy_function=_link_or_copy)
+
+        backup = root / "previous"
+        moved_previous = False
+        try:
+            if out_dir.exists():
+                os.replace(out_dir, backup)
+                moved_previous = True
+            os.replace(candidate, out_dir)
+        except Exception:
+            if moved_previous and not out_dir.exists() and backup.exists():
+                os.replace(backup, out_dir)
+            raise
+
+    return _retarget_result(result, staged, out_dir)
+
+
+def _render_into(
+    analysis: Analysis,
+    out_dir: str | Path,
+    titles: list[str] | None,
+    params: RenderParams,
+    on_progress: Callable[[int, int, str], None] | None,
+) -> dict:
     """Écrit le fichier complet, les pistes et les vidéos demandées.
 
     `on_progress(fait, total, nom)` : le total compte les étapes, pas les
     morceaux — une vidéo en ajoute une par piste.
 
-    Lève `ExportConflict` si le dossier contient déjà un export, à moins de
-    passer `replace=True` — qui efface alors l'export précédent d'après son
-    manifeste, et lui seul.
+    Cette fonction interne ne publie jamais directement dans la destination :
+    `render` ne l'appelle que sur un dossier provisoire.
     """
-    params = params or RenderParams()
     out_dir = Path(out_dir)
 
     info = probe(analysis.source)
@@ -168,11 +242,18 @@ def render(
         _check_video(params)
 
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
+    if not spans:
+        raise ValueError("La sélection ne contient aucun morceau exportable.")
     fade_len = int(round(params.fade_ms / 1000.0 * info.samplerate))
     names = _planned_names(spans, titles, params, tracks)
 
-    _guard_output(out_dir, names, replace)
+    _guard_output(out_dir, names, replace=False)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Seulement si quelque chose s'y écrit : un export qui ne sort que des
+    # vidéos passe son audio par un dossier de travail, et laisserait ici un
+    # « audio » vide.
+    if params.write_full or params.write_tracks:
+        (out_dir / AUDIO_DIR).mkdir(parents=True, exist_ok=True)
 
     written: list[dict] = []
     videos: list[str] = []
@@ -204,7 +285,7 @@ def render(
         if (params.video_tracks and not params.write_tracks) \
         or (params.video_full and not params.write_full) else None
 
-    full_path = out_dir / params.full_name
+    full_path = out_dir / params.audio_name
     if not params.write_full and params.video_full:
         full_path = Path(scratch.name) / params.full_name
     full = None
@@ -241,8 +322,11 @@ def render(
             audio = _apply_fades(audio, fade_len)
 
             title = _title_for(titles, rank, tracks)
+            # Le nom nu sert au dossier de travail, qui n'a pas de sous-dossier
+            # à lui ; le nom rangé désigne le fichier dans l'export.
             name = _track_filename(number, title)
-            track_path = out_dir / name
+            stored = f"{AUDIO_DIR}/{name}"
+            track_path = out_dir / stored
             if params.write_tracks:
                 sf.write(
                     str(track_path), audio, info.samplerate, subtype=info.subtype
@@ -254,7 +338,7 @@ def render(
             written.append(
                 {
                     "index": number,
-                    "file": name,
+                    "file": stored,
                     "title": title,
                     "peak": round(float(np.max(np.abs(audio))) if len(audio) else 0.0, 4),
                     "start": round(start / info.samplerate, 3),
@@ -266,7 +350,7 @@ def render(
                           if params.video_tracks else None)
             # Annonce ce que l'étape produit vraiment : sans les WAV, la
             # piste n'est qu'un intermédiaire vers la vidéo.
-            step(name if params.write_tracks else video_name or name)
+            step(stored if params.write_tracks else video_name or stored)
 
             if params.video_tracks:
                 temporary = not params.write_tracks
@@ -322,14 +406,15 @@ def render(
     cue_path = None
     if params.write_full:
         cue_path = data_dir / (Path(params.full_name).stem + ".cue")
-        # La cue vit à côté des autres fichiers techniques, mais elle doit
-        # continuer à désigner l'audio resté à la racine : d'où le chemin
-        # relatif, que les lecteurs résolvent depuis l'emplacement de la cue.
+        # La cue vit à côté des autres fichiers techniques, et doit désigner
+        # un audio qui est ailleurs : d'où le chemin relatif, que les lecteurs
+        # résolvent depuis l'emplacement de la cue. Il remonte d'un cran puis
+        # redescend dans « audio ».
         # Les temps de la cue suivent l'album, pas la source : un fondu
         # enchaîné raccourcit le fichier d'autant, et une cue calculée sur les
         # durées d'origine ferait dériver tous les repères après le premier.
         write_cue(_on_album(written, params.crossfade_s),
-                  f"../{params.full_name}", cue_path)
+                  f"../{params.audio_name}", cue_path)
 
     if params.write_sidecars:
         write_audacity_labels(analysis, data_dir / "reperes.txt")
@@ -344,6 +429,49 @@ def render(
         "videos": videos,
         "out_dir": str(out_dir),
     }
+
+
+def _retarget_result(result: dict, staged: Path, target: Path) -> dict:
+    """Remplace dans le résultat les chemins du dossier provisoire."""
+    changed = dict(result)
+    for key in ("full", "cue", "out_dir"):
+        value = changed.get(key)
+        if not value:
+            continue
+        try:
+            relative = Path(value).relative_to(staged)
+        except ValueError:
+            continue
+        changed[key] = str(target / relative)
+    return changed
+
+
+def _link_or_copy(source: str, target: str) -> str:
+    """Crée un lien dur pour préparer le basculement sans doubler les gros WAV."""
+    try:
+        os.link(source, target)
+        return target
+    except OSError:
+        return shutil.copy2(source, target)
+
+
+def _validate_params(analysis: Analysis, params: RenderParams) -> None:
+    limits = (
+        (params.fade_ms, "Fondus", 0.0, 10_000.0),
+        (params.pad_start_s, "Amorce", 0.0, 60.0),
+        (params.pad_end_s, "Queue", 0.0, 60.0),
+        (params.crossfade_s, "Fondu enchaîné", 0.0, 60.0),
+        (params.video_slide_fade_s, "Fondu entre images", 0.0, 60.0),
+    )
+    for value, label, low, high in limits:
+        if not math.isfinite(value) or not low <= value <= high:
+            raise ValueError(f"{label} doit être compris entre {low:g} et {high:g}.")
+    if params.selection is None:
+        return
+    allowed = {track.number for track in analysis.tracks}
+    if (not params.selection or len(set(params.selection)) != len(params.selection)
+            or not set(params.selection) <= allowed):
+        raise ValueError("La sélection contient un morceau inconnu.")
 
 
 def _check_video(params: RenderParams) -> None:
@@ -432,10 +560,13 @@ def _planned_names(spans, titles, params: RenderParams, tracks=None) -> list[str
     names: list[str] = []
     numbers = [(rank, number) for rank, number, _start, _stop in spans]
     if params.write_full:
-        names.append(params.full_name)
+        names.append(params.audio_name)
     if params.write_tracks:
-        names += [_track_filename(number, _title_for(titles, rank, tracks))
-                  for rank, number in numbers]
+        names += [
+            f"{AUDIO_DIR}/"
+            f"{_track_filename(number, _title_for(titles, rank, tracks))}"
+            for rank, number in numbers
+        ]
     if params.video_full:
         names.append(params.video_name)
     if params.video_tracks:
@@ -496,13 +627,9 @@ def _guard_output(out_dir: Path, names: list[str], replace: bool) -> None:
             raise ExportConflict(out_dir, sorted(overwritten), sorted(leftovers))
         return
 
-    # On n'efface que ce qu'on avait écrit soi-même, d'après le manifeste : les
-    # fichiers que l'utilisateur aurait déposés là ne nous appartiennent pas.
-    for name in previous:
-        try:
-            (out_dir / name).unlink()
-        except OSError:
-            pass
+    # Le remplacement est réalisé après un rendu complet dans un dossier
+    # voisin. Rien n'est supprimé ici : ce contrôle doit rester sans effet de
+    # bord, y compris quand `replace=True`.
 
 
 def _write_manifest(out_dir: Path, analysis: Analysis, names: list[str]) -> None:

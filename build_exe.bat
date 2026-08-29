@@ -15,9 +15,9 @@ rem               style et les deux polices -- plus les icones. Ce sont des
 rem               donnees, pas des modules : sans cette ligne l'executable
 rem               demarre et sert une fenetre vide.
 rem
-rem L'interface se compile a part, avant : `cd web && npm install && npm run
-rem build` depose le resultat dans concertcutter\web\static. Un exe construit
-rem sans cette etape embarque la version precedente de l'interface, ou aucune.
+rem L'interface est compilee ci-dessous avec le verrou npm avant PyInstaller.
+rem Le script reste ainsi autonome : impossible d'embarquer par oubli une
+rem version precedente de l'interface, ou aucune.
 rem --icon      : icone de l'executable lui-meme, dans l'explorateur.
 rem
 rem ffmpeg n'est pas embarque : une centaine de Mo, contre 27 pour tout
@@ -36,6 +36,31 @@ rem reecrit le .spec a chaque construction, et il est de toute facon ignore
 rem par git. Tout ce qu'on y ecrirait a la main serait perdu.
 
 cd /d "%~dp0"
+
+echo.
+echo === Construction de l'interface web ===
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo npm absent. Installez Node.js avant de construire l'executable.
+    goto echec
+)
+pushd web
+call npm ci
+if errorlevel 1 (
+    popd
+    goto echec
+)
+call npm run build
+if errorlevel 1 (
+    popd
+    goto echec
+)
+popd
+
+if not exist "concertcutter\web\static\index.html" (
+    echo L'interface web compilee est introuvable.
+    goto echec
+)
 
 echo.
 echo === Verification de PyInstaller ===

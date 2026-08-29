@@ -35,7 +35,7 @@ from .. import __version__, edits, project, video
 from ..audio import envelope, probe
 from ..detect_hmm import HmmParams, analyze
 from ..render import (
-    DATA_DIR, VIDEO_DIR, ExportConflict, RenderParams, check_output,
+    AUDIO_DIR, DATA_DIR, VIDEO_DIR, ExportConflict, RenderParams, check_output,
     concert_dir, render, unique_dir,
 )
 from ..excerpts import parse_time
@@ -1062,7 +1062,9 @@ class App(tk.Tk):
                   f"« {VIDEO_DIR} »." if videos else "")
         messagebox.showinfo(
             "Export terminé",
-            f"{len(result['tracks'])} piste(s) écrite(s) dans :\n{result['out_dir']}"
+            f"{len(result['tracks'])} piste(s) écrite(s) dans :\n"
+            f"{result['out_dir']}\n\n"
+            f"L'audio est dans le sous-dossier « {AUDIO_DIR} »."
             f"{detail}"
             f"\n\nLes repères, la cue sheet et la segmentation sont dans le "
             f"sous-dossier « {DATA_DIR} ».")

@@ -23,6 +23,7 @@ fichier pour une durée qu'on passe de toute façon à ouvrir le concert.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
@@ -152,7 +153,12 @@ def path_for(source: str | Path) -> Path:
     stem = Path(source).stem.strip() or "concert"
     safe = "".join(char if char.isalnum() or char in " -_." else "_"
                    for char in stem).strip(" .")
-    return store() / f"{safe or 'concert'}{SUFFIX}"
+    # Le nom lisible ne suffit pas : `D:\captation\concert.wav` et
+    # `E:\archives\concert.wav` sont deux travaux. Une empreinte du chemin
+    # absolu les distingue sans exposer le chemin entier dans le nom.
+    identity = str(Path(source).expanduser().resolve()).casefold()
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
+    return store() / f"{safe or 'concert'}--{digest}{SUFFIX}"
 
 
 def recent() -> list[Path]:

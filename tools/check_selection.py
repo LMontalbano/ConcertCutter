@@ -25,7 +25,7 @@ from pathlib import Path
 
 import soundfile as sf
 
-from concertcutter.render import DATA_DIR, RenderParams, render
+from concertcutter.render import AUDIO_DIR, DATA_DIR, RenderParams, render
 from concertcutter.segment import GAP, MUSIC, Analysis
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -50,7 +50,10 @@ def main(segments_path: Path, root: Path) -> int:
     print("\nExport complet, pour référence")
     whole = root / "tout"
     full = render(analysis, whole, titles, RenderParams(write_full=False))
-    reference = {item["index"]: (item["file"], round(item["duration"], 2))
+    # Le nom nu : l'export rend un chemin relatif (« audio/01 - … .wav »), et
+    # ce qu'on compare ici vient tantôt de là, tantôt du dossier lui-même.
+    reference = {item["index"]: (Path(item["file"]).name,
+                                 round(item["duration"], 2))
                  for item in full["tracks"]}
     print("  " + ", ".join(sorted(name for name, _ in reference.values())))
 
@@ -60,7 +63,8 @@ def main(segments_path: Path, root: Path) -> int:
     picked = render(analysis, part, titles,
                     RenderParams(write_full=False, selection=wanted))
 
-    files = sorted(path.name for path in part.iterdir() if path.suffix == ".wav")
+    files = sorted(path.name for path in (part / AUDIO_DIR).iterdir()
+                   if path.suffix == ".wav")
     for name in files:
         print("  " + name)
     ok &= _check(f"un fichier par morceau demandé ({len(files)})",
@@ -89,7 +93,7 @@ def main(segments_path: Path, root: Path) -> int:
     render(analysis, album, titles,
            RenderParams(write_tracks=False, selection=wanted))
     expected = sum(reference[number][1] for number in wanted)
-    written = sf.info(str(album / "concert_clean.wav")).duration
+    written = sf.info(str(album / AUDIO_DIR / "concert_clean.wav")).duration
     ok &= _check(f"album de {written:.1f} s pour {expected:.1f} s attendus",
                  abs(written - expected) < 0.05)
 
@@ -108,7 +112,7 @@ def main(segments_path: Path, root: Path) -> int:
                     if segment.number == dropped and segment.kind == MUSIC)
     analysis.segments[position].kind = GAP
     holed = render(analysis, root / "trou", titles, RenderParams(write_full=False))
-    names = sorted(item["file"] for item in holed["tracks"])
+    names = sorted(Path(item["file"]).name for item in holed["tracks"])
     print("  " + ", ".join(names))
     ok &= _check(f"le morceau {dropped} manque, les autres n'ont pas bougé",
                  all(reference[number][0] in names

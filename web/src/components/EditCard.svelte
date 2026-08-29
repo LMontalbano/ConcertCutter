@@ -33,6 +33,7 @@
   let renaming = $state(false)
   let draft = $state('')
   let pending = 0
+  let peaksController: AbortController | null = null
 
   const segment = $derived(session.segment)
   /** Rang des deux frontières du segment regardé. −1 : le bord du concert. */
@@ -61,14 +62,21 @@
       Le serveur décide seul de la source — l'enveloppe de l'analyse au-delà de
       quatre-vingt-dix secondes, les échantillons réels en deçà. Le navigateur
       n'a donc pas à savoir à quelle échelle il est. */
-  async function fetchPeaks(): Promise<void> {
+  async function fetchPeaks(signal: AbortSignal): Promise<void> {
     if (!session.open || !canvas) return
     const columns = Math.max(1, Math.round(canvas.clientWidth))
     const mine = ++pending
-    const { data } = await api.peaks(session.viewStart, session.viewSpan, columns)
-    // Deux fenêtres demandées coup sur coup pendant un zoom : seule la
-    // dernière compte, sinon le tracé revient en arrière au gré du réseau.
-    if (mine === pending) heights = data
+    const start = session.viewStart
+    const span = session.viewSpan
+    try {
+      const { data } = await api.peaks(start, span, columns, signal)
+      // Deux fenêtres demandées coup sur coup pendant un zoom : seule la
+      // dernière compte, sinon le tracé revient en arrière au gré du réseau.
+      if (mine === pending) heights = data
+    } catch (failure) {
+      if (failure instanceof DOMException && failure.name === 'AbortError') return
+      session.note("Le détail de la forme d'onde n'a pas pu être lu.")
+    }
   }
 
   function draw(): void {
@@ -239,6 +247,9 @@
 
   $effect(() => {
     void session.state?.source
+    void session.viewStart
+    void session.viewSpan
+    void width
     const columns = Math.max(1, Math.round(canvas?.clientWidth ?? width))
     // Le tracé grossier d'abord, pris dans l'enveloppe déjà en mémoire ; les
     // vrais pics ensuite, quand le serveur les rend. Sans ce relais, changer
@@ -252,7 +263,14 @@
         session.viewStart, session.viewSpan, columns,
       )
     }
-    void fetchPeaks()
+    peaksController?.abort()
+    const controller = new AbortController()
+    peaksController = controller
+    const timer = window.setTimeout(() => void fetchPeaks(controller.signal), 90)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
   })
 
   $effect(() => {
@@ -266,6 +284,7 @@
     void session.selected
     void preview
     void dragging
+    void width
     draw()
   })
 

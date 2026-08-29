@@ -47,7 +47,7 @@ def main(segments_path: Path, out_dir: Path) -> int:
 
     shutil.rmtree(out_dir, ignore_errors=True)
     result = render(analysis, out_dir, None, RenderParams(write_full=False))
-    files = sorted(p for p in out_dir.glob("*.wav"))
+    files = sorted(p for p in (out_dir / "audio").glob("*.wav"))
     ok &= len(files) == len(after)
     print(f"  [{'OK ' if len(files) == len(after) else 'ECHEC'}] "
           f"{len(files)} fichiers écrits pour {len(after)} morceaux")

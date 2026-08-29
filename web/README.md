@@ -8,12 +8,12 @@ recopier.
 ## Compiler
 
 ```bash
-npm install
+npm ci
 npm run build
 ```
 
-C'est l'étape qui précède `build_exe.bat` : un exécutable construit sans elle
-embarque l'interface précédente, ou aucune.
+`build_exe.bat` exécute lui-même ces deux commandes avant PyInstaller. Le faire
+ici reste utile pour travailler sur l'interface seule.
 
 ## Travailler dessus
 

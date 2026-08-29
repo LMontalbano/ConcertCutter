@@ -18,10 +18,12 @@
        les cases audio, le fondu entre images sous les images ;
      - **la section vidéo répare elle-même ce qui lui manque** : un bouton, à
        la place d'une phrase qui suppose de savoir ce qu'est ffmpeg. */
+  import { onMount, tick } from 'svelte'
   import { api, follow, type ExportChoice, type Job } from '../lib/api'
   import { session, message } from '../lib/session.svelte'
   import { duration as spell, trackLabel } from '../lib/format'
   import Hint from './Hint.svelte'
+  import ExportImages from './ExportImages.svelte'
 
   /* Les explications, à part du balisage : elles restent aussi longues et
      aussi précises qu'avant, mais se lisent à la demande. Les rassembler ici
@@ -49,23 +51,6 @@
     videoTracks:
       "Son titre incrusté. C'est la forme qu'attendent les plateformes qui " +
       "n'acceptent que de la vidéo.",
-    onePerTrack:
-      'Le morceau 1 reçoit la première image, le 2 la deuxième, et ainsi de ' +
-      "suite ; le cycle recommence s'il y a moins d'images que de morceaux. " +
-      'Dans la vidéo du concert entier, le fond change donc au morceau ; dans ' +
-      'les vidéos de morceaux, chacune garde la sienne. Décochée, les images ' +
-      'défilent au chronomètre, ici comme là.',
-    slideOnly:
-      'Durée du fondu entre deux images. Avec une image par morceau, il joue ' +
-      'aux frontières de morceaux, dans la vidéo du concert entier ; une vidéo ' +
-      "de morceau n'a qu'une image, donc rien à fondre.",
-    slideshow:
-      "Les images se relaient dans l'ordre ci-dessus, une toutes les huit " +
-      'secondes, et le cycle recommence aussi longtemps que dure le son. ' +
-      'Chacune garde ses proportions et se centre sur du noir.',
-    stills:
-      'Photos du concert, pochette, affiche. Le titre du morceau est incrusté ' +
-      'par-dessus.',
     dir:
       "Le concert reçoit son propre dossier ici, nommé d'après " +
       "l'enregistrement. Un export déjà présent n'est jamais écrasé sans qu'on " +
@@ -89,6 +74,43 @@
     leftovers: number
   } | null>(null)
   let refused = $state('')
+  const allPicked = $derived(
+    picked.size === tracks.length && tracks.every((track) => picked.has(track.number)),
+  )
+  let panel: HTMLElement
+
+  function dialogKey(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      onClose()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = [...panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((item) => item.offsetParent !== null)
+    if (!focusable.length) {
+      event.preventDefault()
+      panel.focus()
+      return
+    }
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
+  onMount(() => {
+    const previous = document.activeElement as HTMLElement | null
+    void tick().then(() => panel.querySelector<HTMLElement>('button, input')?.focus())
+    return () => previous?.focus()
+  })
 
   const missing = $derived(
     !picked.size
@@ -102,6 +124,38 @@
             : '',
   )
 
+  /* Une image par morceau, mais pas le compte : on prévient avant d'écrire.
+
+     La règle promet une image à chacun ; le rendu, lui, ne s'arrête pas pour
+     si peu — il reprend la première quand il arrive au bout, ou laisse de côté
+     celles qui dépassent. C'est un choix raisonnable, mais silencieux : on
+     découvrait à la lecture que trois photos avaient tourné sur douze
+     morceaux, après une demi-heure d'encodage.
+
+     Rien à dire hors de cette règle : dans le diaporama à l'horloge, le nombre
+     d'images n'a aucun rapport avec le nombre de morceaux. */
+  const mismatch = $derived.by(() => {
+    if (!(choice.video_full || choice.video_tracks)) return null
+    if (!choice.one_per_track) return null
+    const images = choice.images.length
+    const wanted = picked.size
+    if (!images || images === wanted) return null
+    return { images, wanted, short: images < wanted }
+  })
+
+  // L'alerte n'est posée qu'au moment d'exporter : la signaler en continu la
+  // ferait clignoter pendant qu'on coche ses morceaux, quand le compte est
+  // forcément faux.
+  let asking = $state(false)
+
+  function attempt(): void {
+    if (mismatch) {
+      asking = true
+      return
+    }
+    start()
+  }
+
   function toggle(number: number): void {
     const next = new Set(picked)
     if (next.has(number)) next.delete(number)
@@ -112,21 +166,6 @@
   async function chooseDir(): Promise<void> {
     const found = await api.pick('dir', { start: choice.dir })
     if (found.path) choice.dir = found.path
-  }
-
-  async function addImages(): Promise<void> {
-    const found = await api.pick('images')
-    // Le bouton ajoute sans effacer : on revient presque toujours au sélecteur
-    // pour ajouter une image, pas pour remplacer les douze déjà choisies.
-    if (found.paths?.length) choice.images = [...choice.images, ...found.paths]
-  }
-
-  function moveImage(index: number, by: number): void {
-    const next = [...choice.images]
-    const target = index + by
-    if (target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
-    choice.images = next
   }
 
   async function installFfmpeg(): Promise<void> {
@@ -148,7 +187,7 @@
       ...choice,
       images: choice.images,
       image: choice.images[0] ?? '',
-      selection: picked.size === tracks.length ? null : [...picked].sort((a, b) => a - b),
+      selection: allPicked ? null : [...picked].sort((a, b) => a - b),
     }
   }
 
@@ -185,10 +224,22 @@
   }
 </script>
 
-<div class="veil" role="presentation" onclick={(event) => event.target === event.currentTarget && onClose()}>
-  <div class="panel" role="dialog" aria-label="Exporter">
+<div
+  class="veil"
+  role="presentation"
+  onclick={(event) => event.target === event.currentTarget && onClose()}
+  onkeydown={dialogKey}
+>
+  <div
+    class="panel"
+    bind:this={panel}
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="export-title"
+    tabindex="-1"
+  >
     <header>
-      <h1>Exporter</h1>
+      <h1 id="export-title">Exporter</h1>
       <button class="btn quiet" onclick={onClose}>Fermer</button>
     </header>
 
@@ -197,6 +248,22 @@
         <h2>
           <span class="step">1</span> Quels morceaux ?
           <Hint text={WHY.pieces} side="right" />
+          <!-- Le bouton est passé du bas de la liste à la ligne du titre :
+               sous vingt-cinq morceaux qui défilent, il attendait qu'on
+               descende pour se montrer, alors qu'on s'en sert avant de
+               choisir. Il retrouve le motif de « Fonds / Ajouter des
+               images… » plus bas — l'action de la zone, au bout de son
+               en-tête. -->
+          <button
+            class="btn tonal all"
+            onclick={() =>
+              (picked =
+                allPicked
+                  ? new Set()
+                  : new Set(tracks.map((track) => track.number)))}
+          >
+            {allPicked ? 'Tout décocher' : 'Tout cocher'}
+          </button>
         </h2>
         <div class="picks">
           {#each tracks as track (track.number)}
@@ -212,16 +279,6 @@
             </label>
           {/each}
         </div>
-        <button
-          class="btn tonal all"
-          onclick={() =>
-            (picked =
-              picked.size === tracks.length
-                ? new Set()
-                : new Set(tracks.map((track) => track.number)))}
-        >
-          {picked.size === tracks.length ? 'Tout décocher' : 'Tout cocher'}
-        </button>
       </section>
 
       <div class="right">
@@ -251,6 +308,7 @@
             class="mono"
             type="number"
             min="0"
+            max="60"
             step="0.5"
             bind:value={choice.crossfade}
           />
@@ -291,77 +349,10 @@
             <Hint text={WHY.videoTracks} />
           </div>
 
-          <div class="images" class:off={!choice.video_full && !choice.video_tracks}>
-            <div class="images-head">
-              <span class="label">Fonds</span>
-              <button class="btn tonal" onclick={addImages}>Ajouter des images…</button>
-            </div>
-            {#if choice.images.length}
-              <!-- Des vignettes, et non des noms de fichiers. « DSC_0421.jpg »
-                   ne dit pas quelle photo c'est : on choisissait le fond de ses
-                   vidéos à l'aveugle, et l'ordre du diaporama encore plus. -->
-              <ul>
-                {#each choice.images as image, index (image + index)}
-                  <li>
-                    <img src={api.imageUrl(image)} alt={image.split(/[\\/]/).pop()} />
-                    <span class="mono rank">{index + 1}</span>
-                    <div class="handles">
-                      <button onclick={() => moveImage(index, -1)} aria-label="Avancer dans l'ordre" title="Avancer">
-                        ‹
-                      </button>
-                      <button onclick={() => moveImage(index, 1)} aria-label="Reculer dans l'ordre" title="Reculer">
-                        ›
-                      </button>
-                      <button
-                        class="drop"
-                        onclick={() =>
-                          (choice.images = choice.images.filter((_, rank) => rank !== index))}
-                        aria-label="Retirer cette image"
-                        title="Retirer"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <span class="caption" title={image}>{image.split(/[\\/]/).pop()}</span>
-                  </li>
-                {/each}
-              </ul>
-
-              <div class="line tight">
-                <label>
-                  <input type="checkbox" bind:checked={choice.one_per_track} />
-                  <b>Une seule image par morceau</b>
-                </label>
-                <Hint text={WHY.onePerTrack} />
-              </div>
-
-              <!-- Le fondu sert dans les deux règles : entre deux images du
-                   diaporama, ou à la frontière de deux morceaux quand le fond
-                   les suit. Il ne s'éteint que si plus aucune image n'en
-                   remplace une autre — une seule image par morceau, et pas de
-                   vidéo du concert entier. -->
-              <div class="knob" class:off={choice.one_per_track && !choice.video_full}>
-                <label for="slide">
-                  Fondu entre images<Hint
-                    text={choice.one_per_track ? WHY.slideOnly : WHY.slideshow}
-                  />
-                </label>
-                <input
-                  id="slide"
-                  class="mono"
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  bind:value={choice.slide_fade}
-                />
-                <span class="unit">s</span>
-              </div>
-            {:else}
-              <em class="note">
-                Photos du concert, pochette, affiche.<Hint text={WHY.stills} />
-              </em>
-            {/if}
-          </div>
+          <ExportImages
+            {choice}
+            enabled={choice.video_full || choice.video_tracks}
+          />
         {/if}
       </section>
 
@@ -373,12 +364,55 @@
         <div class="dir">
           <input class="mono" bind:value={choice.dir} placeholder="Aucun dossier choisi" />
           {#if session.dialogs}
-            <button class="btn" onclick={chooseDir}>Parcourir…</button>
+            <!-- Tonal comme « Ajouter des images… » : un bouton de contour
+                 posé contre un champ de saisie a le même dessin que lui, et
+                 se lit comme une deuxième case plutôt que comme l'action qui
+                 remplit la première. -->
+            <button class="btn tonal" onclick={chooseDir}>Parcourir…</button>
           {/if}
         </div>
       </section>
       </div>
     </div>
+
+    {#if asking && mismatch}
+      <div class="conflict">
+        <b>
+          {mismatch.images} image{mismatch.images > 1 ? 's' : ''} pour
+          {mismatch.wanted} morceau{mismatch.wanted > 1 ? 'x' : ''} à exporter.
+        </b>
+        <ul>
+          {#if mismatch.short}
+            <li>
+              « Une seule image par morceau » est cochée, et il en manque : une
+              fois la dernière atteinte, l'export repart de la première. Les
+              images se répètent donc jusqu'au bout du concert.
+            </li>
+          {:else}
+            <li>
+              « Une seule image par morceau » est cochée, et il y en a plus que
+              de morceaux : {mismatch.images - mismatch.wanted} ne
+              {mismatch.images - mismatch.wanted > 1 ? 'seront' : 'sera'} pas
+              utilisée{mismatch.images - mismatch.wanted > 1 ? 's' : ''}.
+            </li>
+          {/if}
+        </ul>
+        <div class="issues">
+          <button
+            class="btn accent"
+            onclick={() => {
+              asking = false
+              start()
+            }}
+          >
+            Exporter quand même
+          </button>
+          <button class="btn quiet" onclick={() => (asking = false)}>
+            Revenir aux images
+          </button>
+        </div>
+      </div>
+    {/if}
 
     {#if conflict}
       <div class="conflict">
@@ -409,7 +443,7 @@
     <footer>
       <span class="refuse">{refused || missing}</span>
       <button class="btn quiet" onclick={onClose}>Annuler</button>
-      <button class="btn strong" disabled={Boolean(missing)} onclick={() => start()}>
+      <button class="btn strong" disabled={Boolean(missing)} onclick={attempt}>
         Exporter
       </button>
     </footer>
@@ -566,7 +600,7 @@
   }
 
   .all {
-    margin-top: 8px;
+    margin-left: auto;
     height: 26px;
     font-size: 11.5px;
   }
@@ -594,15 +628,6 @@
 
   .line b {
     font: 500 13px var(--sans);
-  }
-
-  em {
-    display: block;
-    margin-top: 3px;
-    font-style: normal;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--ink-3);
   }
 
   .knob {
@@ -647,117 +672,6 @@
     pointer-events: none;
   }
 
-  .images {
-    margin: 10px 0 0 26px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-
-  .images-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-  }
-
-  .images-head .btn {
-    margin-left: auto;
-    height: 26px;
-    font-size: 11.5px;
-  }
-
-  .images ul {
-    list-style: none;
-    margin: 0 0 10px;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-    gap: 8px;
-  }
-
-  .images li {
-    position: relative;
-    border-radius: 7px;
-    overflow: hidden;
-    background: var(--rule);
-    border: 1px solid var(--border);
-  }
-
-  .images img {
-    display: block;
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    object-fit: cover;
-  }
-
-  .rank {
-    position: absolute;
-    top: 4px;
-    left: 4px;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--ink);
-    color: var(--on-ink);
-    font-size: 10px;
-    font-weight: 500;
-  }
-
-  /* Les commandes n'apparaissent qu'au survol : douze vignettes couvertes de
-     six boutons chacune ne montreraient plus les photos. */
-  .handles {
-    position: absolute;
-    inset: 0 0 auto auto;
-    display: flex;
-    gap: 2px;
-    padding: 3px;
-    opacity: 0;
-    transition: opacity 0.12s;
-  }
-
-  .images li:hover .handles,
-  .images li:focus-within .handles {
-    opacity: 1;
-  }
-
-  .handles button {
-    width: 20px;
-    height: 20px;
-    border-radius: 5px;
-    background: var(--surface);
-    color: var(--ink-2);
-    font-size: 12px;
-    line-height: 1;
-  }
-
-  .handles button:hover {
-    background: var(--ink);
-    color: var(--on-ink);
-  }
-
-  .handles .drop:hover {
-    background: var(--gap);
-    color: var(--on-ink);
-  }
-
-  .caption {
-    display: block;
-    padding: 4px 6px;
-    font-size: 10.5px;
-    color: var(--ink-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .line.tight {
-    padding: 12px 0 2px;
-  }
-
-  .note {
-    margin-top: 2px;
-  }
-
   .dir {
     display: flex;
     gap: 8px;
@@ -773,9 +687,17 @@
     color: var(--accent);
   }
 
+  /* Une bande neutre, et non `--gap-row`.
+
+     Cette teinte-là appartient aux blancs du concert — les applaudissements,
+     la seule couleur chaude de la palette, posée pour qu'on repère une coupe
+     dans le tracé. Sous une question posée avant d'exporter, elle ne dit rien
+     et se voit trop : un brun qui n'est ni celui du thème sombre ni celui du
+     clair. `--rule` est le fond en creux de l'application, celui des vignettes
+     — la bande se détache du panneau sans changer de famille. */
   .conflict {
     border-top: 1px solid var(--border);
-    background: var(--gap-row);
+    background: var(--rule);
     padding: 16px 24px;
     font-size: 12.5px;
   }

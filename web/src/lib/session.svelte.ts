@@ -41,6 +41,7 @@ class Session {
   exporting = $state(false)
   message = $state('')
   problem = $state('')
+  missingSource = $state<{ project: string; missing: string } | null>(null)
   job = $state<Job | null>(null)
   dialogs = $state(true)
 
@@ -110,11 +111,16 @@ class Session {
     } catch {
       /* l'accueil se passe de la liste des travaux */
     }
-    await this.refresh()
+    await this.run(() => this.refresh())
   }
 
   async refresh(): Promise<void> {
-    this.adopt(await api.state())
+    const found = await api.state()
+    if (found.opening) {
+      await this.watch(found.opening)
+      return this.refresh()
+    }
+    this.adopt(found)
     if (this.state?.hasLevels && !this.envelope.length) await this.loadEnvelope()
     this.awaitLevels()
   }
@@ -159,6 +165,7 @@ class Session {
   // -- ouverture ----------------------------------------------------------
 
   async openFile(kind: 'wav' | 'project' = 'wav', path?: string): Promise<void> {
+    this.missingSource = null
     await this.run(async () => {
       const started = await api.open(path, kind)
       if ('cancelled' in started && started.cancelled) return
@@ -181,6 +188,8 @@ class Session {
       await this.watch((await api.open(projectPath, 'project', found.path)) as Job)
       this.envelope = new Float32Array(0)
       await this.refresh()
+      this.missingSource = null
+      this.problem = ''
     })
   }
 
@@ -398,6 +407,10 @@ class Session {
     } catch (failure) {
       if (failure instanceof ApiError && typeof failure.extra.missing === 'string') {
         this.problem = failure.message
+        this.missingSource = {
+          project: String(failure.extra.project ?? ''),
+          missing: failure.extra.missing,
+        }
         return
       }
       this.problem = message(failure)

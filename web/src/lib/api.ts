@@ -68,6 +68,7 @@ export interface State {
   video: string | null
   segments: Segment[]
   tracks: Track[]
+  opening?: Job
   cancelled?: boolean
 }
 
@@ -80,6 +81,8 @@ export interface Job {
   state: 'running' | 'done' | 'failed'
   result: unknown
   error: string
+  missing?: string
+  project?: string
 }
 
 export class ApiError extends Error {
@@ -117,8 +120,14 @@ async function call<T>(route: string, body?: unknown): Promise<T> {
     demande d'analyse parfaitement formée. */
 const post = <T>(route: string, body: unknown = {}) => call<T>(route, body)
 
-async function binary(route: string): Promise<{ data: Float32Array; headers: Headers }> {
-  const answer = await fetch(route, { headers: { 'X-ConcertCutter-Token': TOKEN } })
+async function binary(
+  route: string,
+  signal?: AbortSignal,
+): Promise<{ data: Float32Array; headers: Headers }> {
+  const answer = await fetch(route, {
+    headers: { 'X-ConcertCutter-Token': TOKEN },
+    signal,
+  })
   if (!answer.ok) throw new ApiError(`Erreur ${answer.status}`, answer.status)
   return { data: new Float32Array(await answer.arrayBuffer()), headers: answer.headers }
 }
@@ -152,9 +161,10 @@ export const api = {
   recent: () => call<{ projects: RecentProject[]; dialogs: boolean }>('/api/recent'),
   installFfmpeg: () => post<Job>('/api/ffmpeg'),
   envelope: () => binary('/api/envelope'),
-  peaks: (start: number, duration: number, width: number) =>
+  peaks: (start: number, duration: number, width: number, signal?: AbortSignal) =>
     binary(
       `/api/peaks?start=${start.toFixed(3)}&duration=${duration.toFixed(3)}&width=${width}`,
+      signal,
     ),
   audioUrl: () => `/api/audio?token=${encodeURIComponent(TOKEN)}`,
   /** Vignette d'un fond vidéo. Le serveur ne sert que les images choisies
@@ -183,6 +193,9 @@ export async function follow(job: Job, onTick: (job: Job) => void): Promise<Job>
     current = await api.job(current.id)
     onTick(current)
   }
-  if (current.state === 'failed') throw new ApiError(current.error, 500)
+  if (current.state === 'failed') {
+    const { error: _error, ...extra } = current
+    throw new ApiError(current.error, 500, extra)
+  }
   return current
 }

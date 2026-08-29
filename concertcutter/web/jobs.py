@@ -45,12 +45,13 @@ class Job:
     result: Any = None
     error: str = ""
     detail: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def payload(self) -> dict:
         return {
             "id": self.id, "kind": self.kind, "phase": self.phase,
             "done": self.done, "total": self.total, "state": self.state,
-            "result": self.result, "error": self.error,
+            "result": self.result, "error": self.error, **self.extra,
         }
 
 
@@ -76,8 +77,11 @@ class Jobs:
                 # console. Une trace dans une fenêtre modale n'aide personne, et
                 # la perdre empêcherait de comprendre un échec rapporté.
                 job.error = str(failure) or failure.__class__.__name__
+                job.extra = dict(getattr(failure, "job_payload", {}) or {})
                 job.detail = traceback.format_exc()
                 print(job.detail, flush=True)
+            finally:
+                self.sweep()
 
         threading.Thread(target=run, daemon=True, name=f"job-{kind}").start()
         return job

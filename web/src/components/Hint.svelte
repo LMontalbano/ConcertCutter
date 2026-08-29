@@ -118,6 +118,12 @@
     z-index: 60;
     transform: translate(-50%, -100%);
     max-width: 280px;
+    /* La bulle reste un enfant de ce qu'elle explique, et hérite donc de sa
+       mise en page : les titres des deux réglages de fondu tiennent sur une
+       ligne (`nowrap`), et la phrase sortait de la boîte au lieu d'y revenir
+       à la ligne. Elle se coupe où elle veut, où qu'on la pose. */
+    white-space: normal;
+    overflow-wrap: break-word;
     padding: 9px 12px;
     border-radius: 9px;
     background: var(--ink);

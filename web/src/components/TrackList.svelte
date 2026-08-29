@@ -136,13 +136,6 @@
           class="track"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
-          role="button"
-          tabindex="0"
-          aria-label="Morceau {trackLabel(segment.number)}{segment.trackTitle
-            ? `, ${segment.trackTitle}`
-            : ''}"
-          onclick={() => session.select(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
         >
           <button
             class="listen"
@@ -192,11 +185,6 @@
           class="gap"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
-          role="button"
-          tabindex="0"
-          aria-label="Blanc de {spell(segment.end - segment.start)}"
-          onclick={() => session.select(segment.index)}
-          onkeydown={(event) => event.key === 'Enter' && session.select(segment.index)}
         >
           <button
             class="listen thin"
@@ -207,7 +195,11 @@
           >
             {session.playing_at(segment.index) ? '❚❚' : '▶'}
           </button>
-          <span class="mono">blanc {spell(segment.end - segment.start)}</span>
+          <button
+            class="mono gap-name"
+            onclick={() => session.select(segment.index)}
+            aria-label="Sélectionner le blanc de {spell(segment.end - segment.start)}"
+          >blanc {spell(segment.end - segment.start)}</button>
           <button class="keep" onclick={(event) => (event.stopPropagation(), keep(segment))}>
             garder
           </button>
@@ -407,6 +399,12 @@
     color: var(--ink-2);
     padding: 2px 6px;
     border-radius: 5px;
+  }
+
+  .gap-name {
+    color: inherit;
+    font: inherit;
+    padding: 0;
   }
 
   .keep:hover {

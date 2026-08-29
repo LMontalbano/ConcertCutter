@@ -24,6 +24,7 @@ Les travaux longs ne tiennent pas dans une requête : `/api/analyze` et
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import secrets
@@ -59,6 +60,7 @@ class Application:
         self.jobs = Jobs()
         self.token = secrets.token_urlsafe(32)
         self.quit = threading.Event()
+        self.startup = None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -88,12 +90,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > 1024 * 1024:
+            raise SessionError("Corps de requête trop volumineux.")
         if not length:
             return {}
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            return {}
+            raise SessionError("Corps JSON illisible.")
+        if not isinstance(payload, dict):
+            raise SessionError("Le corps JSON doit être un objet.")
+        return payload
 
     def _send(self, payload, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -129,6 +136,8 @@ class Handler(BaseHTTPRequestHandler):
             self._get(route)
         except SessionError as refusal:
             self._fail(str(refusal))
+        except (TypeError, ValueError, OverflowError):
+            self._fail("Paramètres de requête illisibles.")
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
@@ -141,13 +150,19 @@ class Handler(BaseHTTPRequestHandler):
             self._fail(str(lost), HTTPStatus.CONFLICT, missing=str(lost.source))
         except SessionError as refusal:
             self._fail(str(refusal))
+        except (TypeError, ValueError, OverflowError):
+            self._fail("Paramètres de requête illisibles.")
 
     def _get(self, route: str) -> None:
         session, jobs = self.app.session, self.app.jobs
         query = self._query()
 
         if route == "/api/state":
-            self._send(session.state())
+            payload = session.state()
+            startup = self.app.startup
+            if startup is not None and startup.state != "done":
+                payload["opening"] = startup.payload()
+            self._send(payload)
         elif route == "/api/envelope":
             heights = session.envelope_heights()
             self.send_response(200)
@@ -159,9 +174,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(heights.astype("<f4").tobytes())
         elif route == "/api/peaks":
-            start = float(query.get("start", ["0"])[0])
-            span = float(query.get("duration", ["60"])[0])
-            width = max(1, min(4096, int(query.get("width", ["1000"])[0])))
+            start = self._float_query(query, "start", 0.0, 0.0, 24 * 3600.0)
+            span = self._float_query(query, "duration", 60.0, 0.01, 24 * 3600.0)
+            width = self._int_query(query, "width", 1000, 1, 4096)
             heights = session.window_heights(start, span, width)
             self._send_bytes(np.asarray(heights, dtype="<f4").tobytes(),
                              "application/octet-stream")
@@ -228,6 +243,23 @@ class Handler(BaseHTTPRequestHandler):
             self.app.quit.set()
         else:
             self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
+
+    @staticmethod
+    def _float_query(query: dict, name: str, fallback: float,
+                     low: float, high: float) -> float:
+        value = float(query.get(name, [str(fallback)])[0])
+        if not math.isfinite(value) or not low <= value <= high:
+            raise SessionError(f"Paramètre « {name} » hors limites.")
+        return value
+
+    @staticmethod
+    def _int_query(query: dict, name: str, fallback: int,
+                   low: int, high: int) -> int:
+        raw = query.get(name, [str(fallback)])[0]
+        value = int(raw)
+        if str(value) != str(raw).strip() or not low <= value <= high:
+            raise SessionError(f"Paramètre « {name} » hors limites.")
+        return value
 
     # -- gestes ------------------------------------------------------------
 
@@ -353,7 +385,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         size = source.stat().st_size
         kind = RANGE_TYPES.get(source.suffix.lower(), "application/octet-stream")
-        start, stop = self._range(size)
+        try:
+            start, stop = self._range(size)
+        except ValueError:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
 
         with source.open("rb") as handle:
             handle.seek(start)
@@ -373,13 +412,25 @@ class Handler(BaseHTTPRequestHandler):
         header = self.headers.get("Range", "")
         if not header.startswith("bytes="):
             return 0, None
-        first, _, last = header[len("bytes="):].partition("-")
+        wanted = header[len("bytes="):].strip()
+        if "," in wanted or "-" not in wanted:
+            raise ValueError("étendue multiple ou illisible")
+        first, _, last = wanted.partition("-")
         try:
-            start = int(first) if first else 0
+            if not first:
+                suffix = int(last)
+                if suffix <= 0:
+                    raise ValueError("suffixe vide")
+                return max(0, size - suffix), size
+            start = int(first)
+            if start < 0 or start >= size:
+                raise ValueError("début hors fichier")
             stop = int(last) + 1 if last else size
+            if stop <= start:
+                raise ValueError("fin avant début")
         except ValueError:
-            return 0, None
-        return max(0, min(start, size)), max(start, min(stop, size))
+            raise
+        return start, min(stop, size)
 
     def _pour(self, handle, length: int) -> None:
         """Verse le fichier par blocs, en supportant l'arrêt du lecteur.
@@ -408,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
         if route in ("/", ""):
             route = "/index.html"
         target = (STATIC / route.lstrip("/")).resolve()
-        if not str(target).startswith(str(STATIC.resolve())):
+        if not target.is_relative_to(STATIC.resolve()):
             self._fail("Chemin refusé.", HTTPStatus.FORBIDDEN)
             return
         if not target.is_file():

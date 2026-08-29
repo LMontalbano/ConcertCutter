@@ -35,7 +35,9 @@ import numpy as np
 import soundfile as sf
 
 from concertcutter import video
-from concertcutter.render import DATA_DIR, RenderParams, _video_params, render
+from concertcutter.render import (
+    AUDIO_DIR, DATA_DIR, RenderParams, _video_params, render,
+)
 from concertcutter.segment import Analysis
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -86,11 +88,11 @@ def main(segments_path: Path, root: Path) -> int:
     count = len(blended["tracks"])
     raw = sum(item["duration"] for item in blended["tracks"])
     expected = raw - (count - 1) * CROSSFADE_S
-    written = sf.info(str(root / "fondu" / "concert_clean.wav")).duration
+    written = sf.info(str(root / "fondu" / AUDIO_DIR / "concert_clean.wav")).duration
     ok &= _check(f"album raccourci de {(count - 1) * CROSSFADE_S:.1f} s "
                  f"({written:.2f} s pour {expected:.2f} s attendus)",
                  abs(written - expected) < 0.05)
-    bare = sf.info(str(root / "sec" / "concert_clean.wav")).duration
+    bare = sf.info(str(root / "sec" / AUDIO_DIR / "concert_clean.wav")).duration
     ok &= _check(f"sans fondu, rien ne bouge ({bare:.2f} s)",
                  abs(bare - raw) < 0.05)
 
@@ -106,7 +108,7 @@ def main(segments_path: Path, root: Path) -> int:
 
     # Deux rampes droites qui se croisent laissent au milieu du fondu une somme
     # de puissances plus faible qu'aux extrémités : le creux s'entend.
-    audio, rate = sf.read(str(root / "fondu" / "concert_clean.wav"), dtype="float32")
+    audio, rate = sf.read(str(root / "fondu" / AUDIO_DIR / "concert_clean.wav"), dtype="float32")
     joint = int((blended["tracks"][0]["duration"] - CROSSFADE_S) * rate)
     window = int(0.1 * rate)
 
