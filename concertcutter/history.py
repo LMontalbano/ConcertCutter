@@ -1,5 +1,10 @@
 """Historique d'annulation des éditions de segmentation.
 
+Rangé avec le cœur et non avec une interface : les deux s'en servent, et il ne
+sait rien de ce qui l'affiche. Le laisser dans `ui/` obligeait le serveur web à
+importer le paquet Tkinter — donc à l'embarquer dans l'exécutable — pour
+soixante lignes de listes d'instantanés.
+
 Par instantanés plutôt que par opérations inverses : une segmentation fait
 quelques dizaines de segments, donc copier l'état complet coûte moins qu'un
 microseconde et supprime toute une classe de bugs — pas d'inverse à écrire pour

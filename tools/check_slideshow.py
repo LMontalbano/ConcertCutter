@@ -35,7 +35,9 @@ import numpy as np
 import soundfile as sf
 
 from concertcutter import video
-from concertcutter.render import DATA_DIR, RenderParams, render
+from concertcutter.render import (
+    AUDIO_DIR, DATA_DIR, RenderParams, _video_params, render,
+)
 from concertcutter.segment import Analysis
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -52,7 +54,32 @@ def main(segments_path: Path, root: Path) -> int:
     titles = [f"Piste {number}"
               for number in range(1, len(analysis.tracks) + 1)]
 
-    print("Fondu enchaîné entre morceaux")
+    # Ce contrôle-ci ne coûte rien : il ne lit que la traduction des réglages,
+    # sans encoder. Il tient pourtant la promesse du réglage — « une image par
+    # morceau » veut dire *celle-là*, et pas une autre.
+    print("Une image par morceau, plutôt que le diaporama")
+    stills = ("un.jpg", "deux.jpg", "trois.jpg")
+    rolling = RenderParams(video_images=stills)
+    fixed = RenderParams(video_images=stills, video_one_per_track=True)
+    ok &= _check("décochée, chaque sortie reçoit toutes les images",
+                 _video_params(rolling, 0).stills() == list(stills)
+                 and _video_params(rolling).stills() == list(stills))
+    ok &= _check("décochée, aucun fond ne suit les morceaux",
+                 not _video_params(rolling).per_caption
+                 and not _video_params(rolling, 0).per_caption)
+    ok &= _check("cochée, la vidéo du morceau n reçoit la n-ième image",
+                 [_video_params(fixed, rank).stills() for rank in range(3)]
+                 == [["un.jpg"], ["deux.jpg"], ["trois.jpg"]])
+    ok &= _check("et le cycle recommence s'il y a moins d'images que de morceaux",
+                 _video_params(fixed, 3).stills() == ["un.jpg"])
+    # Deux mises en œuvre pour une seule règle : la vidéo d'un morceau reçoit
+    # son image et la garde ; celle du concert entier les reçoit toutes et
+    # change de fond à chaque morceau.
+    ok &= _check("cochée, le concert entier change de fond au morceau",
+                 _video_params(fixed).per_caption
+                 and _video_params(fixed).stills() == list(stills))
+
+    print("\nFondu enchaîné entre morceaux")
     plain = render(analysis, root / "sec", titles,
                    RenderParams(write_tracks=False))
     blended = render(analysis, root / "fondu", titles,
@@ -61,11 +88,11 @@ def main(segments_path: Path, root: Path) -> int:
     count = len(blended["tracks"])
     raw = sum(item["duration"] for item in blended["tracks"])
     expected = raw - (count - 1) * CROSSFADE_S
-    written = sf.info(str(root / "fondu" / "concert_clean.wav")).duration
+    written = sf.info(str(root / "fondu" / AUDIO_DIR / "concert_clean.wav")).duration
     ok &= _check(f"album raccourci de {(count - 1) * CROSSFADE_S:.1f} s "
                  f"({written:.2f} s pour {expected:.2f} s attendus)",
                  abs(written - expected) < 0.05)
-    bare = sf.info(str(root / "sec" / "concert_clean.wav")).duration
+    bare = sf.info(str(root / "sec" / AUDIO_DIR / "concert_clean.wav")).duration
     ok &= _check(f"sans fondu, rien ne bouge ({bare:.2f} s)",
                  abs(bare - raw) < 0.05)
 
@@ -81,7 +108,7 @@ def main(segments_path: Path, root: Path) -> int:
 
     # Deux rampes droites qui se croisent laissent au milieu du fondu une somme
     # de puissances plus faible qu'aux extrémités : le creux s'entend.
-    audio, rate = sf.read(str(root / "fondu" / "concert_clean.wav"), dtype="float32")
+    audio, rate = sf.read(str(root / "fondu" / AUDIO_DIR / "concert_clean.wav"), dtype="float32")
     joint = int((blended["tracks"][0]["duration"] - CROSSFADE_S) * rate)
     window = int(0.1 * rate)
 
@@ -165,6 +192,28 @@ def main(segments_path: Path, root: Path) -> int:
     duration, _width, _height = _probe(whole)
     ok &= _check(f"elle tient la durée ({duration:.1f} s)",
                  abs(duration - 14.0) < 0.3)
+
+    print("\nUn fond qui suit les morceaux")
+    # Le pendant, pour le concert entier, de « une image par morceau » : le
+    # fond ne tourne plus sur une horloge, il change à la frontière. On mesure
+    # la couleur au centre, au milieu de chaque morceau — c'est le seul moyen
+    # de savoir si la bonne photo est bien là, une incrustation ratée ne
+    # faisant pas échouer ffmpeg.
+    for fade, label in ((0.0, "coupes franches"), (0.6, "fondus")):
+        followed = root / f"suivi{int(fade * 10)}.mp4"
+        video.write_video(sound, captions, followed,
+                          video.VideoParams(image=stills[0], images=tuple(stills),
+                                            slide_fade_s=fade, per_caption=True))
+        duration, _width, _height = _probe(followed)
+        ok &= _check(f"{label} : la durée tient ({duration:.1f} s pour 14 s)",
+                     abs(duration - 14.0) < 0.3)
+        # Trois images pour quatre morceaux : le cycle recommence au quatrième.
+        middles = [(a + b) / 2 for a, b in zip([0.0] + marks, marks + [14.0])]
+        seen = [_centre(followed, at) for at in middles]
+        dominant = [max(range(3), key=lambda channel: pixel[channel])
+                    for pixel in seen]
+        ok &= _check(f"{label} : chaque morceau montre son image "
+                     f"({dominant})", dominant == [0, 1, 2, 0])
 
     shutil.rmtree(root, ignore_errors=True)
     print("\n" + ("TOUT PASSE" if ok else "DES TESTS ECHOUENT"))

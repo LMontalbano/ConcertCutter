@@ -1,5 +1,11 @@
-numpy>=1.24
-soundfile>=0.12
+numpy==1.26.2
+soundfile==0.14.0
+
+# La fenêtre de l'interface web, posée sur WebView2 — présent d'office sur
+# Windows 10 et 11, donc rien à installer côté utilisateur. Facultatif : sans
+# lui, `gui_web.py` ouvre le navigateur par défaut et tout fonctionne, seule la
+# fenêtre change.
+pywebview==6.2.1
 
 # L'export vidéo demande ffmpeg, qui n'est pas un paquet Python : à installer
 # à part, ou à déposer à côté de l'exécutable. Sans lui, tout le reste marche

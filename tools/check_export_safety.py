@@ -12,7 +12,8 @@ import shutil
 from pathlib import Path
 
 from concertcutter.render import (
-    DATA_DIR, ExportConflict, RenderParams, concert_dir, previous_export, render,
+    AUDIO_DIR, DATA_DIR, ExportConflict, RenderParams, concert_dir,
+    previous_export, render,
     unique_dir,
 )
 from concertcutter.segment import Analysis
@@ -31,7 +32,8 @@ def titled(analysis: Analysis, prefix: str) -> list[str]:
 
 
 def wavs(directory: Path) -> list[str]:
-    return sorted(p.name for p in directory.glob("*.wav"))
+    """Les pistes de l'export, dans le sous-dossier qui les tient."""
+    return sorted(p.name for p in (directory / AUDIO_DIR).glob("*.wav"))
 
 
 def main(segments_path: Path, root: Path) -> int:
@@ -45,8 +47,9 @@ def main(segments_path: Path, root: Path) -> int:
     render(analysis, out, titled(analysis, "Un "), PARAMS)
     first = wavs(out)
     print(f"export 1 : {len(first)} pistes")
-    ok &= _check("racine : que des .wav",
-                 all(p.suffix.lower() == ".wav" for p in out.iterdir() if p.is_file()))
+    ok &= _check("racine : aucun fichier en vrac",
+                 not [p for p in out.iterdir() if p.is_file()])
+    ok &= _check(f"audio rangé dans « {AUDIO_DIR} »", bool(first))
     ok &= _check(f"non-audio rangé dans « {DATA_DIR} »",
                  (out / DATA_DIR / "segments.json").exists()
                  and (out / DATA_DIR / "reperes.txt").exists())

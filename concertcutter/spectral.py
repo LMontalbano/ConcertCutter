@@ -39,6 +39,9 @@ class SpectralFeatures:
     centroid: np.ndarray      # centre de gravité spectral, Hz
     correlation: np.ndarray   # corrélation L/R, dans [-1, 1]
     chroma: np.ndarray        # (n, 12) énergie par classe de hauteur
+    source_path: str = ""
+    source_size: int = -1
+    source_mtime_ns: int = -1
 
     def __len__(self) -> int:
         return len(self.rms_db)
@@ -54,6 +57,9 @@ class SpectralFeatures:
             centroid=self.centroid,
             correlation=self.correlation,
             chroma=self.chroma,
+            source_path=self.source_path,
+            source_size=self.source_size,
+            source_mtime_ns=self.source_mtime_ns,
         )
 
     @staticmethod
@@ -72,17 +78,33 @@ class SpectralFeatures:
             # signale par un tableau vide plutôt que de le refuser, la
             # segmentation par niveau n'en ayant pas besoin.
             chroma=data["chroma"] if "chroma" in data.files else np.zeros((count, 0)),
+            source_path=str(data["source_path"].item()) if "source_path" in data.files else "",
+            source_size=int(data["source_size"].item()) if "source_size" in data.files else -1,
+            source_mtime_ns=(int(data["source_mtime_ns"].item())
+                              if "source_mtime_ns" in data.files else -1),
         )
 
     @property
     def has_chroma(self) -> bool:
         return self.chroma.size > 0
 
+    def matches_source(self, path: str | Path) -> bool:
+        """Vrai si le cache appartient encore exactement à ce fichier."""
+        source = Path(path).resolve()
+        try:
+            info = source.stat()
+        except OSError:
+            return False
+        return (self.source_path.casefold() == str(source).casefold()
+                and self.source_size == info.st_size
+                and self.source_mtime_ns == info.st_mtime_ns)
+
 
 def extract(
     path: str | Path, frame_s: float = 0.25, progress: bool = False
 ) -> SpectralFeatures:
-    info = probe(path)
+    source = Path(path).resolve()
+    info = probe(source)
     sr = info.samplerate
     frame_len = max(1, int(round(frame_s * sr)))
     fft_size = min(FFT_SIZE, frame_len)
@@ -105,7 +127,7 @@ def extract(
 
     total = info.frames // frame_len
     for index, block in enumerate(
-        sf.blocks(str(path), blocksize=frame_len, dtype="float32", always_2d=True)
+        sf.blocks(str(source), blocksize=frame_len, dtype="float32", always_2d=True)
     ):
         if len(block) < frame_len:
             break
@@ -133,6 +155,9 @@ def extract(
         fps=sr / frame_len,
         chroma=_normalize_rows(np.asarray(chroma, dtype=np.float64)),
         **{key: np.asarray(values, dtype=np.float64) for key, values in out.items()},
+        source_path=str(source),
+        source_size=source.stat().st_size,
+        source_mtime_ns=source.stat().st_mtime_ns,
     )
 
 

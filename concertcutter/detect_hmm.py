@@ -110,6 +110,46 @@ def analyze(
     return found
 
 
+def refine_boundary(level_db, fps: float, moment: float, entering_music: bool,
+                    params: HmmParams | None = None) -> float:
+    """Recale une frontière déplacée à la main sur l'attaque la plus proche.
+
+    Le détecteur fait déjà ce calcul sur chacune des frontières qu'il propose,
+    dans une fenêtre de `refine_window_s` autour du bord. Le geste manuel
+    n'avait pas de raison d'en être privé : après avoir posé une coupe à
+    l'oreille, à trois dixièmes près, on veut le point exact où le morceau
+    commence — pas un autre point choisi autrement.
+
+    Prend le niveau en dBFS, et rien d'autre. C'est tout ce que le recalage a
+    jamais lu : lui demander un `SpectralFeatures` complet le rendait
+    indisponible tant que l'analyse n'avait pas tourné, alors que l'enveloppe
+    calculée à l'ouverture du fichier est le *même* signal — `audio.envelope`
+    et `spectral.extract().rms_db` s'accordent au millionième de décibel près,
+    puisque tous deux font le RMS d'une trame de 0,25 s. Le bouton « Caler »
+    marche donc dès que la forme d'onde est à l'écran, et survit à la reprise
+    d'un travail enregistré.
+
+    Rend l'instant recalé, ou celui qu'on lui donne si la fenêtre ne contient
+    aucune traversée franche entre les deux modes : mieux vaut ne rien bouger
+    que déplacer la coupe vers un accident du niveau.
+    """
+    params = params or HmmParams()
+    level = moving_average(np.asarray(level_db),
+                           int(round(params.smooth_s * fps)))
+    if len(level) < 3:
+        return moment
+    modes = gmm.fit(level)
+    frame = int(round(moment * fps))
+    # Une frontière n'est qu'un rang de trame, et le recalage n'a pas besoin
+    # d'en savoir plus : on lui donne la seule qu'on veut bouger.
+    runs = [(0, frame, not entering_music), (frame, len(level), entering_music)]
+    refined = _refine_boundaries(runs, level, modes, fps, params)
+    if len(refined) < 2:
+        return moment
+    return refined[1][0] / fps
+
+
+
 def _refine_boundaries(runs, level, modes, fps, params):
     """Recale chaque frontière sur la transition de niveau la plus franche.
 

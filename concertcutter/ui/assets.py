@@ -22,8 +22,16 @@ ICON_SIZES = (16, 32, 48, 256)
 
 
 def path(name: str) -> Path:
+    """Où trouver une ressource, dans l'un des deux dossiers d'assets.
+
+    Les icônes de l'application ont quitté `ui/assets/` pour `assets/` : elles
+    servent aussi bien à l'exécutable et à la fenêtre web, alors que ce qui
+    reste ici — les fonds de boutons en quatre états — n'existe que parce que
+    Tkinter ne sait pas styler un bouton, et disparaîtra avec lui.
+    """
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
-    return root / "concertcutter" / "ui" / "assets" / name
+    here = root / "concertcutter" / "ui" / "assets" / name
+    return here if here.is_file() else root / "concertcutter" / "assets" / name
 
 
 _icons: dict[str, tk.PhotoImage] = {}

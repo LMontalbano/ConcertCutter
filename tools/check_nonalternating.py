@@ -54,7 +54,7 @@ def main(segments_path: Path, root: Path) -> int:
 
     render(analysis, root, [track.title for track in analysis.tracks],
            RenderParams(write_full=False))
-    written = sorted(path.name for path in root.iterdir() if path.suffix == ".wav")
+    written = sorted(path.name for path in (root / "audio").glob("*.wav"))
     print("\nfichiers écrits :")
     for name in written:
         print("  " + name)

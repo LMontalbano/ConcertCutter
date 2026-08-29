@@ -17,7 +17,7 @@ from .detect_hmm import HmmParams, analyze as analyze_hmm
 from .excerpts import export_at, export_boundaries, parse_time
 from .labels import format_summary, write_audacity_labels
 from .render import (
-    VIDEO_DIR, ExportConflict, RenderParams, concert_dir, load_tracklist,
+    AUDIO_DIR, VIDEO_DIR, ExportConflict, RenderParams, concert_dir, load_tracklist,
     render as run_render, unique_dir,
 )
 from .rhythm import extract as extract_rhythm
@@ -182,16 +182,18 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def _load_features(args) -> SpectralFeatures | None:
-    """Réutilise le cache de descripteurs s'il correspond à la résolution demandée."""
+    """Réutilise le cache s'il appartient à la source et à la résolution."""
     if not args.cache:
         return None
     if args.cache.exists():
         feats = SpectralFeatures.load(args.cache)
         expected = 1.0 / args.frame
-        if abs(feats.fps - expected) < 1e-6:
+        if feats.matches_source(args.input) and abs(feats.fps - expected) < 1e-6:
             print(f"Descripteurs relus depuis {args.cache}")
             return feats
-        print(f"Cache ignoré : résolution {feats.fps}/s au lieu de {expected}/s")
+        why = ("source différente" if not feats.matches_source(args.input)
+               else f"résolution {feats.fps}/s au lieu de {expected}/s")
+        print(f"Cache ignoré : {why}")
     feats = extract_spectral(args.input, frame_s=args.frame)
     args.cache.parent.mkdir(parents=True, exist_ok=True)
     feats.save(args.cache)
@@ -335,7 +337,9 @@ def _do_render(analysis: Analysis, args) -> None:
     if result["full"]:
         print(f"\nFichier complet : {result['full']}")
         print(f"Cue sheet       : {result['cue']}")
-    print(f"\n{len(result['tracks'])} morceau(x) rendu(s) dans : {result['out_dir']}")
+    where = (Path(result['out_dir']) / AUDIO_DIR if not args.no_wav
+             else Path(result['out_dir']))
+    print(f"\n{len(result['tracks'])} morceau(x) rendu(s) dans : {where}")
     if result["videos"]:
         print(f"Vidéos ({len(result['videos'])}) dans : "
               f"{Path(result['out_dir']) / VIDEO_DIR}")
@@ -385,8 +389,8 @@ def _do_segues(args) -> None:
     features = None
     if args.cache and args.cache.exists():
         features = SpectralFeatures.load(args.cache)
-        if not features.has_chroma:
-            print("Cache antérieur au chroma : réextraction.")
+        if not features.has_chroma or not features.matches_source(analysis.source):
+            print("Cache ancien ou associé à une autre source : réextraction.")
             features = None
     if features is None:
         features = extract_spectral(analysis.source, frame_s=0.25)

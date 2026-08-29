@@ -32,6 +32,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Vérifier l'interface web
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
 
       - name: Installer les dépendances
         run: |

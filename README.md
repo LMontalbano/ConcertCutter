@@ -174,8 +174,9 @@ sous les deux cases audio, puisqu'il n'agit que sur le fichier d'un seul tenant,
 et le fondu entre images sous les images.
 
 On choisit un **emplacement**, pas un dossier vierge : le concert y reçoit son
-propre dossier, nommé d'après le fichier source. À la racine de ce dossier, il
-n'y a que de l'audio ; tout le reste va dans `infos/`.
+propre dossier, nommé d'après le fichier source. Ce dossier n'est qu'une table
+des matières : ce qui s'écoute dans `audio/`, ce qui se regarde dans `video/`,
+le reste dans `infos/`.
 
 **Un concert n'a pas toujours à sortir en entier** — trois titres pour une
 maquette, le rappel seul pour l'envoyer à quelqu'un. La première question de la
@@ -188,9 +189,10 @@ c'est la case du tableau.
 ```
 <emplacement choisi>/
 └── Concert Antidote 14.07.2026/
-    ├── concert_clean.wav
-    ├── 01 - Ouverture.wav
-    ├── 02 - Le Long Chemin.wav
+    ├── audio/
+    │   ├── concert_clean.wav
+    │   ├── 01 - Ouverture.wav
+    │   └── 02 - Le Long Chemin.wav
     └── infos/
         ├── concert_clean.cue
         ├── reperes.txt
@@ -198,8 +200,8 @@ c'est la case du tableau.
 ```
 
 La cue sheet est rangée avec les fichiers techniques mais désigne son audio par
-`../concert_clean.wav` : les lecteurs résolvent ce chemin depuis l'emplacement
-de la cue, donc elle reste fonctionnelle.
+`../audio/concert_clean.wav` : les lecteurs résolvent ce chemin depuis
+l'emplacement de la cue, donc elle reste fonctionnelle.
 
 **Réexporter dans un dossier déjà utilisé ne détruit rien en silence.** Le
 problème était double : les fichiers de même nom étaient écrasés sans un mot,
@@ -245,7 +247,8 @@ Cocher une case sous Vidéo et choisir l'image. Les MP4 (H.264 + AAC,
 
 ```
 └── Concert Antidote 14.07.2026/
-    ├── 01 - Ouverture.wav
+    ├── audio/
+    │   └── 01 - Ouverture.wav
     └── video/
         ├── concert_clean.mp4        (l'album continu)
         ├── 01 - Ouverture.mp4
@@ -318,7 +321,7 @@ lot, et à la mise au point.
 
 ```bash
 pip install -r requirements.txt
-python gui.py [concert.wav]
+python gui_web.py [concert.wav]
 ```
 
 Aucune dépendance système : `numpy` et `soundfile` suffisent. Entrée et sortie
@@ -332,9 +335,10 @@ python -m concertcutter run concert.wav -d sortie --expected-tracks 24
 
 Produit dans `sortie/` :
 
-- `concert_clean.wav` — le concert entier, blancs retirés
-- `concert_clean.cue` — marqueurs de piste pour ce fichier
-- `01 - Piste 01.wav`, `02 - Piste 02.wav`, … — un fichier par morceau
+- `audio/concert_clean.wav` — le concert entier, blancs retirés
+- `infos/concert_clean.cue` — marqueurs de piste pour ce fichier
+- `audio/01 - Piste 01.wav`, `audio/02 - Piste 02.wav`, … — un fichier par
+  morceau
 
 Et à côté du fichier source :
 
@@ -489,16 +493,12 @@ avance d'un pas fixe quand on clique dans son couloir, ce qui demandait une
 dizaine de clics pour atteindre une minute précise sur un concert de deux
 heures. Ici, un clic vaut un déplacement direct.
 
-**Le lecteur** passe par l'interface MCI de Windows (`winmm.dll` via `ctypes`),
-et non par `winsound` qui ne sait que jouer un fichier entier — sans pause, ni
-position, ni intervalle. MCI lit **en flux** : mesuré à 0,06 s pour ouvrir un
-WAV de 1,86 Go, sans le charger en mémoire. On obtient donc lecture depuis un
-instant, intervalle borné, pause, reprise et position réelle, toujours sans
-aucune dépendance.
-
-Tkinter et `ctypes` sont dans la bibliothèque standard : l'interface n'ajoute
-rien à installer et reste empaquetable sans effort. La lecture n'existe que
-sous Windows ; ailleurs, tout le reste fonctionne.
+**Le lecteur** est la balise `<audio>` du navigateur, servie par tranches. Il
+ne lit donc que ce qu'il joue — un WAV de 1,86 Go s'ouvre sans être chargé en
+mémoire, et l'on obtient lecture depuis un instant, intervalle borné, pause,
+reprise et position réelle. Il a remplacé cent soixante lignes d'interface MCI
+de Windows pilotée par `ctypes`, qui rendaient l'écoute possible sous Windows
+seulement.
 
 ## Ce que le matériel réel a appris
 
@@ -563,6 +563,25 @@ TensorFlow dépasse 500 Mo, un export ONNX serait préférable.
 
 # Développement
 
+## Interface web et secours historique
+
+L'interface est passée de Tkinter au web, servie par un serveur local sur
+`127.0.0.1` — aucun fichier ne quitte la machine, et l'algorithme reste en
+Python. Le plan et ses arbitrages sont dans
+[`docs/portage-web.md`](docs/portage-web.md), l'interface elle-même dans
+[`web/`](web/README.md).
+
+```bash
+python gui_web.py [concert.wav]     # la nouvelle : WebView2, ou le navigateur
+python gui.py     [concert.wav]     # l'ancienne : Tkinter
+```
+
+Les deux tournent sur le même cœur et sur les mêmes fichiers de travail. La
+version Tkinter est désormais un secours historique : aucun nouveau
+comportement ne doit y être ajouté. Elle sera retirée après validation d'une
+version publiée de l'interface web, afin de ne pas entretenir durablement deux
+applications qui finiraient par diverger.
+
 ## Construire l'exécutable
 
 Utile seulement pour publier une version, ou après avoir modifié le code :
@@ -571,7 +590,10 @@ Utile seulement pour publier une version, ou après avoir modifié le code :
 build_exe.bat
 ```
 
-Le script installe PyInstaller au besoin et écrit `dist\ConcertCutter.exe`.
+Le script exécute lui-même `npm ci` puis `npm run build`, vérifie que
+`concertcutter/web/static/index.html` existe, installe PyInstaller au besoin et
+écrit `dist\ConcertCutter.exe`. Il ne peut donc plus empaqueter silencieusement
+une interface précédente ou absente.
 Mesuré : fenêtre affichée en 1,1 s, 51 Mo en mémoire au repos. Un simple `.bat`
 qui appellerait `python gui.py` n'aurait pas suffi — il supposerait Python et
 les bibliothèques déjà installés sur la machine.
@@ -596,6 +618,16 @@ l'exécutable en pièce jointe de l'exécution, sans rien publier.
 `tools/` fabrique de quoi tester sans dépendre d'un concert réel, et contrôle ce
 qui ne se voit pas à la lecture.
 
+Le socle automatisé a un point d'entrée unique, également exécuté en CI :
+
+```bash
+python tools/check_all.py
+```
+
+Il compile Python, lance les tests de régression, vérifie les types Svelte et
+construit l'interface. Les contrôles ci-dessous restent les essais plus lourds
+sur un concert ou sur ffmpeg.
+
 ```bash
 python tools/make_fake_concert.py -n 6 -o test/faux_concert.wav
 python -m concertcutter run test/faux_concert.wav -d test/sortie
@@ -617,7 +649,10 @@ python tools/compare.py test/faux_concert.truth.json test/faux_concert.segments.
   Le contrôle mesure vraiment les pixels du bandeau — une incrustation ratée ne
   fait pas échouer ffmpeg, elle sort une vidéo vierge. Le test s'annonce ignoré
   si ffmpeg manque, il n'échoue pas
-- `smoke_gui.py` — l'interface entière parcourue sans souris
+- `check_web_api.py` — le serveur local : le jeton qui garde la porte, les
+  tranches `Range` du WAV, et l'édition passée par HTTP qui doit donner
+  exactement ce que donne l'appel direct à `edits`
+- `smoke_gui.py` — l'ancienne interface Tkinter parcourue sans souris
 - `make_screenshots.py` — refait les captures de ce README. Une capture prise à
   la main vieillit sans prévenir
 

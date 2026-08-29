@@ -7,24 +7,30 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+#
+# Ancrés à la racine, et c'est important : sans la barre de tête, `lib/`
+# valait pour n'importe quel dossier de n'importe quelle profondeur — il a
+# discrètement avalé `web/src/lib/`, c'est-à-dire le client HTTP, l'état de
+# l'écran et le tracé. Le dépôt se clonait sans que l'interface puisse se
+# compiler, et rien ne le disait.
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
+/MANIFEST
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -164,3 +170,12 @@ cython_debug/
 
 # Custom
 test/
+
+# --- interface web -------------------------------------------------------
+
+# Les dépendances du front, et ce que Vite en produit. `concertcutter/web/
+# static` est un résultat de compilation, pas une source : il se refait par
+# `cd web && npm install && npm run build`, et le versionner ferait apparaître
+# quatre-vingts kilo-octets de JavaScript minifié dans chaque diff.
+web/node_modules/
+concertcutter/web/static/

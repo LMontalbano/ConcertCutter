@@ -12,6 +12,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from concertcutter.render import AUDIO_DIR
+
 
 def check(path: Path) -> None:
     audio, sr = sf.read(str(path), dtype="float32", always_2d=True)
@@ -29,5 +31,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
-    for wav in sorted(args.directory.glob("*.wav")):
+    # On accepte le dossier du concert aussi bien que son sous-dossier audio :
+    # l'export range les WAV dans « audio », mais taper le nom du concert reste
+    # le geste naturel.
+    here = args.directory
+    if (here / AUDIO_DIR).is_dir():
+        here = here / AUDIO_DIR
+    for wav in sorted(here.glob("*.wav")):
         check(wav)

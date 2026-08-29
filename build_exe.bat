@@ -10,9 +10,14 @@ rem               secondes de plus qu'en --onedir, le temps de se decompresser
 rem               dans un dossier temporaire ; a l'echelle d'un concert de deux
 rem               heures a analyser, c'est negligeable.
 rem --windowed  : pas de fenetre noire derriere l'interface.
-rem --add-data  : les images de l'interface (fonds de boutons, icones, logo).
-rem               Ce sont des donnees, pas des modules : sans cette ligne
-rem               l'executable demarre mais sans icone ni boutons arrondis.
+rem --add-data  : l'interface compilee -- la page, son script, sa feuille de
+rem               style et les deux polices -- plus les icones. Ce sont des
+rem               donnees, pas des modules : sans cette ligne l'executable
+rem               demarre et sert une fenetre vide.
+rem
+rem L'interface est compilee ci-dessous avec le verrou npm avant PyInstaller.
+rem Le script reste ainsi autonome : impossible d'embarquer par oubli une
+rem version precedente de l'interface, ou aucune.
 rem --icon      : icone de l'executable lui-meme, dans l'explorateur.
 rem
 rem ffmpeg n'est pas embarque : une centaine de Mo, contre 27 pour tout
@@ -33,6 +38,31 @@ rem par git. Tout ce qu'on y ecrirait a la main serait perdu.
 cd /d "%~dp0"
 
 echo.
+echo === Construction de l'interface web ===
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo npm absent. Installez Node.js avant de construire l'executable.
+    goto echec
+)
+pushd web
+call npm ci
+if errorlevel 1 (
+    popd
+    goto echec
+)
+call npm run build
+if errorlevel 1 (
+    popd
+    goto echec
+)
+popd
+
+if not exist "concertcutter\web\static\index.html" (
+    echo L'interface web compilee est introuvable.
+    goto echec
+)
+
+echo.
 echo === Verification de PyInstaller ===
 python -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
@@ -49,13 +79,14 @@ python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name ConcertCutter ^
-    --add-data "concertcutter/ui/assets;concertcutter/ui/assets" ^
-    --icon concertcutter/ui/assets/icon.ico ^
+    --add-data "concertcutter/web/static;concertcutter/web/static" ^
+    --add-data "concertcutter/assets;concertcutter/assets" ^
+    --icon concertcutter/assets/icon.ico ^
     --exclude-module matplotlib ^
     --exclude-module scipy ^
     --exclude-module PIL ^
     --exclude-module pytest ^
-    gui.py
+    gui_web.py
 if errorlevel 1 goto echec
 
 echo.

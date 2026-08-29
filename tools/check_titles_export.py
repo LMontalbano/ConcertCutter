@@ -34,7 +34,7 @@ def main(segments_path: Path, out_dir: Path) -> int:
 
     shutil.rmtree(out_dir, ignore_errors=True)
     result = render(analysis, out_dir, titles, RenderParams(write_full=False))
-    names = [track["file"] for track in result["tracks"]]
+    names = [Path(track["file"]).name for track in result["tracks"]]
     for name in names[:4]:
         print(f"    {name}")
 
@@ -45,7 +45,7 @@ def main(segments_path: Path, out_dir: Path) -> int:
     print(f"  [{'OK ' if matches else 'ECHEC'}] noms de fichiers conformes "
           "(titre vide -> « Piste NN », « : » assaini)")
 
-    on_disk = sorted(p.name for p in out_dir.glob("*.wav"))
+    on_disk = sorted(p.name for p in (out_dir / "audio").glob("*.wav"))
     written = all(name in on_disk for name in expected)
     ok &= written
     print(f"  [{'OK ' if written else 'ECHEC'}] fichiers réellement écrits")

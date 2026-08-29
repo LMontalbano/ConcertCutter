@@ -170,26 +170,8 @@ class Analysis:
                 for s in self.segments]
 
     def normalize(self) -> None:
-        """Rétablit l'alternance musique / blanc en fusionnant les voisins de même type.
-
-        Toute édition manuelle peut produire deux segments de même type côte à
-        côte, ce qui fausserait la numérotation des pistes et le rendu. Plutôt
-        que d'interdire ces cas un par un dans l'interface, on répare après coup.
-        """
-        merged: list[Segment] = []
-        for segment in self.segments:
-            if merged and merged[-1].kind == segment.kind:
-                previous = merged[-1]
-                previous.end = segment.end
-                previous.confidence = min(previous.confidence, segment.confidence)
-                # Le survivant garde son numéro et son titre s'il en a un ;
-                # sinon il hérite de ceux du segment absorbé, qui seraient
-                # perdus autrement.
-                previous.number = previous.number or segment.number
-                previous.title = previous.title or segment.title
-            else:
-                merged.append(segment)
-        self.segments = merged
+        """Rétablit l'alternance musique / blanc sur les segments de l'analyse."""
+        self.segments = normalize(self.segments)
 
     def to_json(self, path: str | Path) -> None:
         payload = asdict(self)
@@ -222,6 +204,32 @@ class Analysis:
         # on les pose à la relecture, une fois pour toutes.
         found.assign_numbers()
         return found
+
+
+def normalize(segments: list[Segment]) -> list[Segment]:
+    """Fusionne les voisins de même type, et rend la liste réparée.
+
+    Toute édition manuelle peut produire deux segments de même type côte à
+    côte, ce qui fausserait la numérotation des pistes et le rendu. Plutôt que
+    d'interdire ces cas un par un dans l'interface, on répare après coup.
+
+    Fonction plutôt que méthode : `edits.py` en a besoin sur une liste nue,
+    sans analyse autour, et deux implémentations dériveraient.
+    """
+    merged: list[Segment] = []
+    for segment in segments:
+        if merged and merged[-1].kind == segment.kind:
+            previous = merged[-1]
+            previous.end = segment.end
+            previous.confidence = min(previous.confidence, segment.confidence)
+            # Le survivant garde son numéro et son titre s'il en a un ; sinon
+            # il hérite de ceux du segment absorbé, qui seraient perdus
+            # autrement.
+            previous.number = previous.number or segment.number
+            previous.title = previous.title or segment.title
+        else:
+            merged.append(segment)
+    return merged
 
 
 def _segment_from(payload: dict) -> Segment:
