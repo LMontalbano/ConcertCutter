@@ -1,5 +1,10 @@
 <script lang="ts">
-  /* La colonne de gauche : les morceaux, et les blancs entre eux. */
+  /* La colonne de gauche : les morceaux, et les zones à retirer entre eux.
+
+     « Blanc » est le mot du métier, et il ne disait rien à qui ouvre le
+     logiciel : ni que la zone a été trouvée toute seule, ni surtout qu'elle
+     part à l'export. Les lignes annoncent donc leur sort — « À retirer » —, et
+     le bouton d'à côté dit comment le refuser. */
   import { session } from '../lib/session.svelte'
   import { hms, duration as spell, trackLabel } from '../lib/format'
   import { paint, palette, silhouette, surface, type Palette } from '../lib/wave'
@@ -59,7 +64,7 @@
     if (index < 0) return
     const segment = session.segments[index]
     if (!segment || draft.trim() === segment.trackTitle) return
-    await session.edit({ op: 'set_title', index, title: draft }, 'Titre enregistré.')
+    await session.edit({ op: 'set_title', index, title: draft })
   }
 
   function onKey(event: KeyboardEvent): void {
@@ -83,10 +88,8 @@
   })
 
   async function keep(segment: Segment): Promise<void> {
-    await session.edit(
-      { op: 'toggle_kind', index: segment.index },
-      segment.kind === 'gap' ? 'Blanc conservé.' : 'Segment écarté.',
-    )
+    // La ligne change de couleur et de camp sous le curseur : rien à ajouter.
+    await session.edit({ op: 'toggle_kind', index: segment.index })
   }
 </script>
 
@@ -96,8 +99,16 @@
       <span class="label">Pistes & Segments</span>
     </div>
     <div class="header-right">
-      <span class="badge accent">{session.counts.tracks} morceaux</span>
-      <span class="badge gap">{session.counts.gaps} blancs</span>
+      <span class="badge accent" title="Morceaux gardés à l'export"
+        >{session.counts.tracks} morceaux</span
+      >
+      <!-- Deux compteurs, et rien derrière : le titre dit ce qu'ils comptent,
+           et `cursor: default` évite de laisser croire à une action. -->
+      <span
+        class="badge gap"
+        title="Zones détectées automatiquement, retirées de l'export"
+        >{session.counts.gaps} à retirer</span
+      >
     </div>
   </header>
 
@@ -172,7 +183,7 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
-          class="gap"
+          class="cut"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
           onclick={() => session.select(segment.index)}
@@ -181,8 +192,8 @@
             class="listen thin"
             class:sounding={session.playing_at(segment.index)}
             onclick={(event) => (event.stopPropagation(), session.play(segment.index))}
-            aria-label="Écouter ce blanc"
-            title="Écouter ce blanc"
+            aria-label="Écouter ce passage"
+            title="Écouter ce passage"
           >
             <span class="play-icon">{session.playing_at(segment.index) ? '❚❚' : '▶'}</span>
           </button>
@@ -190,18 +201,19 @@
           <span class="gap-icon" aria-hidden="true">✂</span>
 
           <!-- Un bouton, et non un simple texte : c'est la seule prise du
-               clavier sur un blanc. Devenu `<span>`, il ne laissait plus que
-               la souris pour en sélectionner un. -->
+               clavier sur une zone à retirer. Devenu `<span>`, il ne laissait
+               plus que la souris pour en sélectionner une. -->
           <button
             class="mono gap-name"
             onclick={(event) => (event.stopPropagation(), session.select(segment.index))}
-            aria-label="Sélectionner le blanc de {spell(segment.end - segment.start)}"
-          >Blanc de {spell(segment.end - segment.start)}</button>
+            title="Blanc ou applaudissements, détecté automatiquement : ce passage ne sera pas exporté."
+            aria-label="Sélectionner le passage à retirer de {spell(segment.end - segment.start)}"
+          >À retirer — {spell(segment.end - segment.start)}</button>
 
           <button
             class="keep-btn"
             onclick={(event) => (event.stopPropagation(), keep(segment))}
-            title="Conserver ce passage dans l'export"
+            title="Garder ce passage dans l'export au lieu de le retirer"
           >
             Conserver
           </button>
@@ -402,7 +414,11 @@
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
-  .gap {
+  /* `cut` et non `gap` : la pastille du compteur porte « badge gap », et la
+     règle de la ligne l'attrapait au passage — curseur de main et fond qui
+     change au survol sur un simple compte, qui ne répond à rien. Deux rôles
+     différents, deux noms différents. */
+  .cut {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -417,13 +433,13 @@
   }
 
   /* Assombri dans sa propre teinte, et non repeint en gris : `--hover` est
-     le survol des lignes de morceau, et l'emprunter faisait perdre au blanc la
-     seule couleur qui le distingue au premier coup d'œil. */
-  .gap:hover {
+     le survol des lignes de morceau, et l'emprunter faisait perdre à la zone à
+     retirer la seule couleur qui la distingue au premier coup d'œil. */
+  .cut:hover {
     background: var(--gap-soft);
   }
 
-  .gap.current {
+  .cut.current {
     border-left-color: var(--gap);
   }
 

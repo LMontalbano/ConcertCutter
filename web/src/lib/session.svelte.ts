@@ -35,6 +35,13 @@ class Session {
   zoomed = $state(false)
   /** Vrai quand la vue a été choisie à la main, et ne doit plus suivre le son. */
   pinned = $state(false)
+  /** Vrai dès que la fenêtre a été cadrée sur un segment de ce concert.
+
+      Un travail rouvert arrive avec sa segmentation déjà faite : il ne repasse
+      pas par `analyze`, donc rien n'appelait `frame`, et la carte gardait la
+      fenêtre de soixante secondes du démarrage. Le premier morceau s'y
+      trouvait coupé, et il fallait dézoomer pour le voir en entier. */
+  private framed = false
 
   screen = $state<'empty' | 'main' | 'options'>('empty')
   theme = $state<'dark' | 'light'>('dark')
@@ -71,7 +78,7 @@ class Session {
     return this.segments[this.selected] ?? null
   }
 
-  /** Les blancs comptés séparément : c'est ce que l'en-tête de la liste dit. */
+  /** Les zones à retirer comptées à part : c'est ce que l'en-tête dit. */
   get counts(): { tracks: number; gaps: number } {
     return {
       tracks: this.state?.tracks.length ?? 0,
@@ -149,6 +156,10 @@ class Session {
     if (this.selected >= found.segments.length) {
       this.selected = 0
       this.frame()
+    } else if (!this.framed && found.segments.length) {
+      // Première segmentation reçue pour ce concert : c'est ici qu'arrive un
+      // travail rouvert, qui ne passe jamais par `analyze`.
+      this.showFirstTrack()
     }
     // La vue ne se recadre pas sur une édition. Elle le faisait, et déplacer
     // une poignée vers la droite faisait alors sauter le tracé sous le
@@ -175,6 +186,7 @@ class Session {
       this.stop()
       this.selected = 0
       this.playhead = 0
+      this.framed = false
       await this.refresh()
       this.note(`« ${this.state?.name ?? ''} » ouvert.`)
     })
@@ -188,6 +200,7 @@ class Session {
     await this.run(async () => {
       await this.watch((await api.open(projectPath, 'project', found.path)) as Job)
       this.envelope = new Float32Array(0)
+      this.framed = false
       await this.refresh()
       this.missingSource = null
       this.problem = ''
@@ -199,19 +212,24 @@ class Session {
       await this.watch(await api.analyze())
       this.envelope = new Float32Array(0)
       await this.refresh()
-      this.selected = this.segments.findIndex((segment) => segment.kind === 'music')
-      if (this.selected < 0) this.selected = 0
-      this.frame()
+      this.showFirstTrack()
       this.note(`${this.counts.tracks} morceaux trouvés.`)
     })
   }
 
   // -- édition ------------------------------------------------------------
 
-  async edit(body: Record<string, unknown>, said = ''): Promise<boolean> {
+  /** Une édition ne s'annonce pas quand elle réussit.
+
+      Chacune portait sa phrase — « Coupe déplacée à 3:37,0 », « Titre
+      enregistré », « Passage conservé ». Or régler un concert, c'est enchaîner
+      ces gestes par dizaines : la bulle repassait à chaque poignée lâchée pour
+      redire ce que le tracé venait de montrer. Elle ne sert plus qu'à ce que
+      l'écran ne peut pas dire — voir `note`. Un refus, lui, parle toujours :
+      c'est le seul cas où rien ne bouge à l'écran. */
+  async edit(body: Record<string, unknown>): Promise<boolean> {
     try {
       this.adopt(await api.edit(body))
-      if (said) this.note(said)
       return true
     } catch (failure) {
       this.note(message(failure))
@@ -222,7 +240,6 @@ class Session {
   async undo(): Promise<void> {
     try {
       this.adopt(await api.undo())
-      this.note('Annulé.')
     } catch (failure) {
       this.note(message(failure))
     }
@@ -231,7 +248,6 @@ class Session {
   async redo(): Promise<void> {
     try {
       this.adopt(await api.redo())
-      this.note('Rétabli.')
     } catch (failure) {
       this.note(message(failure))
     }
@@ -290,20 +306,46 @@ class Session {
     const index = this.segments.findIndex(
       (segment) => segment.start <= this.playhead && this.playhead < segment.end,
     )
-    if (index < 0 || index === this.selected) return
+    if (index < 0) return
+    // La vue ne bouge que quand la lecture est **sortie du cadre**, et non à
+    // chaque changement de segment : la carte montre exprès les zones à
+    // retirer voisines, et y entrer recadrait dessus alors qu'on regardait le
+    // morceau. Le test vaut aussi à segment inchangé — la lecture finit par
+    // quitter une longue zone montrée en partie, et la tête sortirait de
+    // l'écran sans que rien ne la rattrape.
+    const shown = this.shows(this.playhead)
     this.selected = index
-    if (!this.zoomed) this.frame()
+    if (!this.zoomed && !shown) this.frame()
   }
 
-  /** Cadre la fenêtre sur le segment regardé, marges comprises. */
+  /** Vrai quand cet instant est déjà dans la fenêtre montrée. */
+  private shows(moment: number): boolean {
+    return moment >= this.viewStart && moment <= this.viewStart + this.viewSpan
+  }
+
+  /** Se place sur le premier morceau du concert, et cadre la vue dessus. */
+  private showFirstTrack(): void {
+    const first = this.segments.findIndex((segment) => segment.kind === 'music')
+    this.selected = first < 0 ? 0 : first
+    this.frame()
+  }
+
+  /** Cadre la fenêtre sur le segment regardé, marges comprises.
+
+      La fenêtre glisse vers la gauche plutôt que de se raboter quand le
+      segment touche la fin du concert : `duration - viewStart` mangeait sinon
+      la marge de droite, et le dernier morceau arrivait collé au bord. */
   frame(): void {
     const segment = this.segment
     if (!segment) return
-    this.viewStart = Math.max(0, segment.start - CONTEXT_S)
-    this.viewSpan = Math.min(
-      this.duration - this.viewStart,
-      segment.end - segment.start + CONTEXT_S * 2,
+    const wanted = segment.end - segment.start + CONTEXT_S * 2
+    this.viewStart = Math.max(
+      0,
+      Math.min(segment.start - CONTEXT_S, this.duration - wanted),
     )
+    this.viewSpan = Math.min(this.duration - this.viewStart, wanted)
+    this.zoomed = false
+    this.framed = true
   }
 
   zoom(factor: number, focus: number): void {
@@ -337,6 +379,21 @@ class Session {
     this.follow()
   }
 
+  /** Déplace la tête de lecture sans toucher au cadrage.
+
+      C'est le clic dans la carte d'édition. Elle montre quinze secondes des
+      zones à retirer voisines pour qu'on juge la coupe sur les
+      applaudissements ; cliquer dedans pour les écouter passait par `seek`,
+      qui suit la tête — la vue sautait donc sur la zone à retirer, et le
+      morceau qu'on était en train de régler disparaissait. La loupe reste où
+      on l'a mise, le son part d'où on a cliqué, et la vue ne se remet à
+      suivre qu'au prochain déplacement volontaire ailleurs. */
+  scrub(seconds: number): void {
+    this.playhead = Math.max(0, Math.min(this.duration, seconds))
+    if (this.audio) this.audio.currentTime = this.playhead
+    this.pinned = true
+  }
+
   toggle(): void {
     if (!this.audio) return
     if (this.playing) this.audio.pause()
@@ -354,9 +411,10 @@ class Session {
       suite ; le relancer à la main laisse à chaque reprise le temps d'oublier
       ce qu'on venait d'entendre. */
   toggleLoop(): void {
+    // Sans phrase dans les deux sens : le bouton « Boucler (B) » s'allume et
+    // s'éteint, et c'est le geste qu'on répète le plus en calant une coupe.
     if (this.loop !== null) {
       this.loop = null
-      this.note('Boucle arrêtée.')
       return
     }
     const index = this.segments.findIndex(
@@ -369,7 +427,6 @@ class Session {
     this.loop = index
     this.seek(this.segments[index].start)
     void this.audio?.play()
-    this.note('Boucle sur le segment. « B » pour l\'arrêter.')
   }
 
   /** Rappelé par la balise `<audio>` : c'est elle qui donne l'heure.
@@ -420,6 +477,12 @@ class Session {
     }
   }
 
+  /** Dit ce que l'écran ne montre pas, et rien d'autre.
+
+      Trois cas seulement : un refus, un échec, et la fin d'un travail long —
+      ouverture, analyse, export. Tout ce dont le résultat se voit à l'instant
+      où il arrive se passe de phrase ; une bulle qui commente chaque geste
+      finit par ne plus rien signaler du tout. */
   note(text: string): void {
     this.message = text
     window.clearTimeout(this.noteTimer)

@@ -434,6 +434,7 @@ trouvés est inférieur à celui attendu.
 | `--pad-end` | 0.6 s | Queue d'applaudissements conservée après |
 | `--fade-ms` | 40 | Fondus d'entrée et de sortie |
 | `--crossfade` | 0 s | Fondu enchaîné entre morceaux, dans l'album continu |
+| `--video-crossfade` | = `--crossfade` | Le même, pour la vidéo du concert entier : deux documents, deux montages possibles |
 | `--only N,N` | — | N'écrire que ces morceaux (`1,4,7` ou `3-9`), numéros conservés |
 | `--video-image F` | — | Écrit aussi des MP4, sur cette image de fond |
 | `--video` | `pistes` | Quelles vidéos : `pistes`, `album`, ou `les-deux` |

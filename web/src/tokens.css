@@ -186,6 +186,10 @@ button:disabled {
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
 }
 
+/* Une pastille ne se clique pas : elle compte, ou elle étiquette. Le curseur
+   le dit — laissé à `auto`, il changeait au survol du compteur de zones à
+   retirer et promettait une action qui n'existe pas. Le « ? » des explications
+   est le seul qui réponde, et il reprend son curseur dans `Hint.svelte`. */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -196,6 +200,7 @@ button:disabled {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   color: var(--ink-2);
+  cursor: default;
 }
 
 .badge.accent {

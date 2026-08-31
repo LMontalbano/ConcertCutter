@@ -243,11 +243,22 @@
     line-height: 1.6;
   }
 
+  /* La bulle est passée du bas à la barre du haut, à hauteur des menus.
+
+     En bas, elle se posait à quelques pixels au-dessus du transport, c'est-à-
+     dire sur la rangée d'outils de la carte : les champs de frontière et les
+     boutons de coupe disparaissaient sous le message au moment même où l'on
+     venait de s'en servir. Ici, elle occupe le vide laissé entre le nom du
+     concert et les boutons — la seule bande de la fenêtre qui ne porte rien.
+
+     Sur une fenêtre étroite, un message long peut mordre sur les boutons ;
+     `pointer-events: none` fait que le clic les atteint quand même, et le
+     message s'efface au bout de quatre secondes. */
   .toast {
     position: fixed;
     left: 50%;
-    bottom: 74px;
-    transform: translateX(-50%);
+    top: 30px;
+    transform: translate(-50%, -50%);
     background: var(--ink);
     color: var(--on-ink);
     font-size: 12.5px;
@@ -256,7 +267,12 @@
     box-shadow: var(--shadow-float);
     z-index: 20;
     pointer-events: none;
-    max-width: 70vw;
+    max-width: min(520px, 44vw);
+    /* Un chemin d'export passe à la ligne plutôt que d'être coupé : la bulle
+       ne se survole pas, donc ce qui n'y tient pas est perdu. */
+    overflow-wrap: anywhere;
+    text-align: center;
+    line-height: 1.45;
   }
 
   .veil {

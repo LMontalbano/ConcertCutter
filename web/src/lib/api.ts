@@ -41,6 +41,8 @@ export interface ExportChoice {
   image: string
   images: string[]
   crossfade: number
+  /** Celui de la vidéo du concert entier : deux documents, deux montages. */
+  video_crossfade: number
   slide_fade: number
   one_per_track: boolean
   selection: number[] | null

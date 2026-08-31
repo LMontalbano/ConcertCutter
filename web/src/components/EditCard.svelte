@@ -2,11 +2,11 @@
   /* Le segment sous la loupe, et ses deux coupes.
 
      C'est l'évolution A du canevas : la vue déborde de quinze secondes sur les
-     blancs voisins. Dans 2a, la carte s'appelait « le morceau entier » et ses
-     deux limites tombaient exactement sur les bords du tracé — impossible de
-     les saisir, et on ne voyait jamais ce qu'il y a de l'autre côté de la
-     coupe, c'est-à-dire les applaudissements, la seule chose qui permette de
-     juger si elle tombe au bon endroit.
+     zones à retirer voisines. Dans 2a, la carte s'appelait « le morceau
+     entier » et ses deux limites tombaient exactement sur les bords du tracé —
+     impossible de les saisir, et on ne voyait jamais ce qu'il y a de l'autre
+     côté de la coupe, c'est-à-dire les applaudissements, la seule chose qui
+     permette de juger si elle tombe au bon endroit.
 
      Trois façons de corriger, par précision croissante : les poignées à la
      souris, la molette pour zoomer, les steppers d'une demi-seconde — et la
@@ -117,7 +117,10 @@
   function onPointerDown(event: PointerEvent): void {
     const grip = grabbed(event.clientX)
     if (!grip) {
-      session.seek(at(event.clientX))
+      // `scrub` et non `seek` : écouter la zone à retirer voisine, montrée
+      // exprès aux deux bouts de la carte, ne doit pas recadrer la vue
+      // dessus. Voir la note de `Session.scrub`.
+      session.scrub(at(event.clientX))
       return
     }
     dragging = grip
@@ -159,10 +162,7 @@
     // Le tracé provisoire ne s'efface qu'une fois la réponse arrivée, qu'elle
     // accepte ou qu'elle refuse : l'effacer avant ferait sauter la frontière à
     // son ancienne place le temps d'un aller-retour.
-    await session.edit(
-      { op: 'move_boundary', index, moment },
-      `Coupe déplacée à ${tenths(moment)}.`,
-    )
+    await session.edit({ op: 'move_boundary', index, moment })
     preview = null
   }
 
@@ -211,10 +211,7 @@
     if (!renaming || !segment) return
     renaming = false
     if (draft.trim() === segment.trackTitle) return
-    await session.edit(
-      { op: 'set_title', index: segment.index, title: draft },
-      'Titre enregistré.',
-    )
+    await session.edit({ op: 'set_title', index: segment.index, title: draft })
   }
 
   function onTitleKey(event: KeyboardEvent): void {
@@ -235,14 +232,11 @@
       session.note('La fin du concert ne se fusionne pas.')
       return
     }
-    await session.edit({ op: 'delete_boundary', index: edges.end }, 'Coupe supprimée.')
+    await session.edit({ op: 'delete_boundary', index: edges.end })
   }
 
   async function split(): Promise<void> {
-    await session.edit(
-      { op: 'split_here', moment: session.playhead },
-      `Frontière posée à ${tenths(session.playhead)}.`,
-    )
+    await session.edit({ op: 'split_here', moment: session.playhead })
   }
 
   $effect(() => {
@@ -302,7 +296,9 @@
     <div class="title-block">
       <div class="meta-row">
         <span class="badge {segment.kind === 'music' ? 'accent' : 'gap'}">
-          {segment.kind === 'music' ? `MORCEAU ${trackLabel(segment.number)}` : 'BLANC / APPLAUDISSEMENTS'}
+          {segment.kind === 'music'
+            ? `MORCEAU ${trackLabel(segment.number)}`
+            : 'ZONE À RETIRER · DÉTECTION AUTOMATIQUE'}
         </span>
         {#if segment.confidence}
           <span class="badge">
@@ -328,7 +324,9 @@
           class:empty={!segment.trackTitle}
           onclick={startRename}
           disabled={segment.kind !== 'music'}
-          title={segment.kind === 'music' ? 'Cliquer pour nommer ce morceau' : 'Un blanc ne se nomme pas'}
+          title={segment.kind === 'music'
+            ? 'Cliquer pour nommer ce morceau'
+            : 'Une zone à retirer ne se nomme pas'}
         >
           <span>{segment.trackTitle || 'Sans titre'}</span>
           {#if segment.kind === 'music'}
@@ -354,7 +352,7 @@
     <div class="card-head">
       <div class="card-title">
         <span class="label">
-          {segment.kind === 'music' ? 'Morceau & Frontières' : 'Blanc & Frontières'}
+          {segment.kind === 'music' ? 'Morceau & Frontières' : 'Zone à retirer & Frontières'}
         </span>
         <span class="badge accent mono">{hms(segment.end - segment.start)}</span>
       </div>

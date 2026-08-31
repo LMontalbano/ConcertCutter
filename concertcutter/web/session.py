@@ -71,6 +71,9 @@ SETTING_LIMITS = {
 # ouvert auparavant.
 DEFAULT_EXPORT = {
     "dir": "", "image": "", "images": [], "crossfade": 0.0,
+    # Le fondu de la vidéo du concert entier, distinct de celui du WAV : ce
+    # sont deux documents, et rien n'oblige à les enchaîner pareil.
+    "video_crossfade": 0.0,
     "slide_fade": video.SLIDE_FADE_S, "selection": None,
     "full": False, "tracks": False, "video_full": False, "video_tracks": False,
     "one_per_track": False,
@@ -358,6 +361,8 @@ class Session:
             pad_end_s=_bounded(self.settings["pad_end"], "Queue", 0.0, 60.0),
             crossfade_s=_bounded(choice.get("crossfade") or 0.0,
                                  "Fondu enchaîné", 0.0, 60.0),
+            video_crossfade_s=_bounded(_video_crossfade(choice),
+                                       "Fondu enchaîné de la vidéo", 0.0, 60.0),
             write_full=_flag(choice, "full"),
             write_tracks=_flag(choice, "tracks"),
             video_full=_flag(choice, "video_full"),
@@ -550,6 +555,11 @@ class Session:
         for name in DEFAULT_EXPORT:
             if name in saved and name not in NOT_REMEMBERED:
                 self.export[name] = saved[name]
+        # Un travail enregistré avant que la vidéo ait son propre fondu n'en
+        # porte qu'un : il valait alors pour les deux sorties, et le laisser
+        # retomber à zéro retirerait sans le dire un enchaînement voulu.
+        if "video_crossfade" not in saved and "crossfade" in saved:
+            self.export["video_crossfade"] = saved["crossfade"]
         # Un travail repris rapporte ses fonds : ils doivent redevenir
         # affichables, sinon la fenêtre d'export les listerait sans vignette.
         self.allow_image(self.export.get("images") or [])
@@ -641,6 +651,19 @@ def _bounded(value, label: str, low: float, high: float) -> float:
     if not math.isfinite(number) or not low <= number <= high:
         raise SessionError(f"{label} doit être compris entre {low:g} et {high:g}.")
     return number
+
+
+def _video_crossfade(choice: dict):
+    """Le fondu de la vidéo, ou celui de l'audio quand la clé manque.
+
+    Une demande venue d'un client plus ancien — ou d'un projet enregistré avant
+    que la vidéo ait son propre réglage — ne porte que « crossfade », et il
+    valait alors pour les deux sorties. Le faire retomber à zéro retirerait
+    sans le dire un enchaînement voulu.
+    """
+    if choice.get("video_crossfade") is None:
+        return choice.get("crossfade") or 0.0
+    return choice["video_crossfade"]
 
 
 def _flag(choice: dict, name: str) -> bool:
