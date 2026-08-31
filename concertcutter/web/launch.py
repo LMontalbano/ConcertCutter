@@ -100,7 +100,7 @@ def _dress_window(window, *_) -> None:
     """Pose l'icône sur la fenêtre, sous Windows.
 
     L'exécutable construit porte la sienne, et la fenêtre en hérite ; lancée
-    par `python gui_web.py`, elle héritait de celle de l'interpréteur. Ce sont
+    par `python gui.py`, elle héritait de celle de l'interpréteur. Ce sont
     pourtant les deux mêmes fenêtres, et la seconde est celle qu'on regarde
     pendant tout le développement.
 
@@ -171,28 +171,11 @@ def _in_window(page: str, app) -> None:
 
 
 def _in_browser(page: str, app) -> None:
-    """Le navigateur par défaut, avec les dialogues de Tk pour les chemins.
-
-    Tkinter n'est plus l'interface ici : il ne prête que ses trois sélecteurs
-    de fichiers, c'est-à-dire ceux du système. Sans lui non plus, l'application
-    tourne — l'écran d'accueil propose alors de coller un chemin.
-    """
-    host = None
-    try:
-        host = dialogs.TkDialogs()
-        dialogs.use(host)
-    except Exception:  # noqa: BLE001 — pas de Tk, pas d'affichage…
-        host = None
-
+    """Le navigateur par défaut, avec saisie manuelle des chemins."""
+    dialogs.use(dialogs.NoDialogs())
     webbrowser.open(page)
     print(f"ConcertCutter sert sur {page}", flush=True)
-    if host is None:
-        app.quit.wait()
-        return
-
-    threading.Thread(target=lambda: (app.quit.wait(), host.stop()),
-                     daemon=True).start()
-    host.run()
+    app.quit.wait()
 
 
 if __name__ == "__main__":

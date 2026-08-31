@@ -1,8 +1,5 @@
 <script lang="ts">
-  /* Ce qu'on écrit, et où.
-
-     La fenêtre Tkinter faisait 942 lignes et portait des décisions qu'il ne
-     fallait pas perdre au portage. Elles sont toutes reprises ici :
+  /* Ce qu'on écrit, et où. Les décisions d'interface sont explicites ici :
 
      - **trois questions numérotées, dans l'ordre où on se les pose** : quels
        morceaux, sous quelle forme, où. Les numéros ne décorent pas — ils

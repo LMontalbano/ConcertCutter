@@ -1,8 +1,4 @@
-/* Les jetons de la variante 2a, en deux teintes.
-
-   Ce fichier remplace `ui/theme.py`, `ui/skin.py` et les trente PNG de
-   `ui/assets/` — des boutons en quatre états qui étaient des images parce que
-   Tkinter ne sait pas styler un bouton.
+/* Les jetons visuels, en deux teintes.
 
    **Le sombre est le défaut.** On découpe un concert le soir, longtemps, en
    regardant un tracé lumineux sur fond de page : le blanc de 2a fatigue au

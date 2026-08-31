@@ -86,7 +86,7 @@ python -m PyInstaller ^
     --exclude-module scipy ^
     --exclude-module PIL ^
     --exclude-module pytest ^
-    gui_web.py
+    gui.py
 if errorlevel 1 goto echec
 
 echo.

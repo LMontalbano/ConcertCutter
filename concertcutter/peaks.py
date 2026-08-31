@@ -11,9 +11,9 @@ la largeur qu'on a — et la bonne source dépend de l'échelle :
   relus à la volée. Sans ça, un placement à la demi-seconde se ferait à
   l'aveugle sur un tracé en marches d'escalier.
 
-Cette stratégie vivait dans `ui/waveform.py`, mêlée au canevas Tkinter. Elle
-n'a rien de graphique : elle décide de ce qu'on lit sur le disque, et à quel
-moment. Sortie d'ici, elle sert aussi bien un canevas HTML qu'un canevas Tk.
+Cette stratégie n'a rien de graphique : elle décide de ce qu'on lit sur le
+disque, et à quel moment. Elle fournit ainsi les mêmes données à toute vue du
+concert.
 
 Tout est rendu en hauteurs entre 0 et 1, prêtes à multiplier par la hauteur du
 tracé. La conversion dBFS → hauteur fait partie de la décision : c'est elle qui
