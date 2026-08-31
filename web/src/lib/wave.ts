@@ -33,9 +33,9 @@ export function palette(): Palette {
     gapBed: read('--wave-gap-bed'),
     handle: read('--handle'),
     handleActive: read('--handle-active') || read('--accent'),
-    cursor: read('--accent') || read('--ink'),
+    cursor: read('--cursor') || (theme === 'dark' ? '#ffffff' : '#0f172a'),
     onHandle: read('--on-ink'),
-    halo: read('--surface'),
+    halo: read('--cursor-halo') || read('--surface'),
     veil: read('--ribbon-veil'),
   }
   known = { theme, palette: found }
@@ -227,14 +227,24 @@ export function drawCursor(
   // Liseré halo sous le trait pour détacher la tête de lecture
   context.fillStyle = colours.halo
   context.fillRect(x - 2, 0, 4, height)
+
+  // Marqueur triangulaire en tête avec halo
+  context.beginPath()
+  context.moveTo(x - 5, 0)
+  context.lineTo(x + 5, 0)
+  context.lineTo(x, 7)
+  context.closePath()
+  context.fillStyle = colours.halo
+  context.fill()
+
+  // Trait blanc principal
   context.fillStyle = colours.cursor
   context.fillRect(x - 1, 0, 2, height)
 
-  // Petit marqueur triangulaire en tête
   context.beginPath()
-  context.moveTo(x - 4, 0)
-  context.lineTo(x + 4, 0)
-  context.lineTo(x, 6)
+  context.moveTo(x - 3.5, 0)
+  context.lineTo(x + 3.5, 0)
+  context.lineTo(x, 5.5)
   context.closePath()
   context.fillStyle = colours.cursor
   context.fill()

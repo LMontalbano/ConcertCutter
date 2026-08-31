@@ -48,6 +48,8 @@
 
     // Tête de lecture globale
     const x = (session.playhead / duration) * canvas.clientWidth
+    context.fillStyle = colours.halo
+    context.fillRect(x - 2, 0, 4, HEIGHT)
     context.fillStyle = colours.cursor
     context.fillRect(x - 1, 0, 2, HEIGHT)
   }
