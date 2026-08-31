@@ -3,6 +3,7 @@
   import { api, type RecentProject } from '../lib/api'
   import { session } from '../lib/session.svelte'
   import { savedAgo } from '../lib/format'
+  import logoUrl from '../assets/logo_128.png'
 
   let recent = $state<RecentProject[]>([])
   let typed = $state('')
@@ -49,8 +50,11 @@
 >
   <div class="sheet" class:dragging={isDragging}>
     <div class="header-badge">
-      <span class="icon">✂</span>
-      <h1>ConcertCutter</h1>
+      <img class="hero-logo" src={logoUrl} alt="Logo ConcertCutter" width="40" height="40" />
+      <div class="hero-title-group">
+        <h1>ConcertCutter</h1>
+        <span class="hero-tagline">Découpage & Montage Audio</span>
+      </div>
     </div>
 
     <p class="lead">
@@ -140,20 +144,34 @@
   .header-badge {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
   }
 
-  .icon {
-    font-size: 18px;
-    color: var(--accent);
+  .hero-logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    flex: none;
+  }
+
+  .hero-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   h1 {
     margin: 0;
-    font: 700 14px/1 var(--sans);
-    letter-spacing: 0.12em;
+    font: 700 16px/1 var(--sans);
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--ink);
+  }
+
+  .hero-tagline {
+    font: 500 12px var(--sans);
+    color: var(--ink-3);
   }
 
   .lead {

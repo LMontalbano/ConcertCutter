@@ -97,33 +97,50 @@ def icon_path() -> Path:
 
 
 def _dress_window(window, *_) -> None:
-    """Pose l'icône sur la fenêtre, sous Windows.
-
-    L'exécutable construit porte la sienne, et la fenêtre en hérite ; lancée
-    par `python gui.py`, elle héritait de celle de l'interpréteur. Ce sont
-    pourtant les deux mêmes fenêtres, et la seconde est celle qu'on regarde
-    pendant tout le développement.
-
-    Par la propriété `Icon` du formulaire, et non par un message `WM_SETICON` :
-    WinForms tient l'icône de sa fenêtre et la repose à chaque fois qu'il la
-    redessine, si bien que le message passait — il rendait bien l'ancienne
-    poignée — sans que la barre de titre change.
-
-    Rien d'obligatoire ici : une icône manquante ne doit pas empêcher
-    l'application de démarrer, elle doit juste ne pas s'afficher.
-    """
+    """Pose l'icône et habille la fenêtre native (Dark Mode DWM), sous Windows."""
     if sys.platform != "win32":
         return
     icon = icon_path()
     native = getattr(window, "native", None)
-    if not icon.is_file() or native is None:
+    if native is None:
         return
-    try:
-        from System.Drawing import Icon   # pythonnet, apporté par pywebview
 
-        native.Icon = Icon(str(icon))
-    except Exception as failure:  # noqa: BLE001 — autre coquille, autre monde
-        print(f"Icône non posée ({failure}).", flush=True)
+    # 1. Pose de l'icône native de l'application
+    if icon.is_file():
+        try:
+            from System.Drawing import Icon   # pythonnet, apporté par pywebview
+            native.Icon = Icon(str(icon))
+        except Exception as failure:  # noqa: BLE001
+            print(f"Icône non posée ({failure}).", flush=True)
+
+    # 2. Activation du mode sombre immersif Windows 10/11 et harmonisation des bordures
+    try:
+        import ctypes
+        hwnd = int(native.Handle.ToInt64())
+        true_val = ctypes.c_int(1)
+
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 11 / Windows 10 20H1+), 19 (Windows 10 1903)
+        res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(true_val), ctypes.sizeof(true_val)
+        )
+        if res != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 19, ctypes.byref(true_val), ctypes.sizeof(true_val)
+            )
+
+        # DWMWA_CAPTION_COLOR = 35 (Windows 11) : #161a22 (BGR: 0x00221A16)
+        caption_color = ctypes.c_int(0x00221A16)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 35, ctypes.byref(caption_color), ctypes.sizeof(caption_color)
+        )
+
+        # DWMWA_BORDER_COLOR = 34 (Windows 11) : #2d3542 (BGR: 0x0042352D)
+        border_color = ctypes.c_int(0x0042352D)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 34, ctypes.byref(border_color), ctypes.sizeof(border_color)
+        )
+    except Exception as failure:  # noqa: BLE001
+        print(f"Habillage de fenêtre non appliqué ({failure}).", flush=True)
 
 
 def _claim_identity() -> None:
@@ -152,10 +169,11 @@ def _in_window(page: str, app) -> None:
     _claim_identity()
     window = webview.create_window(
         TITLE, page, width=WIDTH, height=HEIGHT,
-        min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True)
+        min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True,
+        background_color="#0e1116")
     dialogs.use(dialogs.WebviewDialogs(window))
 
-    # La fenêtre n'existe pas encore ici : son icône se pose une fois qu'elle
+    # La fenêtre n'existe pas encore ici : son habillage se pose une fois qu'elle
     # est à l'écran.
     window.events.shown += lambda *_: _dress_window(window)
 
