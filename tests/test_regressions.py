@@ -201,6 +201,24 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.session.update_settings({"min_gap": "nan"})
 
+    def test_an_absent_video_crossfade_falls_back_on_the_audio_one(self) -> None:
+        """Un projet d'avant le réglage séparé ne perd pas son enchaînement.
+
+        Le fondu valait alors pour les deux sorties. Le laisser retomber à zéro
+        retirerait sans le dire un enchaînement voulu — et zéro reste demandable
+        en le disant, ce que la valeur absente ne dit pas.
+        """
+        both = self.session.render_params(
+            {"crossfade": 2.0, "video_crossfade": 4.5})
+        self.assertEqual((both.crossfade_s, both.video_crossfade_s), (2.0, 4.5))
+
+        old = self.session.render_params({"crossfade": 2.0})
+        self.assertEqual((old.crossfade_s, old.video_crossfade_s), (2.0, 2.0))
+
+        silent = self.session.render_params(
+            {"crossfade": 2.0, "video_crossfade": 0})
+        self.assertEqual((silent.crossfade_s, silent.video_crossfade_s), (2.0, 0.0))
+
     def test_unknown_selection_is_rejected(self) -> None:
         with self.assertRaises(SessionError):
             self.session.render_params({"selection": [99]}, self.session.analysis)
@@ -266,6 +284,64 @@ class ExportTests(unittest.TestCase):
 
             self.assertFalse(target.exists())
             self.assertEqual(list(folder.glob(f".{target.name}-export-*")), [])
+
+    def test_each_continuous_output_keeps_its_own_crossfade(self) -> None:
+        """Le WAV et le MP4 du concert entier s'enchaînent chacun à sa façon.
+
+        Ce sont deux documents : on grave un disque bout à bout et on met en
+        ligne une vidéo sans couture, ou l'inverse. Le fondu de la vidéo était
+        celui de l'audio — demander l'un imposait l'autre, et une vidéo seule
+        n'avait aucun moyen d'en obtenir un.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "source.wav"
+            make_wav(source, seconds=5.0)
+            analysis = Analysis(
+                source=str(source.resolve()), samplerate=8000, channels=1,
+                duration=5.0,
+                segments=[Segment(0.0, 2.0, "music"), Segment(2.0, 3.0, "gap"),
+                          Segment(3.0, 5.0, "music")],
+            )
+            analysis.assign_numbers()
+            handed: list[tuple[float, list]] = []
+
+            def capture(audio_path, captions, target, params, should_stop=None):
+                handed.append((sf.info(str(audio_path)).duration, captions))
+                Path(target).parent.mkdir(parents=True, exist_ok=True)
+                Path(target).write_bytes(b"")
+
+            def render_with(**extra) -> dict:
+                handed.clear()
+                settings = dict(
+                    write_full=False, write_tracks=False, write_sidecars=False,
+                    video_full=True, pad_start_s=0.0, pad_end_s=0.0,
+                )
+                settings.update(extra)
+                params = RenderParams(**settings)
+                with mock.patch.object(render_module, "_check_video", lambda _: None),                         mock.patch.object(render_module.video, "write_video", capture):
+                    return render(analysis, folder / f"out-{len(list(folder.iterdir()))}",
+                                  None, params)
+
+            # Vidéo seule : c'est son fondu à elle qui compte, et celui de
+            # l'audio ne s'invite pas dans un WAV qu'on n'écrit pas.
+            render_with(crossfade_s=1.0, video_crossfade_s=0.5)
+            duration, captions = handed[0]
+            self.assertAlmostEqual(duration, 3.5, places=2)
+            self.assertAlmostEqual(captions[0].end, 1.5, places=2)
+
+            # Sans fondu vidéo, la vidéo reste bout à bout même si le WAV, lui,
+            # s'enchaîne.
+            written = render_with(write_full=True, crossfade_s=0.5,
+                                  video_crossfade_s=0.0)
+            self.assertAlmostEqual(handed[0][0], 4.0, places=2)
+            self.assertAlmostEqual(sf.info(written["full"]).duration, 3.5, places=2)
+
+            # Et l'inverse : deux montages distincts dans le même export.
+            written = render_with(write_full=True, crossfade_s=0.0,
+                                  video_crossfade_s=0.5)
+            self.assertAlmostEqual(handed[0][0], 3.5, places=2)
+            self.assertAlmostEqual(sf.info(written["full"]).duration, 4.0, places=2)
 
     def test_a_cancelled_replacement_keeps_the_previous_export(self) -> None:
         with tempfile.TemporaryDirectory() as root:

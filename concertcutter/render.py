@@ -105,6 +105,13 @@ class RenderParams:
     # morceau se fond dans le début du suivant — utile quand on veut de
     # l'album continu une écoute sans couture plutôt qu'un document.
     crossfade_s: float = 0.0
+    # Le même recouvrement, mais pour la vidéo du concert entier. Elle est
+    # montée sur un album continu comme le WAV, sans être le même document :
+    # on grave un disque bout à bout et on met en ligne une vidéo qui
+    # s'enchaîne, ou l'inverse. Les deux montages sont donc écrits séparément
+    # quand les valeurs diffèrent — au prix d'un second passage d'écriture,
+    # que rien ne peut éviter puisque les fichiers ne sont pas les mêmes.
+    video_crossfade_s: float = 0.0
     full_name: str = "concert_clean.wav"
     write_full: bool = True    # l'album continu
     write_tracks: bool = True  # un fichier par morceau
@@ -264,12 +271,6 @@ def _render_into(
     written: list[dict] = []
     videos: list[str] = []
 
-    # Queue du morceau précédent, retenue le temps de la mêler au début du
-    # suivant. Sans fondu, elle reste vide et l'album s'écrit bout à bout comme
-    # avant.
-    overlap = max(0, int(round(params.crossfade_s * info.samplerate)))
-    tail: np.ndarray | None = None
-
     # La progression est rapportée depuis plusieurs fils : le compteur passe
     # sous verrou, et les étapes n'arrivent plus dans l'ordre. C'est sans
     # conséquence — la barre montre une avance, pas une place dans la file.
@@ -284,22 +285,38 @@ def _render_into(
             done_now = counter["done"]
         on_progress(done_now, steps, label)
 
+    # La vidéo du concert entier a son propre montage dès qu'elle ne peut pas
+    # se servir de celui du WAV : parce qu'aucun WAV n'est demandé, ou parce
+    # que les deux fondus diffèrent. À fondus égaux les deux sorties partagent
+    # le même fichier — c'est le cas courant, et un album de deux heures n'a
+    # pas à s'écrire deux fois pour rien.
+    video_apart = params.video_full and (
+        not params.write_full or params.video_crossfade_s != params.crossfade_s
+    )
+
     # Un dossier de travail dès qu'une vidéo doit partir d'un audio qu'on ne
     # garde pas : ffmpeg lit un fichier, pas un tableau numpy, donc le WAV
     # existe le temps de l'encodage puis disparaît.
     scratch = tempfile.TemporaryDirectory(prefix="concertcutter-") \
         if (params.video_tracks and not params.write_tracks) \
-        or (params.video_full and not params.write_full) else None
+        or video_apart else None
 
-    full_path = out_dir / params.audio_name
-    if not params.write_full and params.video_full:
-        full_path = Path(scratch.name) / params.full_name
-    full = None
-    if params.write_full or params.video_full:
-        full = sf.SoundFile(
-            str(full_path), mode="w", samplerate=info.samplerate,
-            channels=info.channels, subtype=info.subtype,
+    audio_album = (_Album(out_dir / params.audio_name, info, params.crossfade_s)
+                   if params.write_full else None)
+    video_album = None
+    if params.video_full:
+        video_album = (
+            _Album(Path(scratch.name) / params.full_name, info,
+                   params.video_crossfade_s)
+            if video_apart else audio_album
         )
+    # Les albums *distincts* : le plus souvent `video_album` est `audio_album`
+    # lui-même, et le nourrir deux fois écrirait chaque morceau en double.
+    albums: list[_Album] = []
+    if audio_album is not None:
+        albums.append(audio_album)
+    if video_album is not None and video_album is not audio_album:
+        albums.append(video_album)
 
     # L'encodage vidéo dure bien plus longtemps que l'écriture du WAV : compté
     # comme une étape à part, sinon la progression resterait figée entre deux
@@ -342,9 +359,8 @@ def _render_into(
                 sf.write(
                     str(track_path), audio, info.samplerate, subtype=info.subtype
                 )
-            if full is not None:
-                body, tail = _crossfade(tail, audio, overlap)
-                full.write(body)
+            for album in albums:
+                album.add(audio)
 
             written.append(
                 {
@@ -381,22 +397,20 @@ def _render_into(
         for job in jobs:
             job.result()
 
-        if full is not None:
-            if tail is not None:
-                full.write(tail)     # la queue du dernier morceau n'attend rien
-            full.close()
-            full = None
+        for album in albums:
+            album.close()
 
         if params.video_full:
             # Les bornes viennent des durées rendues, pas du concert d'origine :
             # les blancs retirés ont décalé tout ce qui suit.
             captions = video.captions_from_durations(
                 [_track_label(item["index"], item["title"]) for item in written],
-                _album_durations(written, params.crossfade_s),
+                _album_durations(written, params.video_crossfade_s),
             )
             if on_progress:
                 on_progress(counter["done"], steps, params.video_name)
-            video.write_video(full_path, captions, out_dir / params.video_name,
+            video.write_video(video_album.path, captions,
+                              out_dir / params.video_name,
                               _video_params(params), should_stop)
             videos.append(params.video_name)
             step(params.video_name)
@@ -406,8 +420,8 @@ def _render_into(
             # commencé n'ont plus lieu d'être — et ceux qui tournent tiennent
             # encore le dossier de travail qu'on s'apprête à effacer.
             pool.shutdown(wait=True, cancel_futures=True)
-        if full is not None:
-            full.close()
+        for album in albums:
+            album.close()
         if scratch is not None:
             scratch.cleanup()
 
@@ -434,7 +448,7 @@ def _render_into(
     _write_manifest(out_dir, analysis, names)
 
     return {
-        "full": str(full_path) if params.write_full else None,
+        "full": str(audio_album.path) if audio_album is not None else None,
         "cue": str(cue_path) if cue_path else None,
         "tracks": written,
         "videos": videos,
@@ -472,6 +486,7 @@ def _validate_params(analysis: Analysis, params: RenderParams) -> None:
         (params.pad_start_s, "Amorce", 0.0, 60.0),
         (params.pad_end_s, "Queue", 0.0, 60.0),
         (params.crossfade_s, "Fondu enchaîné", 0.0, 60.0),
+        (params.video_crossfade_s, "Fondu enchaîné de la vidéo", 0.0, 60.0),
         (params.video_slide_fade_s, "Fondu entre images", 0.0, 60.0),
     )
     for value, label, low, high in limits:
@@ -760,6 +775,43 @@ def _on_album(written: list[dict], crossfade_s: float) -> list[dict]:
     return [dict(item, duration=duration)
             for item, duration in zip(written,
                                       _album_durations(written, crossfade_s))]
+
+
+class _Album:
+    """Le concert monté d'un seul tenant, dans un fichier, avec son fondu.
+
+    Il y en a un, ou deux. Le WAV et la vidéo du concert entier sont deux
+    documents distincts, et rien n'oblige à les enchaîner pareil : on grave un
+    disque bout à bout et on met en ligne une vidéo sans couture, ou l'inverse.
+    Tant que les deux fondus sont égaux — le cas courant — un seul fichier sert
+    aux deux sorties ; dès qu'ils diffèrent, chacune écrit le sien.
+
+    L'objet tient ce qui distinguait ces montages quand il n'y en avait qu'un :
+    son recouvrement, et la queue du morceau précédent en attente du suivant.
+    """
+
+    def __init__(self, path: Path, info, crossfade_s: float) -> None:
+        self.path = Path(path)
+        self.crossfade_s = crossfade_s
+        self.overlap = max(0, int(round(crossfade_s * info.samplerate)))
+        self.tail: np.ndarray | None = None
+        self.file = sf.SoundFile(
+            str(self.path), mode="w", samplerate=info.samplerate,
+            channels=info.channels, subtype=info.subtype,
+        )
+
+    def add(self, audio: np.ndarray) -> None:
+        body, self.tail = _crossfade(self.tail, audio, self.overlap)
+        self.file.write(body)
+
+    def close(self) -> None:
+        """Referme, et se laisse rappeler : le `finally` repasse derrière."""
+        if self.file is None:
+            return
+        if self.tail is not None:
+            self.file.write(self.tail)   # la queue du dernier n'attend rien
+        self.file.close()
+        self.file = None
 
 
 def _crossfade(tail: np.ndarray | None, audio: np.ndarray, overlap: int):

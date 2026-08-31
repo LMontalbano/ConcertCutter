@@ -20,9 +20,9 @@
     {
       key: 'min_gap',
       family: 'detection',
-      label: 'Blanc minimum',
+      label: 'Silence minimum',
       unit: 's',
-      help: "En dessous, un silence n'est pas compté comme une coupure : c'est une respiration au milieu d'un morceau.",
+      help: "En dessous, un silence n'est pas compté comme une zone à retirer : c'est une respiration au milieu d'un morceau.",
       max: 3600,
     },
     {
@@ -47,7 +47,7 @@
       family: 'montage',
       label: 'Amorce avant',
       unit: 's',
-      help: "Conservée avant l'entrée du morceau. Elle mord sur la fin du blanc précédent, donc elle rattrape le retard de la détection sans coûter d'applaudissements.",
+      help: "Conservée avant l'entrée du morceau. Elle mord sur la fin de la zone retirée qui précède, donc elle rattrape le retard de la détection sans coûter d'applaudissements.",
       max: 60,
     },
     {
@@ -98,7 +98,10 @@
     {#each ['detection', 'montage'] as family (family)}
       <section>
         <div class="section-badge">
-          <span class="badge {family === 'detection' ? 'accent' : ''}">
+          <!-- Les deux titres portent le même accent : ils numérotent une
+               même page de réglages. La pastille grise du second le faisait
+               passer pour une note en marge de la première. -->
+          <span class="badge accent">
             {family === 'detection' ? '1. Détection & IA' : '2. Montage & Rendu'}
           </span>
         </div>

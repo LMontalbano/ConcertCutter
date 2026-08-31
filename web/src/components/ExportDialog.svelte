@@ -11,8 +11,11 @@
      - **les fonds vidéo se tiennent en liste**, pas en champ : un champ ne
        laissait ni voir la douzième image, ni en retirer une, ni savoir
        laquelle passerait en premier ;
-     - **chaque réglage est sous ce qu'il modifie** : le fondu enchaîné sous
-       les cases audio, le fondu entre images sous les images ;
+     - **chaque réglage est sous ce qu'il modifie** : le fondu entre images
+       sous les images, un fondu enchaîné sous chaque sortie d'un seul tenant —
+       celui du WAV sous les cases audio, celui du MP4 du concert entier sous
+       les cases vidéo. Ils restent en place quand leur case ne l'est pas,
+       éteints : rien n'apparaît ni ne disparaît sous le curseur ;
      - **la section vidéo répare elle-même ce qui lui manque** : un bouton, à
        la place d'une phrase qui suppose de savoir ce qu'est ffmpeg. */
   import { onMount, tick } from 'svelte'
@@ -39,9 +42,11 @@
       "Numéroté et nommé d'après le titre saisi. C'est ce qu'attend un lecteur " +
       'ou une clé USB.',
     crossfade:
-      "N'agit que sur le concert en un seul fichier : la fin d'un morceau se " +
-      'fond dans le début du suivant. À zéro, ils se suivent bout à bout, ' +
-      'comme sur un disque.',
+      "La fin d'un morceau se fond dans le début du suivant. À zéro, ils se " +
+      'suivent bout à bout, comme sur un disque. Le réglage ne vaut que pour ' +
+      'la sortie sous laquelle il se trouve : le WAV et le MP4 du concert ' +
+      "entier s'enchaînent chacun à sa façon, et les fichiers par morceau " +
+      "n'ont rien à enchaîner.",
     videoFull:
       "Sur l'image de fond. Le titre affiché suit le morceau en cours plutôt " +
       'que de rester figé deux heures.',
@@ -225,6 +230,35 @@
   }
 </script>
 
+<!-- Le fondu enchaîné n'existe que quand il sert, et là où il sert.
+
+     Le WAV et le MP4 du concert entier ont **chacun le sien** : ce sont deux
+     documents, et on grave volontiers un disque bout à bout tout en mettant en
+     ligne une vidéo sans couture. Chaque section porte donc son champ, sous la
+     case qui l'active.
+
+     Il reste en place quand sa sortie n'est pas cochée, éteint. Le faire
+     apparaître et disparaître au fil des cases était pire que le vide qu'il
+     laisse : la colonne se réorganisait sous le curseur à chaque clic, et les
+     cases vidéo sautaient de quarante pixels au moment même où l'on visait la
+     suivante. -->
+{#snippet crossfadeKnob(field: 'crossfade' | 'video_crossfade', on: boolean)}
+  <div class="knob" class:off={!on}>
+    <label for={field}>Fondu enchaîné<Hint text={WHY.crossfade} /></label>
+    <input
+      id={field}
+      class="mono"
+      type="number"
+      min="0"
+      max="60"
+      step="0.5"
+      disabled={!on}
+      bind:value={choice[field]}
+    />
+    <span class="unit">s</span>
+  </div>
+{/snippet}
+
 <div
   class="veil"
   role="presentation"
@@ -302,19 +336,7 @@
           <Hint text={WHY.tracks} />
         </div>
 
-        <div class="knob" class:off={!choice.full}>
-          <label for="crossfade">Fondu enchaîné<Hint text={WHY.crossfade} /></label>
-          <input
-            id="crossfade"
-            class="mono"
-            type="number"
-            min="0"
-            max="60"
-            step="0.5"
-            bind:value={choice.crossfade}
-          />
-          <span class="unit">s</span>
-        </div>
+        {@render crossfadeKnob('crossfade', choice.full)}
 
         <span class="label vid">Vidéo</span>
         {#if blocked}
@@ -349,6 +371,8 @@
             </label>
             <Hint text={WHY.videoTracks} />
           </div>
+
+          {@render crossfadeKnob('video_crossfade', choice.video_full)}
 
           <ExportImages
             {choice}
@@ -681,6 +705,8 @@
     color: var(--ink-3);
   }
 
+  /* Éteint, pas retiré : un réglage qui disparaît fait sauter la colonne
+     entière sous le curseur. Le champ garde sa place et sa valeur. */
   .off {
     opacity: 0.45;
     pointer-events: none;

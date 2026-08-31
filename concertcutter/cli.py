@@ -155,6 +155,11 @@ def _add_render_flags(parser: argparse.ArgumentParser) -> None:
                        metavar="S",
                        help="Fondu enchaîné entre morceaux dans l'album "
                             "continu. 0 : bout à bout, comme un disque")
+    group.add_argument("--video-crossfade", type=float, default=None,
+                       metavar="S",
+                       help="Fondu enchaîné de la vidéo du concert entier. "
+                            "Par défaut, celui de --crossfade : le même "
+                            "montage des deux côtés")
     group.add_argument("--pad-start", type=float, default=defaults.pad_start_s,
                        metavar="S", help="Amorce conservée avant chaque morceau")
     group.add_argument("--pad-end", type=float, default=defaults.pad_end_s,
@@ -301,6 +306,8 @@ def _do_render(analysis: Analysis, args) -> None:
         pad_start_s=args.pad_start,
         pad_end_s=args.pad_end,
         crossfade_s=args.crossfade,
+        video_crossfade_s=(args.crossfade if args.video_crossfade is None
+                           else args.video_crossfade),
         write_full=not args.no_wav,
         write_tracks=not args.no_wav,
         video_full=wants_video and args.video in ("album", "les-deux"),

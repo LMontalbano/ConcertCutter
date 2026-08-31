@@ -104,6 +104,9 @@
     color: var(--ink-3);
     font: 500 10px var(--sans);
     vertical-align: 1px;
+    /* Reprend le curseur que `.badge` retire aux pastilles : celle-ci répond
+       bien au survol et au clic. */
+    cursor: pointer;
   }
 
   .badge:hover,
