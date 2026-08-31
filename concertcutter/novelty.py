@@ -31,9 +31,6 @@ class NoveltyCurve:
     fps: float
     values: np.ndarray  # normalisée dans [0, 1]
 
-    def time_of(self, index: int) -> float:
-        return index / self.fps
-
 
 def novelty(
     features: np.ndarray, fps: float, kernel_s: float = 12.0

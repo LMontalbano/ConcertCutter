@@ -446,7 +446,7 @@ class Session:
             job.done, job.total, job.phase = done, total, name
 
         result = render(analysis, target, titles, params, on_progress=tick,
-                        replace=replace)
+                        replace=replace, should_stop=job.stop.is_set)
         self.touch()
         return {"dir": str(target), **{k: v for k, v in result.items()
                                        if isinstance(v, (int, str, list))}}
@@ -484,11 +484,19 @@ class Session:
         return written
 
     def recent(self) -> list[dict]:
+        """Les travaux en cours, en sautant ceux qu'on ne sait plus lire.
+
+        Chaque fichier est rattrapé pour lui-même. C'est une liste, pas une
+        transaction : un point de reprise abîmé — un disque qui a lâché au
+        milieu d'une écriture, un fichier corrigé à la main et réenregistré
+        dans un autre encodage — doit coûter sa propre ligne, et pas les dix-
+        neuf autres. L'écran d'accueil perdait tout pour un seul mauvais.
+        """
         found = []
         for path in project.recent()[:10]:
             try:
                 work = project.read(path)
-            except project.Unreadable:
+            except Exception:  # noqa: BLE001 — un travail illisible se saute
                 continue
             found.append({
                 "path": str(path), "name": work.name, "saved": work.saved,
@@ -616,13 +624,6 @@ class Session:
                 "confidence": track.confidence,
             } for track in analysis.tracks]
             return payload
-
-    def segments_payload(self) -> dict:
-        with self._lock:
-            if self.analysis is None:
-                raise SessionError("Aucune segmentation.")
-            return asdict(self.analysis)
-
 
 def _number(value, fallback: float) -> float:
     """Relit un réglage JSON, y compris dans les anciens formats textuels."""

@@ -96,13 +96,34 @@ def icon_path() -> Path:
     return root / "concertcutter" / "assets" / "icon.ico"
 
 
-def _apply_theme_to_window(window, theme: str = "dark") -> None:
-    """Harmonise la barre de titre et les bordures de la fenêtre native selon le thème."""
+# Dernier thème demandé par la page. Retenu ici, et non déduit à chaque fois,
+# parce que les deux moments où l'on habille la fenêtre ne sont pas ordonnés :
+# la page annonce son thème dès qu'elle démarre, la fenêtre n'existe qu'à son
+# événement `shown`. Le premier peut précéder le second — la fenêtre n'est pas
+# encore là, il n'y a rien à peindre — et le second reposait alors un « sombre »
+# écrit en dur qui écrasait le choix de l'utilisateur. Un thème clair retenu
+# d'une séance à l'autre revenait donc avec une barre de titre noire, jusqu'à
+# ce qu'on bascule deux fois.
+_theme = "dark"
+
+
+def _apply_theme_to_window(window, theme: str | None = None) -> None:
+    """Harmonise la barre de titre et les bordures de la fenêtre native.
+
+    Sans `theme`, repose le dernier demandé : c'est ce qu'appelle l'apparition
+    de la fenêtre, qui n'a pas d'avis propre et doit seulement rattraper ce que
+    la page a déjà dit.
+    """
+    global _theme
+    if theme is not None:
+        # Retenu même si la fenêtre n'est pas prête : c'est tout l'intérêt.
+        _theme = "light" if theme == "light" else "dark"
     if sys.platform != "win32":
         return
     native = getattr(window, "native", None)
     if native is None:
         return
+    theme = _theme
     try:
         import ctypes
         hwnd = int(native.Handle.ToInt64())
@@ -162,8 +183,8 @@ def _dress_window(window, *_) -> None:
         except Exception as failure:  # noqa: BLE001
             print(f"Icône non posée ({failure}).", flush=True)
 
-    # 2. Application du thème par défaut
-    _apply_theme_to_window(window, "dark")
+    # 2. Habillage, au thème que la page a déjà pu annoncer
+    _apply_theme_to_window(window)
 
 
 def _claim_identity() -> None:
@@ -204,11 +225,17 @@ def _in_window(page: str, app) -> None:
     window.events.shown += lambda *_: _dress_window(window)
 
     # Fermer la fenêtre doit arrêter le serveur, et non laisser un processus
-    # sans fenêtre tenir un port jusqu'au prochain redémarrage.
-    window.events.closed += app.quit.set
+    # sans fenêtre tenir un port jusqu'au prochain redémarrage. Ce qui tourne
+    # est prévenu d'abord : un export en cours referme ainsi son dossier de
+    # travail au lieu de l'abandonner à côté de l'export.
+    window.events.closed += lambda *_: (app.jobs.stop_all(), app.quit.set())
     try:
         webview.start()
     except Exception as failure:  # noqa: BLE001 — WebView2 absent, pilote cassé…
+        # Le rappel de thème pointait sur une fenêtre qui n'a jamais existé :
+        # chaque bascule imprimait ensuite un « habillage non appliqué » dans
+        # la console, pour une fenêtre native dont il n'y a plus rien à peindre.
+        app.on_theme = None
         print(f"Fenêtre native indisponible ({failure}) : passage au navigateur.",
               flush=True)
         _in_browser(page, app)

@@ -183,8 +183,14 @@ class Analysis:
     def from_json(path: str | Path) -> "Analysis":
         # utf-8-sig : ce fichier est fait pour être corrigé à la main, et un
         # éditeur Windows peut y laisser un BOM que json.loads refuserait.
-        return Analysis.from_payload(
-            json.loads(Path(path).read_text(encoding="utf-8-sig")))
+        # Un encodage que l'UTF-8 ne sait pas lire remonte en `ValueError`,
+        # comme un JSON mal formé : c'est la même erreur pour qui appelle.
+        try:
+            text = Path(path).read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"{Path(path).name} n'est pas de l'UTF-8 : "
+                             f"{error}") from error
+        return Analysis.from_payload(json.loads(text))
 
     @staticmethod
     def from_payload(payload: dict) -> "Analysis":

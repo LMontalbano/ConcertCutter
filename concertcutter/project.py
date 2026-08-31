@@ -60,7 +60,6 @@ class Project:
     analysis: Analysis
     settings: dict = field(default_factory=dict)
     export: dict = field(default_factory=dict)
-    view: dict = field(default_factory=dict)
     saved: str = ""
 
     @property
@@ -81,7 +80,6 @@ class Project:
             "analysis": asdict(self.analysis),
             "settings": self.settings,
             "export": self.export,
-            "view": self.view,
         }
         # Écriture par un fichier voisin puis remplacement : la sauvegarde
         # automatique passe toutes les deux secondes, et une coupure au milieu
@@ -100,7 +98,15 @@ def read(path: str | Path) -> Project:
         # utf-8-sig : le fichier est fait pour être corrigé à la main, et un
         # éditeur Windows peut y laisser un BOM que json.loads refuserait.
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
+        # `ValueError` et non `json.JSONDecodeError` seul : rouvert dans le
+        # Bloc-notes et réenregistré en « ANSI » ou en « Unicode », le fichier
+        # n'est plus de l'UTF-8, et `read_text` lève un `UnicodeDecodeError`.
+        # Il ne dérive pas de `JSONDecodeError` mais bien de `ValueError`, si
+        # bien qu'il traversait ce `except` et remontait tel quel — là où tout
+        # l'intérêt de `Unreadable` est que l'appelant puisse passer au projet
+        # suivant. Un fichier illisible reste un fichier illisible, quelle que
+        # soit la raison.
         raise Unreadable(f"{path.name} : {error}") from error
     if not isinstance(payload, dict):
         raise Unreadable(f"{path.name} n'est pas un projet ConcertCutter.")
@@ -119,14 +125,8 @@ def read(path: str | Path) -> Project:
         analysis=analysis,
         settings=dict(payload.get("settings") or {}),
         export=dict(payload.get("export") or {}),
-        view=dict(payload.get("view") or {}),
         saved=str(payload.get("saved") or ""),
     )
-
-
-def is_project(path: str | Path) -> bool:
-    """Vrai pour un fichier que `read` saura ouvrir, d'après son seul nom."""
-    return Path(path).name.lower().endswith((SUFFIX, ".json"))
 
 
 # -- dossier de reprise ----------------------------------------------------
@@ -162,12 +162,22 @@ def path_for(source: str | Path) -> Path:
 
 
 def recent() -> list[Path]:
-    """Travaux en cours, du plus récent au plus ancien."""
+    """Travaux en cours, du plus récent au plus ancien.
+
+    L'horodatage est relu à part : entre le parcours du dossier et le tri, un
+    fichier peut avoir disparu — `prune` tourne dans le fil de la sauvegarde
+    automatique — et un `stat` sur un fichier absent ferait tomber la liste.
+    """
     folder = store()
     if not folder.is_dir():
         return []
-    found = [path for path in folder.glob(f"*{SUFFIX}") if path.is_file()]
-    return sorted(found, key=lambda path: path.stat().st_mtime, reverse=True)
+    dated = []
+    for path in folder.glob(f"*{SUFFIX}"):
+        try:
+            dated.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    return [path for _when, path in sorted(dated, reverse=True)]
 
 
 def prune(keep: int = KEEP) -> None:
