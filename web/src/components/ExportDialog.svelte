@@ -210,6 +210,10 @@
       const job = await api.render({ ...body, target, replace })
       const done = await follow(job, (tick) => onBusy(tick))
       onBusy(null)
+      if (done.state === 'cancelled') {
+        session.note('Export interrompu. Le précédent est resté en place.')
+        return
+      }
       const written = (done.result as { dir?: string })?.dir ?? target
       session.note(`Export terminé — ${written}`)
       await session.refresh()

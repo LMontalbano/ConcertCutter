@@ -6,11 +6,27 @@
      compte rien, et une barre qui prétendrait le contraire mentirait. Elle
      glisse alors sans fin, ce qui dit « ça travaille » sans promettre de
      terme. */
-  import type { Job } from '../lib/api'
+  import { api, type Job } from '../lib/api'
 
   let { job }: { job: Job } = $props()
 
   const share = $derived(job.total > 0 ? Math.min(1, job.done / job.total) : 0)
+
+  /* Seul l'export s'arrête. L'analyse dure une minute et ne laisse rien
+     derrière elle ; l'export en dure cinq, davantage avec des vidéos, et c'est
+     là qu'on s'aperçoit qu'on a coché la mauvaise case. */
+  const stoppable = $derived(job.kind === 'export' && job.state === 'running')
+
+  let asked = $state(false)
+
+  async function stop(): Promise<void> {
+    asked = true
+    try {
+      await api.cancel(job.id)
+    } catch {
+      /* Un travail déjà fini ne se laisse pas arrêter, et n'a plus à l'être. */
+    }
+  }
 </script>
 
 <div class="veil">
@@ -25,6 +41,18 @@
          moins que le silence. -->
     {#if job.total > 0}
       <div class="mono count">{job.done} sur {job.total}</div>
+    {/if}
+
+    <!-- L'arrêt se demande, il ne s'impose pas : l'export finit le morceau
+         qu'il tient avant de se dénouer, ce qui peut prendre le temps d'un
+         encodage. Le bouton dit donc ce qui se passe plutôt que de disparaître
+         et laisser croire que le clic s'est perdu. -->
+    {#if stoppable}
+      <div class="acts">
+        <button class="btn quiet" onclick={stop} disabled={asked}>
+          {asked ? 'Arrêt demandé…' : 'Arrêter l’export'}
+        </button>
+      </div>
     {/if}
   </div>
 </div>
@@ -85,5 +113,11 @@
     margin-top: 12px;
     font-size: 11.5px;
     color: var(--ink-3);
+  }
+
+  .acts {
+    margin-top: 16px;
+    display: flex;
+    justify-content: flex-end;
   }
 </style>

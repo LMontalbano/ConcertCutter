@@ -19,7 +19,7 @@
   --ink: #f1f5f9;
   --ink-2: #b2becd;
   --ink-3: #8594a6;
-  --hint: #768597;
+  --hint: #8492a3;
   --on-ink: #0e1116;
   --on-accent: #061a1e;
 
@@ -30,7 +30,6 @@
 
   /* Blancs & Applaudissements */
   --gap: #ff9248;
-  --gap-hover: #ffa86e;
   --gap-row: #1a1614;
   --gap-rule: #3d2b22;
   --gap-soft: rgba(255, 146, 72, 0.15);
@@ -67,25 +66,30 @@
   --on-ink: #ffffff;
   --on-accent: #ffffff;
 
-  --accent: #088395;
-  --accent-hover: #0a6f7e;
+  /* Mesuré, pas choisi à l'œil. À #088395, « Exporter » en blanc sur son
+     aplat donnait 4,48 — sous les 4,5 du niveau AA — et le même ton en texte
+     sur du blanc tombait exactement pareil. Deux crans plus sombre suffisent à
+     passer la barre dans les deux sens (5,39) sans changer de couleur. */
+  --accent: #077586;
+  --accent-hover: #065c69;
   --accent-soft: #e4f4f7;
   --ink-hover: #1e293b;
 
   /* Blancs & Applaudissements */
   --gap: #c2410c;
-  --gap-hover: #9a3412;
   --gap-row: #fef7f2;
   --gap-rule: #f0d5c4;
-  --gap-soft: rgba(194, 65, 12, 0.12);
+  /* Huit pour cent et non douze : au-delà, l'aplat remonte assez pour que le
+     texte de la pastille repasse sous AA (4,35). */
+  --gap-soft: rgba(194, 65, 12, 0.08);
 
-  --wave: #088395;
+  --wave: #077586;
   --wave-bed: #e4f4f7;
   --wave-gap: #c2410c;
   --wave-gap-bed: #faede6;
 
   --handle: #0f172a;
-  --handle-active: #088395;
+  --handle-active: #077586;
   --cursor: #0f172a;
   --cursor-halo: rgba(255, 255, 255, 0.85);
   --veil: rgba(15, 23, 42, 0.32);

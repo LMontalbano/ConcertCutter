@@ -78,7 +78,7 @@ export interface Job {
   phase: string
   done: number
   total: number
-  state: 'running' | 'done' | 'failed'
+  state: 'running' | 'done' | 'failed' | 'cancelled'
   result: unknown
   error: string
   missing?: string
@@ -158,6 +158,7 @@ export const api = {
   navigate: (from: number, to: 'next' | 'previous' | 'section') =>
     call<{ moment: number }>(`/api/navigate?from=${from.toFixed(3)}&to=${to}`),
   save: () => post<{ saved: string; when: string }>('/api/save'),
+  cancel: (id: string) => call<Job>('/api/cancel', { id }),
   theme: (theme: 'dark' | 'light') => call<{ theme: string }>('/api/theme', { theme }),
   recent: () => call<{ projects: RecentProject[]; dialogs: boolean }>('/api/recent'),
   installFfmpeg: () => post<Job>('/api/ffmpeg'),
@@ -186,6 +187,12 @@ export interface RecentProject {
 
     Pas de SSE ni de WebSocket : ils économiseraient deux requêtes par seconde
     sur une boucle locale, au prix d'une connexion à tenir ouverte. */
+/** Suit un travail jusqu'à son terme, quel qu'il soit.
+
+    Trois fins possibles, et `cancelled` n'en est pas une mauvaise : un export
+    qu'on a soi-même arrêté n'a rien d'une erreur, et l'annoncer en rouge
+    reviendrait à reprocher à l'utilisateur ce qu'il vient de demander. Seul
+    `failed` lève. */
 export async function follow(job: Job, onTick: (job: Job) => void): Promise<Job> {
   let current = job
   onTick(current)
