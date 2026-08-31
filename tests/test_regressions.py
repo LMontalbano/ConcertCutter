@@ -245,6 +245,47 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(sorted(path.relative_to(target) for path in target.rglob("*")),
                              before_files)
 
+    def test_a_cancelled_export_publishes_nothing_and_leaves_no_folder(self) -> None:
+        """Arrêter un export doit être sans trace, dans les deux sens.
+
+        Rien de publié — l'export sort du dossier de travail d'un seul
+        basculement, et l'arrêt intervient avant —, et rien d'abandonné à côté
+        de la destination : c'est le dossier de travail qui portait les
+        gigaoctets qu'on retrouvait après une fermeture brutale.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "source.wav"
+            make_wav(source)
+            analysis = analysis_for(source)
+            target = folder / "out"
+
+            with self.assertRaises(cancel.Cancelled):
+                render(analysis, target, ["Un"], RenderParams(write_full=False),
+                       should_stop=lambda: True)
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(folder.glob(f".{target.name}-export-*")), [])
+
+    def test_a_cancelled_replacement_keeps_the_previous_export(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "source.wav"
+            make_wav(source)
+            analysis = analysis_for(source)
+            target = folder / "out"
+            params = RenderParams(write_full=False)
+            render(analysis, target, ["Un"], params)
+            before = sorted(path.relative_to(target) for path in target.rglob("*"))
+
+            with self.assertRaises(cancel.Cancelled):
+                render(analysis, target, ["Deux"], params, replace=True,
+                       should_stop=lambda: True)
+
+            self.assertEqual(
+                sorted(path.relative_to(target) for path in target.rglob("*")),
+                before)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self) -> None:
