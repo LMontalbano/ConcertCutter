@@ -61,6 +61,7 @@ class Application:
         self.token = secrets.token_urlsafe(32)
         self.quit = threading.Event()
         self.startup = None
+        self.on_theme = None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -236,6 +237,14 @@ class Handler(BaseHTTPRequestHandler):
             written = session.save()
             self._send({"saved": str(written) if written else "",
                         "when": session.saved})
+        elif route == "/api/theme":
+            theme = str(body.get("theme", "dark"))
+            if self.app.on_theme:
+                try:
+                    self.app.on_theme(theme)
+                except Exception:
+                    pass
+            self._send({"theme": theme})
         elif route == "/api/ffmpeg":
             self._install_ffmpeg()
         elif route == "/api/quit":

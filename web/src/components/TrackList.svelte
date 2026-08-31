@@ -1,13 +1,5 @@
 <script lang="ts">
-  /* La colonne de gauche : les morceaux, et les blancs entre eux.
-
-     Chaque ligne porte son numéro, son titre, ses bornes et une vignette de
-     forme d'onde — découpée dans l'enveloppe déjà reçue pour le ruban, donc
-     gratuite en entrées-sorties.
-
-     Les blancs sont des lignes à part entière, plus basses et d'une autre
-     teinte. Ce ne sont pas des séparateurs décoratifs : ce sont les
-     applaudissements, et « garder » les recolle au morceau voisin. */
+  /* La colonne de gauche : les morceaux, et les blancs entre eux. */
   import { session } from '../lib/session.svelte'
   import { hms, duration as spell, trackLabel } from '../lib/format'
   import { paint, palette, silhouette, surface, type Palette } from '../lib/wave'
@@ -19,16 +11,6 @@
   let editing = $state(-1)
   let draft = $state('')
 
-  /* Le paramètre de l'action porte tout ce dont la vignette dépend, parce que
-     c'est lui qui décide des repeintes.
-
-     L'enveloppe surtout : elle arrive quelques secondes après la liste, et
-     sans elle dans le paramètre, les vignettes restaient telles qu'elles
-     avaient été peintes avant son arrivée — c'est-à-dire plates. C'était là
-     l'origine des « rectangles ».
-
-     Et le thème, sans quoi vingt-cinq vignettes garderaient leur lit sombre
-     sur fond clair. */
   function thumb(
     canvas: HTMLCanvasElement,
     at: { segment: Segment; theme: string; envelope: Float32Array },
@@ -40,9 +22,6 @@
       colours = palette()
       const span = Math.max(0.1, segment.end - segment.start)
       paint(context, canvas.clientWidth, canvas.clientHeight, {
-        // `silhouette` et non `slice` : la crête d'une colonne de deux
-        // secondes ne bouge pas en musique, et les vignettes sortaient toutes
-        // en rectangle plein.
         heights: silhouette(
           session.envelope,
           session.envelopeFps,
@@ -56,6 +35,7 @@
         palette: colours,
         fill: 0.92,
         radius: 3,
+        showCenterLine: false,
       })
     }
     render()
@@ -68,9 +48,6 @@
   }
 
   function startEdit(segment: Segment): void {
-    // Le simple clic lance le morceau ; le double clic vient le nommer, et
-    // taper un titre par-dessus le son qu'on vient de déclencher serait
-    // pénible.
     session.stop()
     editing = segment.index
     draft = segment.trackTitle
@@ -95,21 +72,12 @@
 
   let rows: HTMLDivElement
 
-  /* La liste suit la sélection. Cliquer dans le ruban ou déplacer la tête de
-     lecture change le morceau regardé ; la ligne correspondante restait hors
-     de vue, et il fallait la chercher à la molette pour retrouver où l'on en
-     était. `nearest` ne fait rien quand elle est déjà visible : la liste ne
-     saute pas sous les doigts de qui la parcourt. */
   $effect(() => {
     const index = session.selected
     const row = rows?.querySelector<HTMLElement>(`[data-rank="${index}"]`)
     if (!row || !rows) return
     const line = row.getBoundingClientRect()
     const frame = rows.getBoundingClientRect()
-    // Rien tant qu'elle est déjà sous les yeux : la liste ne saute pas sous
-    // les doigts de qui la parcourt. Sinon on la ramène au milieu, et non au
-    // plus court — `nearest` la collait au bord bas, d'où l'on ne voit pas ce
-    // qui suit.
     if (line.top >= frame.top && line.bottom <= frame.bottom) return
     row.scrollIntoView({ block: 'center' })
   })
@@ -124,18 +92,27 @@
 
 <aside>
   <header>
-    <span class="label">
-      {session.counts.tracks} morceaux · {session.counts.gaps} blancs
-    </span>
+    <div class="header-left">
+      <span class="label">Pistes & Segments</span>
+    </div>
+    <div class="header-right">
+      <span class="badge accent">{session.counts.tracks} morceaux</span>
+      <span class="badge gap">{session.counts.gaps} blancs</span>
+    </div>
   </header>
 
   <div class="rows" bind:this={rows}>
     {#each session.segments as segment (segment.index)}
       {#if segment.kind === 'music'}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="track"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
+          class:playing-here={session.playing_at(segment.index)}
+          onclick={() => session.select(segment.index)}
+          role="button"
+          tabindex="0"
         >
           <button
             class="listen"
@@ -146,9 +123,11 @@
               : 'Écouter'} le morceau {trackLabel(segment.number)}"
             title={session.playing_at(segment.index) ? 'Arrêter' : 'Écouter ce morceau'}
           >
-            {session.playing_at(segment.index) ? '❚❚' : '▶'}
+            <span class="play-icon">{session.playing_at(segment.index) ? '❚❚' : '▶'}</span>
           </button>
-          <span class="mono number">{trackLabel(segment.number)}</span>
+          
+          <div class="num-pill">{trackLabel(segment.number)}</div>
+
           <div class="body">
             {#if editing === segment.index}
               <!-- svelte-ignore a11y_autofocus -->
@@ -161,18 +140,22 @@
                 placeholder="Sans titre"
               />
             {:else}
-              <button
-                class="title"
-                class:empty={!segment.trackTitle}
-                ondblclick={() => startEdit(segment)}
-                onclick={() => session.select(segment.index)}
-                title="Double-cliquer pour nommer"
-              >
-                {segment.trackTitle || 'Sans titre'}
-              </button>
+              <div class="title-row">
+                <button
+                  class="title"
+                  class:empty={!segment.trackTitle}
+                  ondblclick={(event) => (event.stopPropagation(), startEdit(segment))}
+                  onclick={(event) => (event.stopPropagation(), session.select(segment.index))}
+                  title="Double-cliquer pour renommer"
+                >
+                  {segment.trackTitle || 'Sans titre'}
+                </button>
+              </div>
             {/if}
             <div class="mono times">
-              {hms(segment.start)} → {hms(segment.end)} · {spell(segment.end - segment.start)}
+              <span>{hms(segment.start)} → {hms(segment.end)}</span>
+              <span class="times-sep">·</span>
+              <span class="dur-badge">{spell(segment.end - segment.start)}</span>
             </div>
           </div>
           <canvas
@@ -181,10 +164,15 @@
           ></canvas>
         </div>
       {:else}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="gap"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
+          class:playing-here={session.playing_at(segment.index)}
+          onclick={() => session.select(segment.index)}
+          role="button"
+          tabindex="0"
         >
           <button
             class="listen thin"
@@ -193,15 +181,21 @@
             aria-label="Écouter ce blanc"
             title="Écouter ce blanc"
           >
-            {session.playing_at(segment.index) ? '❚❚' : '▶'}
+            <span class="play-icon">{session.playing_at(segment.index) ? '❚❚' : '▶'}</span>
           </button>
+
+          <span class="gap-icon" aria-hidden="true">✂</span>
+
+          <span class="mono gap-name">
+            Blanc de {spell(segment.end - segment.start)}
+          </span>
+
           <button
-            class="mono gap-name"
-            onclick={() => session.select(segment.index)}
-            aria-label="Sélectionner le blanc de {spell(segment.end - segment.start)}"
-          >blanc {spell(segment.end - segment.start)}</button>
-          <button class="keep" onclick={(event) => (event.stopPropagation(), keep(segment))}>
-            garder
+            class="keep-btn"
+            onclick={(event) => (event.stopPropagation(), keep(segment))}
+            title="Conserver ce passage dans l'export"
+          >
+            Conserver
           </button>
         </div>
       {/if}
@@ -211,9 +205,6 @@
 
 <style>
   aside {
-    /* Quatre cents pixels sur un écran de portable, un peu plus sur un grand :
-       la colonne porte des titres, et un titre coupé au milieu ne se lit pas
-       mieux parce que l'écran est large. */
     width: clamp(400px, 24%, 560px);
     flex: none;
     border-right: 1px solid var(--border);
@@ -226,10 +217,18 @@
   header {
     display: flex;
     align-items: center;
-    height: 42px;
+    justify-content: space-between;
+    height: 48px;
     padding: 0 18px;
     border-bottom: 1px solid var(--border);
+    background: var(--surface);
     flex: none;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
   .rows {
@@ -238,35 +237,25 @@
     min-height: 0;
   }
 
-  /* Un rond de lecture par ligne. Sélectionner et écouter n'en faisaient
-     qu'un : parcourir la liste pour regarder les découpes déclenchait le son
-     vingt-cinq fois de suite. Ce sont deux intentions différentes, et elles
-     ont maintenant deux cibles différentes. */
-  /* Même diamètre pour un morceau et pour un blanc : les deux ronds ne
-     faisaient pas la même taille, si bien que leurs centres — et donc la
-     colonne qu'ils dessinent le long de la liste — se décalaient de trois
-     pixels d'une ligne à l'autre. */
   .listen {
     flex: none;
-    width: 24px;
-    height: 24px;
-    border-radius: 12px;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
     display: grid;
     place-items: center;
-    font-size: 8px;
+    font-size: 9px;
     color: var(--ink-2);
     border: 1px solid var(--border);
     background: var(--surface);
+    transition: all 0.12s ease;
   }
 
-  /* Le survol annonce ce que le clic va donner : la même teinte que le rond
-     en train de jouer. Il empruntait l'encre, c'est-à-dire presque blanc en
-     thème sombre — un aplat qui n'avait rapport ni avec la lecture ni avec le
-     reste de la ligne. */
   .listen:hover {
     color: var(--on-accent);
     background: var(--accent);
     border-color: var(--accent);
+    transform: scale(1.05);
   }
 
   .listen.sounding {
@@ -275,12 +264,8 @@
     border-color: var(--accent);
   }
 
-  /* Le rond d'un blanc emprunte la teinte des blancs. Il était en encre
-     sourdine sur un fond déjà brun : la pause s'y devinait plus qu'elle ne s'y
-     lisait, et c'est justement sur les segments qu'on écarte qu'on réécoute le
-     plus. Fond plein plutôt que transparent, pour la même raison. */
   .listen.thin {
-    font-size: 7px;
+    font-size: 8px;
     color: var(--gap);
     border-color: var(--gap-rule);
     background: var(--surface);
@@ -290,8 +275,8 @@
     color: var(--on-ink);
     background: var(--gap);
     border-color: var(--gap);
+    transform: scale(1.05);
   }
-
 
   .listen.thin.sounding {
     color: var(--on-ink);
@@ -299,14 +284,25 @@
     border-color: var(--gap);
   }
 
+  .play-icon {
+    line-height: 1;
+    margin-left: 1px;
+  }
+
+  .listen.sounding .play-icon,
+  .listen.thin.sounding .play-icon {
+    margin-left: 0;
+  }
+
   .track {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 13px 16px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--rule);
     border-left: 3px solid transparent;
-    cursor: default;
+    cursor: pointer;
+    transition: background 0.12s ease;
   }
 
   .track:hover {
@@ -318,15 +314,24 @@
     border-left-color: var(--accent);
   }
 
-  .number {
-    width: 22px;
-    font-weight: 500;
-    font-size: 13px;
-    color: var(--ink-3);
+  .track.playing-here {
+    border-left-color: var(--accent);
   }
 
-  .track.current .number {
+  .num-pill {
+    flex: none;
+    font: 600 12px/1 var(--mono);
+    color: var(--ink-3);
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .track.current .num-pill {
     color: var(--accent);
+    background: var(--surface);
+    border-color: var(--accent);
   }
 
   .body {
@@ -334,81 +339,116 @@
     min-width: 0;
   }
 
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .title {
     display: block;
     width: 100%;
     text-align: left;
     padding: 0;
-    font: 500 13.5px var(--sans);
+    font: 600 13.5px var(--sans);
     color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .track.current .title {
-    font-weight: 600;
-  }
-
   .title.empty {
     color: var(--hint);
     font-weight: 400;
+    font-style: italic;
   }
 
   input.title {
     border: 1px solid var(--accent);
-    border-radius: 5px;
-    padding: 1px 5px;
-    margin: -2px -6px;
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+    margin: -3px -7px;
     background: var(--surface);
     outline: none;
+    color: var(--ink);
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
   .times {
-    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 3px;
     font-size: 11.5px;
     color: var(--ink-3);
     white-space: nowrap;
   }
 
+  .times-sep {
+    opacity: 0.5;
+  }
+
+  .dur-badge {
+    color: var(--ink-2);
+  }
+
   canvas {
     flex: none;
-    border-radius: 3px;
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
   }
 
   .gap {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     padding: 8px 16px;
     border-bottom: 1px solid var(--rule);
     border-left: 3px solid transparent;
     background: var(--gap-row);
     font-size: 11.5px;
     color: var(--gap);
-    cursor: default;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+
+  .gap:hover {
+    background: var(--hover);
   }
 
   .gap.current {
     border-left-color: var(--gap);
   }
 
-  .keep {
-    margin-left: auto;
-    font: 500 11.5px var(--sans);
-    color: var(--ink-2);
-    padding: 2px 6px;
-    border-radius: 5px;
+  .gap-icon {
+    font-size: 12px;
+    color: var(--gap);
+    opacity: 0.8;
   }
 
   .gap-name {
-    color: inherit;
-    font: inherit;
-    padding: 0;
+    flex: 1;
+    color: var(--gap);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .keep:hover {
-    background: var(--surface);
-    color: var(--ink);
+  .keep-btn {
+    margin-left: auto;
+    font: 600 11px var(--sans);
+    color: var(--gap);
+    background: var(--gap-soft);
+    border: 1px solid transparent;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    transition: all 0.12s ease;
+  }
+
+  .keep-btn:hover {
+    background: var(--gap);
+    color: var(--on-ink);
   }
 </style>
+

@@ -96,34 +96,74 @@ def icon_path() -> Path:
     return root / "concertcutter" / "assets" / "icon.ico"
 
 
+def _apply_theme_to_window(window, theme: str = "dark") -> None:
+    """Harmonise la barre de titre et les bordures de la fenêtre native selon le thème."""
+    if sys.platform != "win32":
+        return
+    native = getattr(window, "native", None)
+    if native is None:
+        return
+    try:
+        import ctypes
+        hwnd = int(native.Handle.ToInt64())
+        is_dark = (theme != "light")
+        dark_flag = ctypes.c_int(1 if is_dark else 0)
+
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 11 / Windows 10 20H1+), 19 (Windows 10 1903)
+        res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(dark_flag), ctypes.sizeof(dark_flag)
+        )
+        if res != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 19, ctypes.byref(dark_flag), ctypes.sizeof(dark_flag)
+            )
+
+        # DWMWA_CAPTION_COLOR = 35 (Windows 11) :
+        # Sombre : #161a22 (BGR: 0x00221A16) | Clair : #f4f6f9 (BGR: 0x00F9F6F4)
+        caption_bgr = 0x00221A16 if is_dark else 0x00F9F6F4
+        caption_color = ctypes.c_int(caption_bgr)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 35, ctypes.byref(caption_color), ctypes.sizeof(caption_color)
+        )
+
+        # DWMWA_TEXT_COLOR = 36 (Windows 11) :
+        # Sombre : #f1f5f9 (BGR: 0x00F9F5F1) | Clair : #0f172a (BGR: 0x002A170F) -> texte 100% lisible
+        text_bgr = 0x00F9F5F1 if is_dark else 0x002A170F
+        text_color = ctypes.c_int(text_bgr)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 36, ctypes.byref(text_color), ctypes.sizeof(text_color)
+        )
+
+        # DWMWA_BORDER_COLOR = 34 (Windows 11) :
+        # Sombre : #2d3542 (BGR: 0x0042352D) | Clair : #dbe1ea (BGR: 0x00EAE1DB)
+        border_bgr = 0x0042352D if is_dark else 0x00EAE1DB
+        border_color = ctypes.c_int(border_bgr)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 34, ctypes.byref(border_color), ctypes.sizeof(border_color)
+        )
+    except Exception as failure:  # noqa: BLE001
+        print(f"Habillage de fenêtre non appliqué ({failure}).", flush=True)
+
+
 def _dress_window(window, *_) -> None:
-    """Pose l'icône sur la fenêtre, sous Windows.
-
-    L'exécutable construit porte la sienne, et la fenêtre en hérite ; lancée
-    par `python gui.py`, elle héritait de celle de l'interpréteur. Ce sont
-    pourtant les deux mêmes fenêtres, et la seconde est celle qu'on regarde
-    pendant tout le développement.
-
-    Par la propriété `Icon` du formulaire, et non par un message `WM_SETICON` :
-    WinForms tient l'icône de sa fenêtre et la repose à chaque fois qu'il la
-    redessine, si bien que le message passait — il rendait bien l'ancienne
-    poignée — sans que la barre de titre change.
-
-    Rien d'obligatoire ici : une icône manquante ne doit pas empêcher
-    l'application de démarrer, elle doit juste ne pas s'afficher.
-    """
+    """Pose l'icône et habille la fenêtre native, sous Windows."""
     if sys.platform != "win32":
         return
     icon = icon_path()
     native = getattr(window, "native", None)
-    if not icon.is_file() or native is None:
+    if native is None:
         return
-    try:
-        from System.Drawing import Icon   # pythonnet, apporté par pywebview
 
-        native.Icon = Icon(str(icon))
-    except Exception as failure:  # noqa: BLE001 — autre coquille, autre monde
-        print(f"Icône non posée ({failure}).", flush=True)
+    # 1. Pose de l'icône native de l'application
+    if icon.is_file():
+        try:
+            from System.Drawing import Icon   # pythonnet, apporté par pywebview
+            native.Icon = Icon(str(icon))
+        except Exception as failure:  # noqa: BLE001
+            print(f"Icône non posée ({failure}).", flush=True)
+
+    # 2. Application du thème par défaut
+    _apply_theme_to_window(window, "dark")
 
 
 def _claim_identity() -> None:
@@ -152,10 +192,14 @@ def _in_window(page: str, app) -> None:
     _claim_identity()
     window = webview.create_window(
         TITLE, page, width=WIDTH, height=HEIGHT,
-        min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True)
+        min_size=(MIN_WIDTH, MIN_HEIGHT), maximized=True, text_select=True,
+        background_color="#0e1116")
     dialogs.use(dialogs.WebviewDialogs(window))
 
-    # La fenêtre n'existe pas encore ici : son icône se pose une fois qu'elle
+    # Synchronisation du thème entre le frontend web et la fenêtre native Windows
+    app.on_theme = lambda theme: _apply_theme_to_window(window, theme)
+
+    # La fenêtre n'existe pas encore ici : son habillage se pose une fois qu'elle
     # est à l'écran.
     window.events.shown += lambda *_: _dress_window(window)
 

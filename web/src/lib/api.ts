@@ -158,6 +158,7 @@ export const api = {
   navigate: (from: number, to: 'next' | 'previous' | 'section') =>
     call<{ moment: number }>(`/api/navigate?from=${from.toFixed(3)}&to=${to}`),
   save: () => post<{ saved: string; when: string }>('/api/save'),
+  theme: (theme: 'dark' | 'light') => call<{ theme: string }>('/api/theme', { theme }),
   recent: () => call<{ projects: RecentProject[]; dialogs: boolean }>('/api/recent'),
   installFfmpeg: () => post<Job>('/api/ffmpeg'),
   envelope: () => binary('/api/envelope'),

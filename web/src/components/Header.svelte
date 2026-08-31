@@ -8,9 +8,6 @@
     onOptions,
   }: { onExport: () => void; onOptions: () => void } = $props()
 
-  // Relu chaque minute : « à l'instant » cesse d'être vrai sans que rien ne se
-  // passe à l'écran, et un « à l'instant » d'il y a une heure serait un
-  // mensonge sur la seule chose que cette phrase promet.
   let clock = $state(Date.now())
   $effect(() => {
     const timer = setInterval(() => (clock = Date.now()), 30_000)
@@ -20,31 +17,25 @@
   const saved = $derived((void clock, savedAgo(session.state?.saved ?? '')))
 </script>
 
-<!--
-  Trois groupes, séparés par un filet, et dans l'ordre où l'on s'en sert :
-  ce qu'on défait, ce qu'on règle, ce qu'on produit.
-
-  Les boutons étaient auparavant alignés à la file — Importer, thème, Annuler,
-  Rétablir, Options, Exporter — sans que rien ne dise lesquels vont ensemble.
-  « Importer » y voisinait avec « Annuler », qui n'ont ni la même portée ni les
-  mêmes conséquences, et le soleil du thème tombait au milieu de l'édition.
-
-  Ce qui décrit le document — son nom, sa durée, l'heure du dernier
-  enregistrement — reste à gauche avec lui : ce n'est pas une commande, et
-  l'aligner parmi des boutons invitait à cliquer dessus.
--->
 <header>
-  <span class="brand">ConcertCutter</span>
-  <span class="split"></span>
-  <div class="doc">
-    <span class="name">{session.state?.name}</span>
-    <span class="mono facts">
-      {hms(session.duration)} · {session.counts.tracks} morceaux{saved ? ` · ${saved.toLowerCase()}` : ''}
-    </span>
+  <div class="left">
+    <div class="doc">
+      <span class="name" title={session.state?.name}>{session.state?.name}</span>
+      <div class="meta">
+        <span class="mono badge accent">{hms(session.duration)}</span>
+        <span class="badge">{session.counts.tracks} morceaux</span>
+        {#if saved}
+          <span class="saved-status" title={saved}>
+            <span class="dot"></span>
+            <span class="saved-text">{saved.toLowerCase()}</span>
+          </span>
+        {/if}
+      </div>
+    </div>
   </div>
 
   <div class="right">
-    <div class="group">
+    <div class="group" role="toolbar" aria-label="Historique">
       <button
         class="btn quiet icon"
         disabled={!session.state?.canUndo}
@@ -52,7 +43,7 @@
         aria-label="Annuler"
         title="Annuler (Ctrl+Z)"
       >
-        ↺
+        <span class="icon-glyph">↺</span>
       </button>
       <button
         class="btn quiet icon"
@@ -61,37 +52,42 @@
         aria-label="Rétablir"
         title="Rétablir (Ctrl+Y)"
       >
-        ↻
+        <span class="icon-glyph">↻</span>
       </button>
     </div>
 
     <span class="split"></span>
 
-    <div class="group">
+    <div class="group" role="toolbar" aria-label="Projet et réglages">
       <button
         class="btn quiet"
         onclick={() => session.openFile('wav')}
         title="Ouvrir un autre enregistrement, ou reprendre un travail"
       >
-        Importer
+        <span>Importer…</span>
       </button>
       <button class="btn quiet" onclick={onOptions} title="Réglages de détection et de montage">
-        Options
+        <span>Options</span>
       </button>
       <button
-        class="btn quiet icon"
+        class="btn quiet icon theme-btn"
         onclick={() => session.flip()}
-        aria-label={session.theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
+        aria-label={session.theme === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
         title={session.theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
       >
-        {session.theme === 'dark' ? '☀' : '☾'}
+        <span class="theme-icon">{session.theme === 'dark' ? '☀' : '☾'}</span>
       </button>
     </div>
 
     <span class="split"></span>
 
-    <button class="btn strong" disabled={!session.analysed} onclick={onExport}>
-      Exporter
+    <button
+      class="btn strong export-btn"
+      disabled={!session.analysed}
+      onclick={onExport}
+      title="Exporter le concert et ses morceaux"
+    >
+      <span>Exporter</span>
     </button>
   </div>
 </header>
@@ -100,69 +96,106 @@
   header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 16px;
-    height: 56px;
+    height: 60px;
     flex: none;
-    padding: 0 22px;
+    padding: 0 24px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    z-index: 10;
   }
 
-  .brand {
-    font: 600 13px/1 var(--sans);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--ink);
+  .left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
   }
 
   .split {
     width: 1px;
-    height: 18px;
+    height: 22px;
     background: var(--border);
+    flex: none;
   }
 
   .doc {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
   }
 
   .name {
-    font: 500 13.5px var(--sans);
+    font: 600 14px/1.2 var(--sans);
+    color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 420px;
+    max-width: 380px;
   }
 
-  .facts {
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: 11.5px;
+  }
+
+  .saved-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     color: var(--ink-3);
+    font-size: 11px;
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--accent);
+    opacity: 0.85;
+  }
+
+  .saved-text {
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .right {
-    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 12px;
+    flex: none;
   }
 
-  /* Les boutons d'un même groupe se touchent presque ; ce sont les filets et
-     l'écart entre groupes qui font la séparation. */
   .group {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
   }
 
   .icon {
-    width: 32px;
+    width: 34px;
+    height: 32px;
     padding: 0;
     justify-content: center;
+  }
+
+  .icon-glyph {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .theme-icon {
     font-size: 15px;
   }
+
+  .export-btn {
+    padding: 0 20px;
+    letter-spacing: 0.02em;
+  }
 </style>
+

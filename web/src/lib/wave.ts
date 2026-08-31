@@ -1,14 +1,8 @@
 /* Le tracé, en canvas impératif.
 
-   C'est la seule partie de l'interface qui ne soit pas de l'état de
-   formulaire : trente mille points à redessiner à chaque image de glissé, ce
-   qu'aucun arbre de composants ne rend correctement. Le reste de l'écran est
-   déclaratif ; ici, on peint.
-
    Trois vues, une seule fonction de peinture : le ruban du concert entier, les
-   vignettes de la liste, et la fenêtre zoomable de la carte d'édition. Elles
-   diffèrent par la taille et par ce qu'on superpose, pas par la façon de
-   dessiner une forme d'onde. */
+   vignettes de la liste, et la fenêtre zoomable de la carte d'édition.
+*/
 
 import type { Segment } from './api'
 
@@ -18,18 +12,13 @@ export interface Palette {
   gapWave: string
   gapBed: string
   handle: string
+  handleActive: string
   cursor: string
-  /** Ce qui se lit *sur* la poignée : elle est sombre en clair, claire en
-      sombre, et les stries gravées dessus doivent suivre. */
   onHandle: string
   halo: string
-  /** Voile posé sur ce que la loupe ne regarde pas, dans le ruban. */
   veil: string
 }
 
-// Relue une fois par thème. Un `getComputedStyle` par image de glissé se
-// paierait en résolutions de style à quarante images par seconde, pour un
-// résultat qui ne change qu'au clic sur la bascule.
 let known: { theme: string; palette: Palette } | null = null
 
 export function palette(): Palette {
@@ -43,19 +32,17 @@ export function palette(): Palette {
     gapWave: read('--wave-gap'),
     gapBed: read('--wave-gap-bed'),
     handle: read('--handle'),
-    cursor: read('--ink'),
+    handleActive: read('--handle-active') || read('--accent'),
+    cursor: read('--cursor') || (theme === 'dark' ? '#ffffff' : '#0f172a'),
     onHandle: read('--on-ink'),
-    halo: read('--surface'),
+    halo: read('--cursor-halo') || read('--surface'),
     veil: read('--ribbon-veil'),
   }
   known = { theme, palette: found }
   return found
 }
 
-/** Cale le canvas sur la densité de l'écran, et rend son contexte.
-
-    Sans ça, le tracé est flou sur tout écran à plus de 100 % — c'est-à-dire
-    sur la plupart des portables, où l'on travaille. */
+/** Cale le canvas sur la densité de l'écran, et rend son contexte. */
 export function surface(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   const ratio = window.devicePixelRatio || 1
   const width = Math.max(1, Math.round(canvas.clientWidth * ratio))
@@ -73,8 +60,6 @@ export function surface(canvas: HTMLCanvasElement): CanvasRenderingContext2D | n
 
 /** Le type du segment sous cet instant, pour colorer la colonne. */
 function kindAt(segments: Segment[], moment: number): 'music' | 'gap' {
-  // Recherche dichotomique : la liste est triée et le tracé pose la question
-  // une fois par colonne, soit douze cents fois par image.
   let low = 0
   let high = segments.length - 1
   while (low <= high) {
@@ -89,15 +74,13 @@ function kindAt(segments: Segment[], moment: number): 'music' | 'gap' {
 
 export interface WaveOptions {
   heights: Float32Array
-  /** Instant du premier point de `heights`, et pas du concert. */
   start: number
-  /** Durée couverte par l'ensemble des points. */
   span: number
   segments: Segment[]
   palette: Palette
-  /** Part de la demi-hauteur qu'occupe la crête la plus forte. */
   fill?: number
   radius?: number
+  showCenterLine?: boolean
 }
 
 export function paint(
@@ -119,8 +102,7 @@ export function paint(
     context.clip()
   }
 
-  // Le lit d'abord, par plages de même type : c'est lui qui montre où sont les
-  // applaudissements, y compris là où la crête est plate.
+  // Le lit d'abord, par plages de même type
   let from = 0
   let kind = kindAt(segments, start)
   for (let column = 1; column <= columns; column += 1) {
@@ -129,8 +111,12 @@ export function paint(
     if (column < columns && here === kind) continue
     const x0 = (from / columns) * width
     const x1 = (column / columns) * width
+    
+    // Fond de zone
     context.fillStyle = kind === 'music' ? colours.bed : colours.gapBed
     context.fillRect(x0, 0, x1 - x0, height)
+    
+    // Onde
     context.fillStyle = kind === 'music' ? colours.wave : colours.gapWave
     context.beginPath()
     context.moveTo(x0, middle)
@@ -147,13 +133,23 @@ export function paint(
     from = column
     kind = here
   }
+
+  // Ligne de centre en filigrane pour les cartes d'édition
+  if (options.showCenterLine !== false && height > 60) {
+    context.strokeStyle = colours.halo
+    context.globalAlpha = 0.35
+    context.lineWidth = 1
+    context.beginPath()
+    context.moveTo(0, Math.round(middle) + 0.5)
+    context.lineTo(width, Math.round(middle) + 0.5)
+    context.stroke()
+    context.globalAlpha = 1
+  }
+
   context.restore()
 }
 
-/** Découpe l'enveloppe entière sur une fenêtre, sans repasser par le serveur.
-
-    C'est ce qui rend les vingt-cinq vignettes gratuites : elles sortent de
-    l'enveloppe déjà reçue pour le ruban, et aucune n'ajoute d'entrée-sortie. */
+/** Découpe l'enveloppe entière sur une fenêtre. */
 export function slice(
   envelope: Float32Array,
   fps: number,
@@ -175,34 +171,7 @@ export function slice(
   return out
 }
 
-/** Silhouette d'un segment, pour une vignette de quatre-vingt-huit pixels.
-
-    Trois choses la séparent du tracé principal, et chacune a sa raison.
-
-    **La moyenne, et non la crête.** Une vignette de 88 colonnes sur un morceau
-    de trois minutes couvre deux secondes et demie par colonne ; en musique, la
-    crête de deux secondes et demie ne bouge pratiquement pas, et toutes les
-    colonnes sortent à la même hauteur. C'est ce qui donnait un rectangle. La
-    moyenne, elle, suit ce qu'on entend : un couplet est plus bas qu'un refrain.
-
-    **L'amplitude, et non les décibels.** L'échelle en décibels range un morceau
-    de concert entre −20 et −6 dB, soit entre 0,66 et 0,90 de la hauteur. Sur
-    vingt-six pixels, six centièmes d'écart ne se voient pas.
-
-    **Étirée sur la dynamique du morceau**, du plus bas au plus haut de ses
-    propres colonnes. C'est là qu'on triche, et c'est assumé : la vignette ne
-    dit rien de juste sur les niveaux absolus, et n'a pas à le faire. Elle sert
-    à distinguer un morceau d'un autre du coin de l'œil, ce qu'un rectangle ne
-    faisait pas. Le tracé de la carte d'édition, lui, reste en décibels — ce
-    qu'on y voit est exactement ce sur quoi le détecteur a décidé.
-
-    Un morceau dont le niveau ne bouge pas — un bourdon, une nappe — n'est pas
-    étiré : sans ce garde-fou, on amplifierait son bruit de fond en zigzag et
-    la vignette montrerait une agitation qui n'existe pas. Il retombe alors sur
-    une simple mise à l'échelle, et reste franchement plat, ce qu'il est.
-
-    Le plancher garde un corps visible là où le son se tait, plutôt qu'un
-    trait interrompu. */
+/** Silhouette d'un segment, pour une vignette. */
 export function silhouette(
   envelope: Float32Array,
   fps: number,
@@ -223,8 +192,6 @@ export function silhouette(
     let total = 0
     let count = 0
     for (let index = from; index < to; index += 1) {
-      // `to_height` a posé −60 dBFS à 0 et 0 dBFS à 1 : on refait le chemin
-      // inverse pour retrouver une amplitude, seule grandeur qui se moyenne.
       total += 10 ** ((envelope[index] * 60 - 60) / 20)
       count += 1
     }
@@ -240,10 +207,8 @@ export function silhouette(
     if (out[column] < floor) floor = out[column]
   }
 
-  // Moins d'un dixième d'écart entre le plus fort et le plus faible : il n'y a
-  // pas de relief à montrer, et l'étirement ne montrerait que du bruit.
   const flat = peak - floor < peak * 0.1
-  const BODY = 0.16
+  const BODY = 0.18
   for (let column = 0; column < columns; column += 1) {
     const share = flat
       ? out[column] / peak
@@ -259,20 +224,33 @@ export function drawCursor(
   height: number,
   colours: Palette,
 ): void {
-  // Un liseré de la couleur de la surface sous le trait : sans lui, la tête
-  // de lecture se perd dans le tracé quand elle tombe sur une crête.
+  // Liseré halo sous le trait pour détacher la tête de lecture
   context.fillStyle = colours.halo
-  context.fillRect(x - 1.5, 0, 3, height)
+  context.fillRect(x - 2, 0, 4, height)
+
+  // Marqueur triangulaire en tête avec halo
+  context.beginPath()
+  context.moveTo(x - 5, 0)
+  context.lineTo(x + 5, 0)
+  context.lineTo(x, 7)
+  context.closePath()
+  context.fillStyle = colours.halo
+  context.fill()
+
+  // Trait blanc principal
   context.fillStyle = colours.cursor
-  context.fillRect(x - 0.5, 0, 1, height)
+  context.fillRect(x - 1, 0, 2, height)
+
+  context.beginPath()
+  context.moveTo(x - 3.5, 0)
+  context.lineTo(x + 3.5, 0)
+  context.lineTo(x, 5.5)
+  context.closePath()
+  context.fillStyle = colours.cursor
+  context.fill()
 }
 
-/** Les poignées de l'évolution A : deux prises franches, en haut et en bas.
-
-    Le défaut de 2a était que les deux limites du morceau tombaient exactement
-    sur les bords du tracé — impossible de les saisir, et on ne voyait jamais
-    ce qu'il y avait de l'autre côté de la coupe. La vue s'élargit donc sur les
-    blancs voisins, et les poignées tombent à l'intérieur. */
+/** Poignées de découpe interactives */
 export function drawHandle(
   context: CanvasRenderingContext2D,
   x: number,
@@ -280,20 +258,24 @@ export function drawHandle(
   colours: Palette,
   active: boolean,
 ): void {
-  const grip = { w: 11, h: 26 }
-  context.fillStyle = colours.handle
+  const grip = { w: 12, h: 28 }
+  const handleColor = active ? colours.handleActive : colours.handle
+
+  // Ligne verticale sur toute la hauteur
+  context.fillStyle = active ? colours.handleActive : colours.handle
   context.fillRect(x - 1, 0, 2, height)
-  context.globalAlpha = active ? 1 : 0.92
-  roundRect(context, x - grip.w / 2, 0, grip.w, grip.h, 3)
-  roundRect(context, x - grip.w / 2, height - grip.h, grip.w, grip.h, 3)
-  context.globalAlpha = 1
-  // Deux traits sur la prise : sans eux, le rectangle ne dit pas qu'il se
-  // saisit — c'est la même convention que la poignée d'une fenêtre.
+
+  // Poignées haute et basse arrondies
+  context.fillStyle = handleColor
+  roundRect(context, x - grip.w / 2, 0, grip.w, grip.h, 4)
+  roundRect(context, x - grip.w / 2, height - grip.h, grip.w, grip.h, 4)
+
+  // Stries de préhension
   context.fillStyle = colours.onHandle
-  context.globalAlpha = 0.75
-  for (const offset of [-2, 1]) {
-    context.fillRect(x + offset, 8, 1, 10)
-    context.fillRect(x + offset, height - 18, 1, 10)
+  context.globalAlpha = active ? 0.95 : 0.75
+  for (const offset of [-2.5, 1.5]) {
+    context.fillRect(x + offset, 8, 1.2, 12)
+    context.fillRect(x + offset, height - 20, 1.2, 12)
   }
   context.globalAlpha = 1
 }
@@ -310,3 +292,4 @@ function roundRect(
   context.roundRect(x, y, width, height, radius)
   context.fill()
 }
+

@@ -97,6 +97,7 @@ class Session {
     } catch {
       /* un stockage refusé ne doit pas empêcher de changer de thème */
     }
+    void api.theme(chosen).catch(() => {})
   }
 
   flip(): void {
