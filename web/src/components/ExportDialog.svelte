@@ -508,11 +508,9 @@
   }
 
   section {
-    padding: 20px 0 4px;
+    padding: 18px 0 4px;
   }
 
-  /* La première question occupe sa colonne entière : vingt-cinq morceaux ne
-     tiennent pas sous un titre. */
   .body > section:first-child {
     display: flex;
     flex-direction: column;
@@ -538,41 +536,50 @@
     gap: 9px;
     margin: 0 0 12px;
     font: 600 14px var(--sans);
+    color: var(--ink);
   }
 
   .step {
     display: grid;
     place-items: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 10px;
-    background: var(--ink);
-    color: var(--on-ink);
-    font: 600 11px var(--mono);
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font: 700 11px var(--mono);
+    box-shadow: 0 1px 3px var(--accent-soft);
   }
 
   .why {
     margin: 0 0 14px;
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.5;
-    color: var(--ink-3);
+    color: var(--ink-2);
   }
 
   .picks {
     flex: 1;
-    min-height: 120px;
+    min-height: 140px;
     overflow-y: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    background: var(--surface-raised);
   }
 
   .pick {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 7px 10px;
-    border-bottom: 1px solid var(--rule);
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
     font-size: 12.5px;
+    cursor: pointer;
+    transition: background 0.1s ease;
+  }
+
+  .pick:hover {
+    background: var(--hover);
   }
 
   .pick:last-child {
@@ -582,10 +589,13 @@
   .num {
     color: var(--ink-3);
     font-size: 11.5px;
+    font-weight: 600;
   }
 
   .who {
     flex: 1;
+    font-weight: 500;
+    color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -607,9 +617,6 @@
     margin-top: 20px;
   }
 
-  /* La case et son libellé forment le seul point de clic. L'étiquette portait
-     toute la ligne, large de sa colonne : un clic dans le vide à droite du
-     texte cochait la case sans qu'on l'ait voulu. */
   .line {
     display: flex;
     align-items: center;
@@ -624,7 +631,8 @@
   }
 
   .line b {
-    font: 500 13px var(--sans);
+    font: 600 13px var(--sans);
+    color: var(--ink);
   }
 
   .knob {
@@ -639,24 +647,29 @@
     font-size: 12.5px;
     font-weight: 500;
     white-space: nowrap;
+    color: var(--ink-2);
   }
 
   .knob input,
   .dir input {
-    height: 30px;
+    height: 32px;
     padding: 0 8px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    color: var(--ink);
     outline: none;
   }
 
   .knob input {
     text-align: right;
+    font: 600 13px var(--mono);
   }
 
   .knob input:focus,
   .dir input:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
   .unit {
@@ -682,19 +695,12 @@
   .progress {
     font-size: 12px;
     color: var(--accent);
+    font-weight: 600;
   }
 
-  /* Une bande neutre, et non `--gap-row`.
-
-     Cette teinte-là appartient aux blancs du concert — les applaudissements,
-     la seule couleur chaude de la palette, posée pour qu'on repère une coupe
-     dans le tracé. Sous une question posée avant d'exporter, elle ne dit rien
-     et se voit trop : un brun qui n'est ni celui du thème sombre ni celui du
-     clair. `--rule` est le fond en creux de l'application, celui des vignettes
-     — la bande se détache du panneau sans changer de famille. */
   .conflict {
     border-top: 1px solid var(--border);
-    background: var(--rule);
+    background: var(--surface-raised);
     padding: 16px 24px;
     font-size: 12.5px;
   }
@@ -714,15 +720,17 @@
   footer {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 14px 24px;
+    gap: 12px;
+    padding: 16px 24px;
     border-top: 1px solid var(--border);
     flex: none;
+    background: var(--surface);
   }
 
   .refuse {
     flex: 1;
     font-size: 12.5px;
     color: var(--gap);
+    font-weight: 500;
   }
 </style>

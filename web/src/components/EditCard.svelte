@@ -299,10 +299,18 @@
 
 {#if segment}
   <div class="head">
-    <div>
-      <div class="mono kind">
-        {segment.kind === 'music' ? `MORCEAU ${trackLabel(segment.number)}` : 'BLANC'}
+    <div class="title-block">
+      <div class="meta-row">
+        <span class="badge {segment.kind === 'music' ? 'accent' : 'gap'}">
+          {segment.kind === 'music' ? `MORCEAU ${trackLabel(segment.number)}` : 'BLANC / APPLAUDISSEMENTS'}
+        </span>
+        {#if segment.confidence}
+          <span class="badge">
+            confiance {Math.round(segment.confidence * 100)} %
+          </span>
+        {/if}
       </div>
+
       {#if renaming}
         <!-- svelte-ignore a11y_autofocus -->
         <input
@@ -320,33 +328,42 @@
           class:empty={!segment.trackTitle}
           onclick={startRename}
           disabled={segment.kind !== 'music'}
-          title={segment.kind === 'music' ? 'Cliquer pour nommer' : "Un blanc ne se nomme pas"}
+          title={segment.kind === 'music' ? 'Cliquer pour nommer ce morceau' : 'Un blanc ne se nomme pas'}
         >
-          {segment.trackTitle || 'Sans titre'}
+          <span>{segment.trackTitle || 'Sans titre'}</span>
+          {#if segment.kind === 'music'}
+            <span class="edit-icon" aria-hidden="true">✎</span>
+          {/if}
         </button>
       {/if}
     </div>
-    {#if segment.confidence}
-      <span class="pill">confiance {Math.round(segment.confidence * 100)} %</span>
-    {/if}
-    <div class="fate">
-      <button class:on={segment.kind === 'music'} onclick={() => setKind('music')}>
-        Garder
-      </button>
-      <button class:on={segment.kind === 'gap'} onclick={() => setKind('gap')}>
-        Supprimer
-      </button>
+
+    <div class="fate-wrapper">
+      <div class="fate" role="group" aria-label="Sort du segment">
+        <button class:on={segment.kind === 'music'} onclick={() => setKind('music')}>
+          Garder
+        </button>
+        <button class:on={segment.kind === 'gap'} onclick={() => setKind('gap')}>
+          Supprimer
+        </button>
+      </div>
     </div>
   </div>
 
   <div class="card">
     <div class="card-head">
-      <span class="label">
-        {segment.kind === 'music' ? 'Le morceau, et ses deux coupes' : 'Le blanc, et ses deux coupes'}
-      </span>
-      <span class="hint">
-        {hms(segment.end - segment.start)} · molette pour zoomer
-      </span>
+      <div class="card-title">
+        <span class="label">
+          {segment.kind === 'music' ? 'Morceau & Frontières' : 'Blanc & Frontières'}
+        </span>
+        <span class="badge accent mono">{hms(segment.end - segment.start)}</span>
+      </div>
+
+      <div class="card-hints">
+        <span class="hint"><span class="kbd">Molette</span> Zoomer</span>
+        <span class="hint"><span class="kbd">C</span> Couper</span>
+        <span class="hint"><span class="kbd">B</span> Boucler</span>
+      </div>
     </div>
 
     <canvas
@@ -355,15 +372,11 @@
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
       onwheel={onWheel}
-      aria-label="Forme d'onde du segment"
+      aria-label="Forme d'onde détaillée du segment"
     ></canvas>
 
     <div class="tools">
-      <!-- Chaque borne forme un groupe nommé, son libellé au-dessus de son
-           champ. Les libellés suivaient leur champ et précédaient le bouton
-           suivant, si bien qu'on lisait « début » comme l'étiquette de ce qui
-           venait après. -->
-      {#each [['start', 'Début'], ['end', 'Fin']] as [edge, label] (edge)}
+      {#each [['start', 'Début de section'], ['end', 'Fin de section']] as [edge, label] (edge)}
         {@const index = edge === 'start' ? edges.start : edges.end}
         {@const fixed = index < 0 || index > lastEdge}
         <div class="edge" class:off={fixed}>
@@ -372,7 +385,7 @@
             <div class="stepper">
               <button
                 onclick={() => nudge(edge as 'start' | 'end', -1)}
-                title="Reculer d'une demi-seconde"
+                title="Reculer d'une demi-seconde (-0.5s)"
                 aria-label="{label} : reculer d'une demi-seconde"
               >
                 −
@@ -385,7 +398,7 @@
               />
               <button
                 onclick={() => nudge(edge as 'start' | 'end', 1)}
-                title="Avancer d'une demi-seconde"
+                title="Avancer d'une demi-seconde (+0.5s)"
                 aria-label="{label} : avancer d'une demi-seconde"
               >
                 +
@@ -396,88 +409,118 @@
       {/each}
 
       <div class="spacer"></div>
-      <button class="btn" onclick={merge}>Fusionner</button>
-      <button class="btn accent" onclick={split}>Séparer ici</button>
+      <button class="btn" onclick={merge} title="Supprimer la frontière de fin et fusionner">
+        <span>Fusionner</span>
+      </button>
+      <button class="btn accent" onclick={split} title="Poser une frontière à la tête de lecture (C)">
+        <span>✂ Couper ici</span>
+      </button>
     </div>
   </div>
 {/if}
 
 <style>
   .head {
-    padding: 22px 26px 0;
+    padding: 24px 28px 0;
     display: flex;
     align-items: flex-end;
-    gap: 12px;
+    justify-content: space-between;
+    gap: 16px;
     flex: none;
   }
 
-  .kind {
-    font-weight: 500;
-    font-size: 11.5px;
-    color: var(--ink-3);
+  .title-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .name {
-    margin-top: 6px;
-    font: 600 26px/1.2 var(--sans);
+    font: 700 24px/1.2 var(--sans);
     letter-spacing: -0.015em;
     color: var(--ink);
     border: 0;
-    border-bottom: 2px solid var(--accent);
-    display: inline-block;
-    padding: 0 0 2px;
-    max-width: 460px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    max-width: 520px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     text-align: left;
     background: none;
+    cursor: pointer;
+  }
+
+  .edit-icon {
+    font-size: 14px;
+    color: var(--ink-3);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  button.name:hover .edit-icon {
+    opacity: 1;
+    color: var(--accent);
   }
 
   .name.empty {
     color: var(--hint);
     font-weight: 500;
-  }
-
-  button.name:hover:not(:disabled) {
-    border-bottom-color: var(--ink);
+    font-style: italic;
   }
 
   button.name:disabled {
-    opacity: 1;
-    border-bottom-color: var(--gap-rule);
+    cursor: default;
   }
 
   input.name.typing {
     outline: none;
-    min-width: 320px;
+    min-width: 340px;
+    font: 700 24px/1.2 var(--sans);
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
-  .pill {
-    font: 500 11px var(--sans);
-    color: var(--accent);
-    background: var(--accent-soft);
-    border-radius: 20px;
-    padding: 3px 10px;
-    margin-bottom: 6px;
-    white-space: nowrap;
+  .fate-wrapper {
+    margin-bottom: 4px;
+    flex: none;
   }
 
   .fate {
-    margin-left: auto;
     display: flex;
-    background: var(--rule);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 3px;
-    margin-bottom: 4px;
+    gap: 2px;
   }
 
   .fate button {
     height: 28px;
     padding: 0 14px;
     border-radius: 6px;
-    font: 500 12.5px var(--sans);
+    font: 600 12.5px var(--sans);
     color: var(--ink-2);
+    transition: all 0.12s ease;
+  }
+
+  .fate button:hover:not(.on) {
+    color: var(--ink);
+    background: var(--hover);
   }
 
   .fate button.on {
@@ -485,48 +528,50 @@
     color: var(--on-accent);
   }
 
-  /* La carte prend la hauteur qui reste, et le tracé la remplit : elle était
-     haute de son contenu — cent cinquante pixels de tracé — et laissait sous
-     elle un vide qui grandissait avec la fenêtre.
-
-     Plafonnée tout de même. Au-delà d'environ sept cents pixels la hauteur
-     n'apprend plus rien sur une attaque, et le morceau devient un mur de
-     couleur. Ce qui reste au-delà se pose sous la carte, en marge, plutôt
-     qu'entre le tracé et ses commandes. */
   .card {
-    margin: 18px 26px 22px;
+    margin: 16px 26px 20px;
     flex: 1;
     min-height: 0;
-    max-height: 700px;
+    max-height: 720px;
     display: flex;
     flex-direction: column;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
-    padding: 14px;
+    padding: 16px;
     box-shadow: var(--shadow);
   }
 
   .card-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 12px;
     flex: none;
   }
 
-  .card-head .hint {
-    margin-left: auto;
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .card-hints {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
 
   canvas {
     display: block;
     width: 100%;
     flex: 1;
-    min-height: 170px;
+    min-height: 180px;
     border-radius: 8px;
     cursor: crosshair;
     touch-action: none;
+    border: 1px solid var(--border-subtle);
   }
 
   .tools {
@@ -541,11 +586,11 @@
   .edge {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
   }
 
   .edge.off {
-    opacity: 0.4;
+    opacity: 0.35;
     pointer-events: none;
   }
 
@@ -560,34 +605,44 @@
     align-items: center;
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    background: var(--surface-raised);
     overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 
   .stepper button {
     width: 32px;
     height: 32px;
     color: var(--ink-2);
-    font-size: 15px;
+    font-size: 16px;
+    font-weight: 600;
     line-height: 1;
+    display: grid;
+    place-items: center;
+    transition: background 0.1s ease, color 0.1s ease;
   }
 
   .stepper button:hover {
-    background: var(--rule);
+    background: var(--hover);
+    color: var(--ink);
   }
 
   .stepper input {
-    /* Assez large pour « 1:14:00,0 ». À soixante-dix-huit pixels, le dixième
-       d'un concert de plus d'une heure passait sous le bord droit. */
     width: 118px;
     height: 32px;
     padding: 0 6px;
     border: 0;
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
-    font: 500 13px var(--mono);
+    font: 600 13px var(--mono);
+    color: var(--ink);
     text-align: center;
     outline: none;
-    background: none;
+    background: var(--surface);
+  }
+
+  .stepper input:focus {
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
   .spacer {

@@ -1,16 +1,12 @@
 <script lang="ts">
-  /* L'écran d'avant : rien n'est ouvert.
-
-     Deux gestes, et pas un de plus — ouvrir un enregistrement, ou reprendre le
-     travail d'hier. Les travaux récents sont posés là plutôt que derrière un
-     menu : découper un concert de deux heures ne se fait pas d'une traite, donc
-     la reprise est le cas courant, pas l'exception. */
+  /* L'écran d'accueil : ouvrir un enregistrement ou reprendre un travail. */
   import { api, type RecentProject } from '../lib/api'
   import { session } from '../lib/session.svelte'
   import { savedAgo } from '../lib/format'
 
   let recent = $state<RecentProject[]>([])
   let typed = $state('')
+  let isDragging = $state(false)
 
   $effect(() => {
     void api
@@ -21,28 +17,66 @@
       })
       .catch(() => {})
   })
+
+  function onDragOver(event: DragEvent): void {
+    event.preventDefault()
+    isDragging = true
+  }
+
+  function onDragLeave(event: DragEvent): void {
+    event.preventDefault()
+    isDragging = false
+  }
+
+  function onDrop(event: DragEvent): void {
+    event.preventDefault()
+    isDragging = false
+    const files = event.dataTransfer?.files
+    if (!files || !files.length) return
+    const file = files[0]
+    // Sur Electron/WebView2 ou navigateur compatible, file.path existe
+    const path = (file as unknown as { path?: string }).path || file.name
+    if (path) {
+      void session.openFile(path.toLowerCase().endsWith('.json') ? 'project' : 'wav', path)
+    }
+  }
 </script>
 
-<main>
-  <div class="sheet">
-    <h1>ConcertCutter</h1>
+<main
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+>
+  <div class="sheet" class:dragging={isDragging}>
+    <div class="header-badge">
+      <span class="icon">✂</span>
+      <h1>ConcertCutter</h1>
+    </div>
+
     <p class="lead">
-      Ouvrez l'enregistrement d'un concert : la forme d'onde s'affiche en
-      quelques secondes, écoutable avant même d'analyser.
+      Découpez automatiquement un concert enregistré en morceaux, en retirant les blancs et applaudissements.
     </p>
 
     {#if session.dialogs}
-      <div class="acts">
-        <button class="btn strong" onclick={() => session.openFile('wav')}>
-          Ouvrir un enregistrement
-        </button>
-        <button class="btn" onclick={() => session.openFile('project')}>
-          Reprendre un travail…
-        </button>
+      <div class="dropzone" class:active={isDragging}>
+        <div class="drop-content">
+          <span class="drop-icon">🎵</span>
+          <div class="drop-text">
+            <strong>Glissez votre fichier WAV ici</strong>
+            <span>ou utilisez les boutons ci-dessous</span>
+          </div>
+        </div>
+
+        <div class="acts">
+          <button class="btn strong open-btn" onclick={() => session.openFile('wav')}>
+            <span>Ouvrir un enregistrement WAV</span>
+          </button>
+          <button class="btn resume-btn" onclick={() => session.openFile('project')}>
+            <span>Reprendre un travail…</span>
+          </button>
+        </div>
       </div>
     {:else}
-      <!-- Sans coquille native, aucun dialogue à ouvrir : on demande le chemin.
-           C'est le cas d'un serveur lancé seul, pour un contrôle automatique. -->
       <form class="typed" onsubmit={(event) => (event.preventDefault(), session.openFile('wav', typed))}>
         <input
           bind:value={typed}
@@ -55,15 +89,24 @@
 
     {#if recent.length}
       <div class="recent">
-        <span class="label">Travaux en cours</span>
-        {#each recent as work (work.path)}
-          <button class="work" onclick={() => session.openFile('project', work.path)}>
-            <span class="who">{work.name}</span>
-            <span class="mono when">
-              {work.tracks} morceaux · {savedAgo(work.saved) || 'enregistré'}
-            </span>
-          </button>
-        {/each}
+        <div class="recent-header">
+          <span class="label">Travaux récents</span>
+          <span class="hint">Reprise instantanée</span>
+        </div>
+        <div class="recent-list">
+          {#each recent as work (work.path)}
+            <button class="work" onclick={() => session.openFile('project', work.path)}>
+              <div class="work-icon">💿</div>
+              <div class="work-info">
+                <span class="who">{work.name}</span>
+                <span class="mono when">
+                  {savedAgo(work.saved) || 'enregistré'}
+                </span>
+              </div>
+              <span class="badge accent">{work.tracks} morceaux</span>
+            </button>
+          {/each}
+        </div>
       </div>
     {/if}
   </div>
@@ -80,30 +123,105 @@
   }
 
   .sheet {
-    width: min(560px, 100%);
+    width: min(600px, 100%);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
-    box-shadow: var(--shadow);
-    padding: 40px 40px 32px;
+    box-shadow: var(--shadow-float);
+    padding: 38px 36px 32px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .sheet.dragging {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float);
+  }
+
+  .header-badge {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .icon {
+    font-size: 18px;
+    color: var(--accent);
   }
 
   h1 {
     margin: 0;
-    font: 600 13px/1 var(--sans);
-    letter-spacing: 0.14em;
+    font: 700 14px/1 var(--sans);
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--ink-3);
+    color: var(--ink);
   }
 
   .lead {
-    margin: 18px 0 26px;
-    font-size: 15px;
-    line-height: 1.55;
+    margin: 14px 0 24px;
+    font-size: 14.5px;
+    line-height: 1.5;
     color: var(--ink-2);
   }
 
-  .acts,
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 24px 20px;
+    background: var(--surface-raised);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    transition: all 0.15s ease;
+  }
+
+  .dropzone.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .drop-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .drop-icon {
+    font-size: 28px;
+  }
+
+  .drop-text strong {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .drop-text span {
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  .acts {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .open-btn {
+    height: 36px;
+    padding: 0 18px;
+  }
+
+  .resume-btn {
+    height: 36px;
+    background: var(--surface);
+  }
+
   .typed {
     display: flex;
     gap: 10px;
@@ -111,10 +229,12 @@
 
   .typed input {
     flex: 1;
-    height: 34px;
-    padding: 0 10px;
+    height: 36px;
+    padding: 0 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    background: var(--surface-raised);
+    color: var(--ink);
     outline: none;
   }
 
@@ -123,43 +243,71 @@
   }
 
   .recent {
-    margin-top: 30px;
-    padding-top: 20px;
+    margin-top: 28px;
+    padding-top: 22px;
     border-top: 1px solid var(--rule);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 10px;
   }
 
-  .recent .label {
-    margin-bottom: 8px;
+  .recent-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .work {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 12px;
-    padding: 9px 10px;
-    margin: 0 -10px;
+    padding: 10px 12px;
     border-radius: var(--radius);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
     text-align: left;
+    transition: all 0.12s ease;
   }
 
   .work:hover {
-    background: var(--rule);
+    background: var(--hover);
+    border-color: var(--border);
+    transform: translateX(2px);
+  }
+
+  .work-icon {
+    font-size: 18px;
+    flex: none;
+    opacity: 0.8;
+  }
+
+  .work-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
 
   .who {
-    font-weight: 500;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--ink);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .when {
-    margin-left: auto;
     font-size: 11.5px;
     color: var(--ink-3);
     white-space: nowrap;
   }
 </style>
+

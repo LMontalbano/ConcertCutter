@@ -1,10 +1,5 @@
 <script lang="ts">
-  /* Le transport : lecture, position, durée.
-
-     Cent soixante-quatre lignes de MCI Windows piloté par ctypes ont disparu
-     ici. La balise `<audio>` les remplace et rend la lecture portable, à une
-     condition que le serveur tient : servir le WAV avec les requêtes `Range`,
-     pour que le navigateur ne lise que ce qu'il joue. */
+  /* Le transport : lecture, position, durée. */
   import { session } from '../lib/session.svelte'
   import { hms } from '../lib/format'
 
@@ -17,7 +12,8 @@
 
   function seekFrom(clientX: number): void {
     const box = bar.getBoundingClientRect()
-    session.seek(((clientX - box.left) / box.width) * session.duration)
+    const pos = Math.max(0, Math.min(1, (clientX - box.left) / box.width))
+    session.seek(pos * session.duration)
   }
 
   function onPointerDown(event: PointerEvent): void {
@@ -37,111 +33,219 @@
 </script>
 
 <footer>
-  <button
-    class="play"
-    onclick={() => session.toggle()}
-    title={session.playing ? 'Pause (espace)' : 'Lecture (espace)'}
-    aria-label={session.playing ? 'Pause' : 'Lecture'}
-  >
-    {session.playing ? '❚❚' : '▶'}
-  </button>
-  <span class="mono now">{hms(session.playhead)}</span>
-  <div
-    class="bar"
-    bind:this={bar}
-    onpointerdown={onPointerDown}
-    onpointermove={onPointerMove}
-    onpointerup={onPointerUp}
-    role="slider"
-    tabindex="0"
-    aria-label="Position dans le concert"
-    aria-valuemin="0"
-    aria-valuemax={session.duration}
-    aria-valuenow={session.playhead}
-  >
-    <div class="done" style="width:{share * 100}%"></div>
-    <div class="knob" style="left:{share * 100}%"></div>
+  <div class="transport-inner">
+    <button
+      class="play-btn"
+      class:playing={session.playing}
+      onclick={() => session.toggle()}
+      title={session.playing ? 'Mettre en pause (Espace)' : 'Lancer la lecture (Espace)'}
+      aria-label={session.playing ? 'Pause' : 'Lecture'}
+    >
+      <span class="play-glyph">{session.playing ? '❚❚' : '▶'}</span>
+    </button>
+
+    <div class="time-display mono">
+      <span class="now">{hms(session.playhead)}</span>
+      <span class="sep">/</span>
+      <span class="total">{hms(session.duration)}</span>
+    </div>
+
+    <div
+      class="bar-wrapper"
+      bind:this={bar}
+      onpointerdown={onPointerDown}
+      onpointermove={onPointerMove}
+      onpointerup={onPointerUp}
+      role="slider"
+      tabindex="0"
+      aria-label="Position dans le concert"
+      aria-valuemin="0"
+      aria-valuemax={session.duration}
+      aria-valuenow={session.playhead}
+    >
+      <div class="bar-track">
+        <div class="bar-fill" style="width:{share * 100}%"></div>
+        <div class="knob" style="left:{share * 100}%"></div>
+      </div>
+    </div>
+
+    <button
+      class="btn loop-btn"
+      class:active={session.loop !== null}
+      onclick={() => session.toggleLoop()}
+      title="Répéter en boucle le segment sous le curseur (B)"
+    >
+      <span class="loop-dot"></span>
+      <span>Boucler (B)</span>
+    </button>
   </div>
-  <span class="mono total">{hms(session.duration)}</span>
-  <button
-    class="btn quiet loop"
-    class:on={session.loop !== null}
-    onclick={() => session.toggleLoop()}
-    title="Répéter le segment sous le curseur (B)"
-  >
-    Boucler
-  </button>
 </footer>
 
 <style>
   footer {
     margin-top: auto;
-    /* Assez haut pour que les commandes ne touchent pas le bord de la fenêtre.
-       À cinquante-huit pixels sans marge, le bouton de lecture rasait le bas
-       de l'écran : on visait un rond de trente-deux pixels posé sur l'arête. */
-    height: 76px;
+    height: 72px;
     flex: none;
     border-top: 1px solid var(--border);
     background: var(--surface);
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 0 26px 8px;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+    z-index: 10;
   }
 
-  .play {
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
-    background: var(--ink);
-    color: var(--on-ink);
+  .transport-inner {
+    height: 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
-    font-size: 10px;
+    gap: 18px;
+    padding: 0 26px;
+    max-width: 100%;
+  }
+
+  .play-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 21px;
+    background: var(--ink);
+    color: var(--on-ink);
+    display: grid;
+    place-items: center;
+    font-size: 13px;
     flex: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    transition: all 0.12s ease;
+  }
+
+  .play-btn:hover {
+    background: var(--accent);
+    color: var(--on-accent);
+    transform: scale(1.06);
+    box-shadow: 0 4px 12px var(--accent-soft);
+  }
+
+  .play-btn:active {
+    transform: scale(0.96);
+  }
+
+  .play-glyph {
+    line-height: 1;
+    margin-left: 2px;
+  }
+
+  .play-btn.playing .play-glyph {
+    margin-left: 0;
+  }
+
+  .time-display {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 140px;
   }
 
   .now {
-    font-weight: 500;
-    font-size: 14px;
+    color: var(--ink);
+  }
+
+  .sep {
+    color: var(--ink-3);
+    opacity: 0.5;
   }
 
   .total {
-    font-size: 14px;
     color: var(--ink-3);
+    font-weight: 500;
   }
 
-  .bar {
+  .bar-wrapper {
     flex: 1;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border);
-    position: relative;
+    height: 32px;
+    display: flex;
+    align-items: center;
     cursor: pointer;
     touch-action: none;
+    position: relative;
   }
 
-  .done {
+  .bar-track {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    position: relative;
+    transition: height 0.1s ease;
+  }
+
+  .bar-wrapper:hover .bar-track {
+    height: 8px;
+    border-radius: 4px;
+  }
+
+  .bar-fill {
     position: absolute;
     inset: 0 auto 0 0;
-    border-radius: 2px;
-    background: var(--ink);
+    border-radius: 3px;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent-soft);
   }
 
   .knob {
     position: absolute;
-    top: -4px;
-    width: 12px;
-    height: 12px;
-    margin-left: -6px;
-    border-radius: 6px;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    transform: translateY(-50%) scale(0.85);
+    border-radius: 7px;
     background: var(--ink);
     border: 2px solid var(--surface);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    transition: transform 0.1s ease, background 0.1s ease;
   }
 
-  .loop.on {
+  .bar-wrapper:hover .knob {
+    transform: translateY(-50%) scale(1.15);
+    background: var(--accent);
+  }
+
+  .loop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    color: var(--ink-2);
+    font: 600 12px var(--sans);
+    transition: all 0.12s ease;
+  }
+
+  .loop-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ink-3);
+    transition: background 0.12s ease;
+  }
+
+  .loop-btn:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+
+  .loop-btn.active {
     background: var(--accent-soft);
+    border-color: var(--accent);
     color: var(--accent);
   }
+
+  .loop-btn.active .loop-dot {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+  }
 </style>
+

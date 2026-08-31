@@ -5,7 +5,7 @@
   import { paint, palette, slice, surface, type Palette } from '../lib/wave'
   import { hms } from '../lib/format'
 
-  const HEIGHT = 46
+  const HEIGHT = 50
 
   let canvas: HTMLCanvasElement
   let colours: Palette = palette()
@@ -25,22 +25,20 @@
       segments: session.segments,
       palette: colours,
       radius: 6,
+      showCenterLine: false,
     })
 
-    // La fenêtre de la loupe, en creux : on assombrit ce qu'on ne regarde pas
-    // plutôt que d'encadrer ce qu'on regarde — le cadre se perdait dans le
-    // tracé dès que la fenêtre devenait étroite.
     const left = (session.viewStart / duration) * canvas.clientWidth
     const right = ((session.viewStart + session.viewSpan) / duration) * canvas.clientWidth
-    // Assombrir ce qu'on ne regarde pas, plutôt qu'encadrer ce qu'on regarde :
-    // le cadre se perdait dans le tracé dès que la fenêtre devenait étroite.
-    // La teinte suit le thème — un voile clair sur fond sombre effacerait le
-    // concert au lieu de le mettre en retrait.
+    
+    // Voile sur les zones non zoomées
     context.fillStyle = colours.veil
     context.fillRect(0, 0, left, HEIGHT)
     context.fillRect(right, 0, canvas.clientWidth - right, HEIGHT)
-    context.strokeStyle = colours.handle
-    context.lineWidth = 1
+    
+    // Cadre de la loupe active
+    context.strokeStyle = colours.handleActive || colours.handle
+    context.lineWidth = 1.5
     context.strokeRect(
       Math.round(left) + 0.5,
       0.5,
@@ -48,9 +46,10 @@
       HEIGHT - 1,
     )
 
+    // Tête de lecture globale
     const x = (session.playhead / duration) * canvas.clientWidth
-    context.fillStyle = colours.handle
-    context.fillRect(x - 0.5, 0, 1, HEIGHT)
+    context.fillStyle = colours.cursor
+    context.fillRect(x - 1, 0, 2, HEIGHT)
   }
 
   function moment(event: MouseEvent): number {
@@ -60,9 +59,6 @@
 
   function onClick(event: MouseEvent): void {
     const at = moment(event)
-    // Cliquer déplace la loupe, et cale la sélection sur ce qu'on désigne :
-    // regarder un endroit du concert sans que la carte suive n'aurait servi à
-    // rien.
     const index = session.segments.findIndex(
       (segment) => segment.start <= at && at < segment.end,
     )
@@ -72,11 +68,6 @@
   }
 
   $effect(() => {
-    // Toutes les dépendances lues ici déclenchent le redessin : l'enveloppe,
-    // les segments, la fenêtre, la tête de lecture.
-    // Le thème repeint : les couleurs du tracé sont lues au moment de
-    // peindre, mais rien ne redemandait de peindre. Basculer en clair
-    // laissait le lit des ondes en sombre jusqu'au geste suivant.
     void session.theme
     void session.envelope
     void session.segments
@@ -98,10 +89,11 @@
 
 <section class="ribbon">
   <header>
-    <span class="label">Le concert</span>
+    <span class="label">Vue globale du concert</span>
     <span class="rule"></span>
     <span class="hint">
-      {#if session.duration}{hms(session.duration)} · {/if}cliquer pour déplacer la loupe
+      {#if session.duration}<span class="badge accent mono">{hms(session.duration)}</span>{/if}
+      <span>Cliquer pour déplacer la loupe</span>
     </span>
   </header>
   <canvas
@@ -116,13 +108,13 @@
   .ribbon {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 12px 22px 14px;
+    padding: 12px 24px 14px;
   }
 
   header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     margin-bottom: 8px;
   }
 
@@ -132,10 +124,18 @@
     background: var(--rule);
   }
 
+  .hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   canvas {
     display: block;
     width: 100%;
     border-radius: 6px;
     cursor: crosshair;
+    border: 1px solid var(--border-subtle);
   }
 </style>
+

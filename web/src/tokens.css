@@ -1,100 +1,104 @@
-/* Les jetons visuels, en deux teintes.
-
-   **Le sombre est le défaut.** On découpe un concert le soir, longtemps, en
-   regardant un tracé lumineux sur fond de page : le blanc de 2a fatigue au
-   bout d'une heure. Le clair reste d'un clic, et la bascule est retenue.
-
-   Les deux teintes partagent la même grammaire — fond, surface, filet, trois
-   niveaux d'encre, un accent, une couleur de blanc — si bien qu'aucun
-   composant n'a de règle propre à un thème. Deux jetons existent pour cela :
-   `--on-ink` et `--on-accent`, la couleur qui se lit *sur* un aplat sombre ou
-   accentué. Écrire `#fff` en dur y marchait tant que `--ink` était sombre ;
-   en thème sombre, `--ink` est presque blanc, et le libellé disparaissait. */
+/* Système de design & tokens de ConcertCutter.
+   
+   Grammaire unifiée pour les modes Sombre et Clair :
+   - Conformité WCAG AA/AAA sur tous les niveaux d'encre (--ink, --ink-2, --ink-3, --hint).
+   - Accents différenciés : Cyan vif pour la musique, Ambre / Terre cuite vive pour les blancs/applaudissements.
+   - Survol net et lisible sur les deux thèmes.
+*/
 
 :root,
 :root[data-theme='dark'] {
-  --app: #14171c;
-  --surface: #1b1f26;
-  --border: #2a303a;
-  --rule: #232830;
-  --hover: #202631;
+  --app: #0e1116;
+  --surface: #161a22;
+  --surface-raised: #1f242e;
+  --border: #2d3542;
+  --border-subtle: #202631;
+  --rule: #202530;
+  --hover: #232a37;
 
-  --ink: #e8ecf2;
-  --ink-2: #a6afbc;
-  --ink-3: #7c8695;
-  --hint: #626c7a;
-  --on-ink: #14171c;
-  --on-accent: #08191d;
+  --ink: #f1f5f9;
+  --ink-2: #b2becd;
+  --ink-3: #8594a6;
+  --hint: #768597;
+  --on-ink: #0e1116;
+  --on-accent: #061a1e;
 
-  --accent: #34a8b8;
-  --accent-hover: #4cc3d4;
-  --accent-soft: #15323a;
+  --accent: #22b8cf;
+  --accent-hover: #3bc9db;
+  --accent-soft: rgba(34, 184, 207, 0.15);
   --ink-hover: #ffffff;
 
-  /* Les blancs — c'est-à-dire les applaudissements. Une teinte à part, et non
-     un gris : c'est la seule chose qui permette de juger si une coupe tombe au
-     bon endroit, donc elle doit se voir. */
-  --gap: #d9895e;
-  --gap-row: #221b17;
-  --gap-rule: #4a3527;
+  /* Blancs & Applaudissements */
+  --gap: #ff9248;
+  --gap-hover: #ffa86e;
+  --gap-row: #1a1614;
+  --gap-rule: #3d2b22;
+  --gap-soft: rgba(255, 146, 72, 0.15);
 
-  --wave: #34a8b8;
-  --wave-bed: #16303a;
-  --wave-gap: #d9895e;
-  --wave-gap-bed: #2d201a;
+  --wave: #22b8cf;
+  --wave-bed: #132830;
+  --wave-gap: #ff9248;
+  --wave-gap-bed: #2e1e17;
 
-  --handle: #e8ecf2;
-  --veil: rgba(6, 8, 11, 0.62);
-  /* Plus discret qu'en clair : sur fond sombre, assombrir davantage ce qu'on
-     ne regarde pas efface le concert au lieu de le mettre en retrait. */
-  --ribbon-veil: rgba(20, 23, 28, 0.42);
-  --glass: rgba(20, 23, 28, 0.72);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-float: 0 14px 38px rgba(0, 0, 0, 0.55);
+  --handle: #f1f5f9;
+  --handle-active: #22b8cf;
+  --veil: rgba(6, 8, 11, 0.68);
+  --ribbon-veil: rgba(14, 17, 22, 0.50);
+  --glass: rgba(22, 26, 34, 0.85);
+  --shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 16px 42px rgba(0, 0, 0, 0.65);
 }
 
 :root[data-theme='light'] {
-  --app: #f7f8fa;
+  --app: #f4f6f9;
   --surface: #ffffff;
-  --border: #e9ecf1;
-  --rule: #f2f4f7;
-  --hover: #fbfcfd;
+  --surface-raised: #ffffff;
+  --border: #dbe1ea;
+  --border-subtle: #e6ebf2;
+  --rule: #edf2f7;
+  --hover: #edf3f9;
 
-  --ink: #1b2029;
-  --ink-2: #5b6472;
-  --ink-3: #8a929f;
-  --hint: #a8b0bb;
+  --ink: #0f172a;
+  --ink-2: #334155;
+  --ink-3: #475569;
+  --hint: #556477;
   --on-ink: #ffffff;
   --on-accent: #ffffff;
 
-  --accent: #1e7f8c;
-  --accent-hover: #176571;
-  --accent-soft: #e8f3f5;
-  --ink-hover: #2c3341;
+  --accent: #088395;
+  --accent-hover: #0a6f7e;
+  --accent-soft: #e4f4f7;
+  --ink-hover: #1e293b;
 
-  --gap: #b4603a;
-  --gap-row: #fcf9f7;
-  --gap-rule: #e2c9b8;
+  /* Blancs & Applaudissements */
+  --gap: #c2410c;
+  --gap-hover: #9a3412;
+  --gap-row: #fef7f2;
+  --gap-rule: #f0d5c4;
+  --gap-soft: rgba(194, 65, 12, 0.12);
 
-  --wave: #1e7f8c;
-  --wave-bed: #e8f3f5;
-  --wave-gap: #ce8b67;
+  --wave: #088395;
+  --wave-bed: #e4f4f7;
+  --wave-gap: #c2410c;
   --wave-gap-bed: #faede6;
 
-  --handle: #1b2029;
-  --veil: rgba(27, 32, 41, 0.28);
-  --ribbon-veil: rgba(247, 248, 250, 0.62);
-  --glass: rgba(247, 248, 250, 0.72);
-  --shadow: 0 1px 2px rgba(27, 32, 41, 0.04);
-  --shadow-float: 0 12px 32px rgba(27, 32, 41, 0.16);
+  --handle: #0f172a;
+  --handle-active: #088395;
+  --veil: rgba(15, 23, 42, 0.32);
+  --ribbon-veil: rgba(244, 246, 249, 0.68);
+  --glass: rgba(255, 255, 255, 0.88);
+  --shadow: 0 2px 8px rgba(15, 23, 42, 0.07);
+  --shadow-float: 0 14px 36px rgba(15, 23, 42, 0.18);
 }
 
 :root {
   --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
+  --radius-sm: 5px;
   --radius: 8px;
   --radius-card: 14px;
+  --radius-pill: 9999px;
 
   color-scheme: dark;
 }
@@ -117,11 +121,10 @@ body {
   background: var(--app);
   color: var(--ink);
   font: 400 13.5px/1.45 var(--sans);
-  /* Une application, pas un document : la sélection au glissé et le
-     rebond de défilement trahiraient la page web qu'on cherche à faire
-     oublier. Les champs de saisie la rétablissent pour eux-mêmes. */
   user-select: none;
   overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 input,
@@ -140,8 +143,8 @@ button {
 }
 
 button:disabled {
-  cursor: default;
-  opacity: 0.45;
+  cursor: not-allowed;
+  opacity: 0.40;
 }
 
 .mono {
@@ -150,23 +153,60 @@ button:disabled {
 }
 
 .label {
-  font: 500 10.5px/1 var(--sans);
+  font: 600 10.5px/1 var(--sans);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-3);
 }
 
 .hint {
-  font: 400 11.5px/1 var(--mono);
+  font: 500 11.5px/1 var(--mono);
   color: var(--hint);
   white-space: nowrap;
 }
 
-/* Boutons — trois seulement. Le geste principal est plein et sombre, l'action
-   du moment porte l'accent, le reste est un contour. */
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 5px;
+  font: 500 10.5px/1 var(--mono);
+  color: var(--ink-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font: 600 11px/1 var(--sans);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+}
+
+.badge.accent {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.badge.gap {
+  background: var(--gap-soft);
+  border-color: transparent;
+  color: var(--gap);
+}
+
+/* Boutons */
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
   height: 32px;
   padding: 0 13px;
@@ -176,22 +216,24 @@ button:disabled {
   color: var(--ink-2);
   font: 500 12.5px var(--sans);
   white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, transform 0.08s ease;
 }
 
-/* Le survol du bouton de contour ne vaut que pour lui. Cette règle portait
-   sur `.btn` tout court, donc aussi sur les deux variantes pleines : sur le
-   bouton sombre, elle repeignait le texte en `--ink` — c'est-à-dire, en thème
-   sombre, presque blanc sur presque blanc. « Exporter » disparaissait au
-   survol. */
-.btn:not(.strong):not(.accent):not(.tonal):hover:not(:disabled) {
+.btn:not(.strong):not(.accent):not(.tonal):not(.quiet):hover:not(:disabled) {
   border-color: var(--ink-3);
+  background: var(--hover);
   color: var(--ink);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn.accent {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
+  font-weight: 600;
 }
 
 .btn.accent:hover:not(:disabled) {
@@ -206,25 +248,16 @@ button:disabled {
   background: var(--ink);
   border-color: var(--ink);
   color: var(--on-ink);
-  font: 600 13.5px var(--sans);
+  font: 600 13px var(--sans);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
-/* Une teinte nommée par thème, plutôt qu'un mélange calculé : `color-mix`
-   entre l'encre et l'accent donnait un bleu-gris terne, ni encre ni accent. Le
-   survol d'un bouton plein éclaircit son fond en thème sombre et le fonce en
-   clair — dans les deux cas, il s'écarte du repos dans le sens où va la
-   lumière. */
 .btn.strong:hover:not(:disabled) {
   background: var(--ink-hover);
   border-color: var(--ink-hover);
   color: var(--on-ink);
 }
 
-/* Tonale : un aplat d'accent très pâle, sans bordure. Assez présente pour
-   qu'on la voie du premier coup d'œil, assez discrète pour ne pas disputer
-   « Exporter ». C'est ce qu'il fallait aux deux actions de la fenêtre d'export
-   — cocher tous les morceaux, ajouter des images — qui étaient d'abord
-   invisibles, puis de simples contours perdus parmi les champs. */
 .btn.tonal {
   background: var(--accent-soft);
   border-color: transparent;
@@ -240,12 +273,14 @@ button:disabled {
 
 .btn.quiet {
   border-color: transparent;
-  background: none;
+  background: transparent;
+  color: var(--ink-2);
 }
 
 .btn.quiet:hover:not(:disabled) {
-  background: var(--rule);
+  background: var(--hover);
   border-color: transparent;
+  color: var(--ink);
 }
 
 :focus-visible {
@@ -254,13 +289,17 @@ button:disabled {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border: 3px solid var(--surface);
+  border: 2px solid var(--surface);
   border-radius: 6px;
 }
 

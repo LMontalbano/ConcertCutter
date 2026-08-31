@@ -1,14 +1,5 @@
 <script lang="ts">
-  /* Les réglages, sortis de l'écran principal.
-
-     Ils y occupaient un bandeau permanent alors qu'on les touche une fois par
-     séance — et le plus souvent jamais. Les mettre à part n'est pas les
-     cacher : chacun est ici accompagné de ce qu'il change, ce qu'un champ de
-     six caractères sur une barre d'outils ne pouvait pas dire.
-
-     Deux familles, et la frontière compte : la détection agit sur ce que
-     l'analyse trouve, donc la changer demande de réanalyser ; le montage agit
-     sur ce que l'export écrit, donc il se change jusqu'au dernier moment. */
+  /* Les réglages, sortis de l'écran principal. */
   import { api, type Settings } from '../lib/api'
   import { session, message } from '../lib/session.svelte'
 
@@ -70,9 +61,9 @@
     {
       key: 'fade_ms',
       family: 'montage',
-      label: 'Fondus',
+      label: 'Fondus anti-clic',
       unit: 'ms',
-      help: 'Très courts, et inaudibles : ils suppriment le clic que produirait une coupe franche au milieu d\'une onde.',
+      help: 'Très courts et inaudibles : ils suppriment le clic que produirait une coupe franche au milieu d\'une onde.',
       max: 10000,
     },
   ]
@@ -95,44 +86,55 @@
 <main>
   <div class="sheet">
     <header>
-      <h1>Options</h1>
-      <button class="btn quiet" onclick={onClose}>Fermer</button>
+      <div class="title-wrap">
+        <h1>Options & Réglages</h1>
+        <p class="subtitle">Paramètres d'analyse acoustique et d'export</p>
+      </div>
+      <button class="btn quiet" onclick={onClose} aria-label="Fermer les options">
+        ✕
+      </button>
     </header>
 
     {#each ['detection', 'montage'] as family (family)}
       <section>
-        <span class="label">
-          {family === 'detection' ? 'Détection' : 'Montage'}
-        </span>
+        <div class="section-badge">
+          <span class="badge {family === 'detection' ? 'accent' : ''}">
+            {family === 'detection' ? '1. Détection & IA' : '2. Montage & Rendu'}
+          </span>
+        </div>
         <p class="why">
           {family === 'detection'
-            ? "Ce que l'analyse cherche. Modifier ces valeurs demande de relancer l'analyse."
-            : "Ce que l'export écrit autour de chaque morceau. Modifiable jusqu'au dernier moment."}
+            ? "Règles appliquées lors de l'analyse du concert. Modifier ces valeurs demande de relancer l'analyse."
+            : "Règles de coupe et fondus appliquées lors de la génération des fichiers à l'export."}
         </p>
-        {#each fields.filter((field) => field.family === family) as field (field.key)}
-          <div class="field">
-            <label for={field.key}>{field.label}</label>
-            <div class="entry">
-              <input
-                id={field.key}
-                class="mono"
-                type="number"
-                step={field.step ?? 0.1}
-                min="0"
-                max={field.max}
-                bind:value={draft[field.key]}
-              />
-              <span class="unit">{field.unit}</span>
+        <div class="fields-list">
+          {#each fields.filter((field) => field.family === family) as field (field.key)}
+            <div class="field">
+              <label for={field.key}>{field.label}</label>
+              <div class="entry">
+                <input
+                  id={field.key}
+                  class="mono"
+                  type="number"
+                  step={field.step ?? 0.1}
+                  min="0"
+                  max={field.max}
+                  bind:value={draft[field.key]}
+                />
+                <span class="unit">{field.unit}</span>
+              </div>
+              <p class="help">{field.help}</p>
             </div>
-            <p class="help">{field.help}</p>
-          </div>
-        {/each}
+          {/each}
+        </div>
       </section>
     {/each}
 
     <footer>
       <button class="btn quiet" onclick={onClose}>Annuler</button>
-      <button class="btn strong" disabled={saving} onclick={apply}>Enregistrer</button>
+      <button class="btn strong" disabled={saving} onclick={apply}>
+        {saving ? 'Enregistrement…' : 'Enregistrer les options'}
+      </button>
     </footer>
   </div>
 </main>
@@ -146,94 +148,123 @@
   }
 
   .sheet {
-    width: min(720px, 100%);
+    width: min(760px, 100%);
     margin: 0 auto;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
-    box-shadow: var(--shadow);
-    padding: 26px 30px 22px;
+    box-shadow: var(--shadow-float);
+    padding: 30px 34px 24px;
   }
 
   header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    justify-content: space-between;
     margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
   h1 {
     margin: 0;
-    font: 600 20px var(--sans);
+    font: 700 20px/1.2 var(--sans);
     letter-spacing: -0.01em;
+    color: var(--ink);
   }
 
-  header .btn {
-    margin-left: auto;
+  .subtitle {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-3);
   }
 
   section {
-    padding-top: 18px;
-    border-top: 1px solid var(--rule);
-    margin-bottom: 8px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .section-badge {
+    margin-bottom: 6px;
   }
 
   .why {
-    margin: 8px 0 18px;
-    font-size: 12.5px;
+    margin: 0 0 16px;
+    font-size: 13px;
     color: var(--ink-2);
-    max-width: 54ch;
+    line-height: 1.45;
+  }
+
+  .fields-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .field {
     display: grid;
-    grid-template-columns: 180px 140px 1fr;
-    align-items: baseline;
-    gap: 14px;
-    padding: 10px 0;
+    grid-template-columns: 180px 130px 1fr;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+    border: 1px solid var(--border-subtle);
   }
 
   label {
-    font-weight: 500;
+    font-weight: 600;
     font-size: 13px;
+    color: var(--ink);
   }
 
   .entry {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: 8px;
   }
 
   .entry input {
-    width: 84px;
+    width: 80px;
     height: 32px;
     padding: 0 8px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font: 600 13px var(--mono);
     outline: none;
     text-align: right;
   }
 
   .entry input:focus {
     border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
   }
 
   .unit {
-    font-size: 12px;
+    font: 600 12px var(--mono);
     color: var(--ink-3);
   }
 
   .help {
     margin: 0;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.45;
     color: var(--ink-3);
   }
 
   footer {
     display: flex;
     justify-content: flex-end;
-    gap: 10px;
-    padding-top: 20px;
-    border-top: 1px solid var(--rule);
+    gap: 12px;
+    padding-top: 24px;
   }
 </style>
+
