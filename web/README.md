@@ -1,64 +1,73 @@
-# L'interface
+# Développement du frontend
 
-Svelte + TypeScript + Vite. Le résultat de la compilation part dans
-`../concertcutter/web/static`, que le serveur Python sert et que PyInstaller
-embarque — il n'y a pas de dossier `dist` intermédiaire qu'on oublierait de
-recopier.
+L'interface utilise Svelte, TypeScript et Vite. Elle est compilée dans
+`../concertcutter/web/static/`, puis servie par le serveur Python et embarquée
+par PyInstaller.
 
-## Compiler
+Pour l'architecture générale, les tests et la publication, consultez le
+[guide de développement](../docs/developpement.md).
 
-```bash
+## Installer et compiler
+
+Depuis `web/` :
+
+```powershell
 npm ci
+npm run check
 npm run build
 ```
 
-`build_exe.bat` exécute lui-même ces deux commandes avant PyInstaller. Le faire
-ici reste utile pour travailler sur l'interface seule.
+`build_exe.bat` relance lui-même `npm ci` et `npm run build` avant PyInstaller.
 
-## Travailler dessus
+## Développement avec Vite
 
-Deux processus. Le serveur Python d'un côté, sur un port fixe :
+Lancez d'abord le serveur Python depuis la racine du dépôt :
 
-```bash
-python gui.py --headless --port 8722 "test/faux_concert.wav"
+```powershell
+python gui.py --headless --port 8722 test/faux_concert.wav
 ```
 
-Vite de l'autre, qui sert la page avec rechargement à chaud et renvoie `/api`
-vers le premier :
+Puis Vite depuis `web/` :
 
-```bash
+```powershell
 npm run dev
 ```
 
-L'adresse à ouvrir est celle de Vite. Le jeton, lui, vient de la page servie
-par Python : en développement, `index.html` n'est pas réécrit, donc il faut
-l'ajouter à la main dans la balise `<meta name="cc-token">` — celui qu'affiche
-le serveur au lancement.
+Ouvrez l'adresse affichée par Vite. Les appels `/api` sont redirigés vers
+`http://127.0.0.1:8722`.
 
-## Vérifier
+Le serveur Python protège l'API avec un jeton injecté dans la balise
+`<meta name="cc-token">`. En mode Vite, `index.html` est servi directement et
+garde le gabarit `__CC_TOKEN__` : remplacez temporairement cette valeur par le
+jeton affiché par le serveur headless, puis restaurez le gabarit avant de
+committer.
 
-```bash
+## Contrôles
+
+```powershell
 npm run check
+npm run build
 ```
 
-`svelte-check` relit les types à travers les composants. Le contrôle de bout en
-bout, lui, est côté Python :
+Le contrôle HTTP de bout en bout se lance depuis la racine avec :
 
-```bash
-PYTHONPATH=. python tools/check_web_api.py test/faux_concert.wav
+```powershell
+python tools/check_all.py
 ```
 
-## Ce qui est où
+Il vérifie notamment le jeton, la lecture partielle du WAV, les éditions, la
+sauvegarde et la reprise.
 
-| Fichier | Rôle |
+## Organisation
+
+| Emplacement | Rôle |
 |---|---|
-| `src/lib/api.ts` | le seul endroit qui parle au serveur |
-| `src/lib/session.svelte.ts` | l'état de l'écran — pas celui du travail, qui vit côté Python |
-| `src/lib/wave.ts` | le tracé, en canvas impératif |
-| `src/lib/format.ts` | horaires : `hms`, `tenths`, et leur relecture |
-| `src/components/Ribbon.svelte` | le concert entier, en une bande |
-| `src/components/TrackList.svelte` | morceaux et blancs, avec leurs vignettes |
-| `src/components/EditCard.svelte` | le segment sous la loupe et ses deux coupes |
-| `src/components/ExportDialog.svelte` | les trois questions de l'export |
-| `src/tokens.css` | couleurs, dimensions et thèmes partagés |
-| `public/fonts/` | Instrument Sans et JetBrains Mono, embarquées |
+| `src/lib/api.ts` | Client HTTP et types échangés avec Python |
+| `src/lib/session.svelte.ts` | État d'affichage, lecture, zoom et navigation |
+| `src/lib/wave.ts` | Dessin des formes d'onde sur canvas |
+| `src/components/` | Accueil, pistes, édition, transport, options et export |
+| `src/tokens.css` | Couleurs, dimensions et thèmes partagés |
+| `public/` | Polices et favicon embarquées |
+
+L'état persistant du travail, les règles d'édition et les exports restent côté
+Python. Le frontend demande des opérations ; il ne réimplémente pas ces règles.
