@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import contextlib
+import os
 import io
 import tempfile
 import threading
@@ -17,7 +18,7 @@ import numpy as np
 import soundfile as sf
 
 import concertcutter.render as render_module
-from concertcutter import project
+from concertcutter import cancel, project
 from concertcutter.render import RenderParams, render
 from concertcutter.segment import Analysis, Segment
 from concertcutter.spectral import SpectralFeatures, extract
@@ -87,6 +88,72 @@ class ProjectTests(unittest.TestCase):
 
             self.assertEqual(session.source, replacement)
             self.assertEqual(session.analysis.source, str(replacement.resolve()))
+
+
+class EncodingTests(unittest.TestCase):
+    """Un point de reprise qu'on ne sait plus lire ne doit coûter que lui-même.
+
+    `project.read` ne rattrapait que `json.JSONDecodeError`. Or un fichier
+    rouvert dans le Bloc-notes et réenregistré en « ANSI » ou en « Unicode »
+    lève un `UnicodeDecodeError`, qui n'en dérive pas — il traversait donc le
+    `except` et remontait brut. Comme `Session.recent` ne rattrape que
+    `Unreadable`, l'écran d'accueil perdait *toute* la liste pour un seul
+    mauvais fichier.
+    """
+
+    def write_utf16(self, path: Path) -> None:
+        path.write_text(
+            json.dumps({"format": project.FORMAT,
+                        "analysis": {"segments": []}}), encoding="utf-16")
+
+    def test_a_project_in_another_encoding_is_merely_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / f"casse{project.SUFFIX}"
+            self.write_utf16(path)
+            with self.assertRaises(project.Unreadable):
+                project.read(path)
+
+    def test_one_broken_project_does_not_hide_the_others(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            store = Path(root) / "projets"
+            store.mkdir()
+            self.write_utf16(store / f"casse--aaaa{project.SUFFIX}")
+            wav = Path(root) / "concert.wav"
+            make_wav(wav)
+            project.Project(analysis=analysis_for(wav)).write(
+                store / f"bon--bbbb{project.SUFFIX}")
+
+            with mock.patch.object(project, "store", return_value=store):
+                found = Session().recent()
+            self.assertEqual([work["name"] for work in found], ["concert"])
+
+
+class SweepTests(unittest.TestCase):
+    def test_abandoned_staging_folders_are_reclaimed(self) -> None:
+        """Fermer la fenêtre pendant un export laissait plusieurs Go derrière.
+
+        `TemporaryDirectory` se referme d'elle-même, sauf quand le processus ne
+        se referme pas : il restait alors un dossier de travail à côté de
+        l'export, que rien ne ramassait jamais.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            parent = Path(root)
+            prefix = ".concert-export-"
+            old = parent / f"{prefix}vieux"
+            fresh = parent / f"{prefix}en-cours"
+            other = parent / "un dossier à l'utilisateur"
+            for folder in (old, fresh, other):
+                folder.mkdir()
+                (folder / "morceau.wav").write_bytes(b"x")
+            long_ago = time.time() - 48 * 3600
+            os.utime(old, (long_ago, long_ago))
+
+            render_module._sweep_abandoned(parent, prefix)
+
+            self.assertFalse(old.exists(), "l'orphelin d'avant-hier reste")
+            self.assertTrue(fresh.exists(),
+                            "un export concurrent ne doit pas être effacé")
+            self.assertTrue(other.exists(), "on ne touche qu'à nos dossiers")
 
 
 class JobTests(unittest.TestCase):
@@ -178,6 +245,47 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(sorted(path.relative_to(target) for path in target.rglob("*")),
                              before_files)
 
+    def test_a_cancelled_export_publishes_nothing_and_leaves_no_folder(self) -> None:
+        """Arrêter un export doit être sans trace, dans les deux sens.
+
+        Rien de publié — l'export sort du dossier de travail d'un seul
+        basculement, et l'arrêt intervient avant —, et rien d'abandonné à côté
+        de la destination : c'est le dossier de travail qui portait les
+        gigaoctets qu'on retrouvait après une fermeture brutale.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "source.wav"
+            make_wav(source)
+            analysis = analysis_for(source)
+            target = folder / "out"
+
+            with self.assertRaises(cancel.Cancelled):
+                render(analysis, target, ["Un"], RenderParams(write_full=False),
+                       should_stop=lambda: True)
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(folder.glob(f".{target.name}-export-*")), [])
+
+    def test_a_cancelled_replacement_keeps_the_previous_export(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "source.wav"
+            make_wav(source)
+            analysis = analysis_for(source)
+            target = folder / "out"
+            params = RenderParams(write_full=False)
+            render(analysis, target, ["Un"], params)
+            before = sorted(path.relative_to(target) for path in target.rglob("*"))
+
+            with self.assertRaises(cancel.Cancelled):
+                render(analysis, target, ["Deux"], params, replace=True,
+                       should_stop=lambda: True)
+
+            self.assertEqual(
+                sorted(path.relative_to(target) for path in target.rglob("*")),
+                before)
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -200,6 +308,15 @@ class HttpTests(unittest.TestCase):
             self.base + route,
             headers={"X-ConcertCutter-Token": self.app.token, **(headers or {})},
         ), timeout=5)
+
+    def post(self, route: str, body: dict) -> dict:
+        with urllib.request.urlopen(urllib.request.Request(
+            self.base + route, data=json.dumps(body).encode("utf-8"),
+            headers={"X-ConcertCutter-Token": self.app.token,
+                     "Content-Type": "application/json"},
+            method="POST",
+        ), timeout=5) as answer:
+            return json.loads(answer.read())
 
     def test_suffix_range_returns_last_bytes(self) -> None:
         size = self.source.stat().st_size
@@ -230,6 +347,62 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(payload["opening"]["state"], "running")
         finally:
             gate.set()
+
+    def test_theme_route_only_accepts_the_two_themes(self) -> None:
+        """La valeur redescend jusqu'à une couleur de barre de titre.
+
+        Elle arrivait telle quelle de la page : tout ce qui n'était pas
+        « light » passait pour du sombre, mais la chaîne brute traversait
+        quand même la route et repartait dans la réponse.
+        """
+        seen: list[str] = []
+        self.app.on_theme = seen.append
+        self.assertEqual(self.post("/api/theme", {"theme": "light"})["theme"],
+                         "light")
+        self.assertEqual(self.post("/api/theme", {"theme": "n'importe"})["theme"],
+                         "dark")
+        self.assertEqual(seen, ["light", "dark"])
+
+    def test_a_window_that_raises_does_not_break_the_theme_route(self) -> None:
+        def angry(_theme):
+            raise RuntimeError("fenêtre partie")
+
+        self.app.on_theme = angry
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.post("/api/theme", {"theme": "dark"})["theme"],
+                             "dark")
+
+    def test_cancelling_a_job_is_not_a_failure(self) -> None:
+        """Un export qu'on arrête n'a pas à s'afficher comme une erreur.
+
+        L'écran d'attente distingue les deux : « interrompu » referme sans
+        rien annoncer, « échoué » montre la phrase du serveur.
+        """
+        started = threading.Event()
+
+        def slow(job):
+            job.total = 50
+            for step in range(50):
+                cancel.check(job.stop.is_set)
+                job.done = step
+                started.set()
+                time.sleep(0.02)
+            return {"fini": True}
+
+        job = self.app.jobs.start("export", slow)
+        self.assertTrue(started.wait(3))
+        self.assertEqual(self.post("/api/cancel", {"id": job.id})["id"], job.id)
+
+        deadline = time.monotonic() + 5
+        while job.state == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(job.state, "cancelled")
+        self.assertEqual(job.error, "")
+
+    def test_cancelling_an_unknown_job_is_a_404(self) -> None:
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/cancel", {"id": "jamais-vu"})
+        self.assertEqual(caught.exception.code, 404)
 
 
 if __name__ == "__main__":

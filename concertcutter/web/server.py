@@ -1,10 +1,9 @@
-"""Le serveur local : six routes, la bibliothèque standard, rien de plus.
+"""Le serveur local : vingt-deux routes, la bibliothèque standard, rien de plus.
 
-`http.server` plutôt qu'un cadriciel. Le `requirements.txt` de ConcertCutter
-tient en deux lignes — numpy, soundfile — et FastAPI avec uvicorn ajouteraient
-une quinzaine de mégaoctets à un exécutable qui en fait vingt-cinq, pour une
-douzaine de routes qui ne servent qu'un seul client au bout d'une boucle
-locale.
+`http.server` plutôt qu'un cadriciel. Les dépendances de ConcertCutter tiennent
+en trois lignes — numpy, soundfile, pywebview — et FastAPI avec uvicorn
+ajouteraient une quinzaine de mégaoctets à un exécutable qui en fait vingt-cinq,
+pour des routes qui ne servent qu'un seul client au bout d'une boucle locale.
 
 **Un serveur local qui ouvre un chemin arbitraire est une primitive de lecture
 de fichiers.** N'importe quelle page ouverte dans le même navigateur peut
@@ -192,8 +191,6 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/recent":
             self._send({"projects": session.recent(),
                         "dialogs": dialogs.available()})
-        elif route == "/api/segments":
-            self._send(session.segments_payload())
         elif route == "/api/navigate":
             self._send({"moment": self._navigate(query)})
         elif route == "/api/image":
@@ -238,17 +235,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"saved": str(written) if written else "",
                         "when": session.saved})
         elif route == "/api/theme":
-            theme = str(body.get("theme", "dark"))
+            # Borné aux deux thèmes qui existent : la valeur redescend jusqu'à
+            # une couleur de barre de titre, et il n'y a aucune raison de
+            # laisser passer autre chose que ce que la bascule produit.
+            theme = "light" if str(body.get("theme", "")) == "light" else "dark"
             if self.app.on_theme:
                 try:
                     self.app.on_theme(theme)
-                except Exception:
-                    pass
+                except Exception as failure:  # noqa: BLE001
+                    print(f"Thème non appliqué à la fenêtre ({failure}).",
+                          flush=True)
             self._send({"theme": theme})
+        elif route == "/api/cancel":
+            job = jobs.cancel(str(body.get("id", "")))
+            if job is None:
+                self._fail("Travail inconnu.", HTTPStatus.NOT_FOUND)
+            else:
+                self._send(job.payload())
         elif route == "/api/ffmpeg":
             self._install_ffmpeg()
         elif route == "/api/quit":
             self._send({"bye": True})
+            # Ce qui tourne encore est prévenu avant qu'on ferme : un export
+            # en cours a ainsi le temps de refermer son dossier de travail au
+            # lieu de le laisser derrière lui.
+            jobs.stop_all()
             self.app.quit.set()
         else:
             self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
@@ -303,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"paths": self.app.session.allow_image(
                 dialogs.ask_images())})
         elif kind == "source":
-            self._send({"path": dialogs.ask_source(body.get("name", "")) or ""})
+            self._send({"path": dialogs.ask_source() or ""})
         elif kind == "project":
             self._send({"path": dialogs.ask_project() or ""})
         else:

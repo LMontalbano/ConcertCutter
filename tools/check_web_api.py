@@ -11,8 +11,12 @@ Ce que le lot 2 doit garantir, et qu'aucun clic ne vérifie :
   téléchargerait deux gigaoctets avant d'émettre un son ;
 - l'enveloppe et les pics arrivent en Float32 de la longueur demandée.
 
+Lancée par `tools/check_all.py`, donc par la CI, sur un concert que
+`make_fake_concert.py` fabrique dans un dossier temporaire. À la main :
+
 ```bash
-PYTHONPATH=. python tools/check_web_api.py test/faux_concert.wav
+PYTHONPATH=. python tools/make_fake_concert.py -o faux_concert.wav
+PYTHONPATH=. python tools/check_web_api.py faux_concert.wav
 ```
 """
 

@@ -21,9 +21,15 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from ..cancel import Cancelled
+
 RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
+# Arrêté à la demande. Distinct de `FAILED` parce que la suite l'est aussi :
+# un export qu'on interrompt n'a pas à s'afficher en rouge, et le navigateur
+# n'a rien à annoncer d'autre que le retour à l'écran d'édition.
+CANCELLED = "cancelled"
 
 
 @dataclass
@@ -45,6 +51,9 @@ class Job:
     error: str = ""
     detail: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+    # Levé pour demander l'arrêt. Le travail le consulte aux endroits où il
+    # peut s'interrompre proprement ; rien n'est tué de force.
+    stop: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def payload(self) -> dict:
         return {
@@ -70,6 +79,13 @@ class Jobs:
             try:
                 job.result = work(job)
                 job.state = DONE
+            except Cancelled:
+                # Pas une erreur : personne n'a besoin qu'on lui dise que ce
+                # qu'il vient d'arrêter s'est arrêté. Ce qui comptait — que
+                # l'export précédent reste intact — tient au dossier de
+                # travail, refermé en remontant.
+                job.state = CANCELLED
+                job.phase = "Interrompu."
             except Exception as failure:  # noqa: BLE001 — tout remonte à l'écran
                 job.state = FAILED
                 # Deux niveaux : la phrase pour l'utilisateur, la trace pour la
@@ -88,6 +104,29 @@ class Jobs:
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
+
+    def cancel(self, job_id: str) -> Job | None:
+        """Demande l'arrêt d'un travail. Il s'arrêtera à son prochain palier.
+
+        Rien n'est interrompu de force : le fil consulte `job.stop` entre deux
+        morceaux et pendant l'encodage, et remonte par `Cancelled`. Un travail
+        déjà fini se laisse « annuler » sans rien faire, ce qui évite d'avoir à
+        courir après l'instant exact où le bouton disparaît.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+        if job is not None and job.state == RUNNING:
+            job.stop.set()
+            job.phase = "Arrêt en cours…"
+        return job
+
+    def stop_all(self) -> None:
+        """Demande l'arrêt de tout ce qui tourne. Sert à la fermeture."""
+        with self._lock:
+            current = [job for job in self._jobs.values()
+                       if job.state == RUNNING]
+        for job in current:
+            job.stop.set()
 
     def running(self, kind: str) -> Job | None:
         """Travail de ce type encore en cours, s'il y en a un.

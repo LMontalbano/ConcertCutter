@@ -25,10 +25,25 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import soundfile as sf
+
+from .cancel import Cancelled, ShouldStop
+
+# Délai au-delà duquel un ffmpeg est tenu pour bloqué. Il ne borne pas un
+# encodage — six heures dépassent de loin ce que demande un concert de deux
+# heures, même en diaporama — mais une panne : pilote qui ne rend pas la main,
+# entrée que le décodeur n'arrive pas à terminer. Sans lui, le travail restait
+# figé jusqu'à la fermeture de l'application.
+ENCODE_TIMEOUT_S = 6 * 3600.0
+
+# Rythme auquel on regarde si ffmpeg a fini, ou si l'on nous demande d'arrêter.
+# Un quart de seconde : assez court pour qu'« annuler » paraisse immédiat,
+# assez long pour ne rien coûter sur un encodage d'une heure.
+POLL_S = 0.25
 
 # Extensions proposées au sélecteur de fichier. ffmpeg en décode d'autres, mais
 # ces cinq-là couvrent ce qui sort d'un appareil photo ou d'un éditeur d'image.
@@ -233,8 +248,11 @@ def _list(kind: str) -> str:
     ffmpeg = find_ffmpeg()
     if ffmpeg:
         try:
-            text = _run([ffmpeg, "-hide_banner", f"-{kind}"], capture=True)
-        except OSError:
+            # Trente secondes : lister les filtres est instantané, et un
+            # ffmpeg qui n'y arrive pas ne mérite pas six heures d'attente.
+            text = _run([ffmpeg, "-hide_banner", f"-{kind}"], capture=True,
+                        timeout=30.0)
+        except (OSError, RuntimeError):
             text = ""
     _probe_cache[kind] = text
     return text
@@ -251,7 +269,8 @@ def forget_probe() -> None:
 
 
 def write_video(audio: str | Path, captions: str | list[Caption],
-                out_path: str | Path, params: VideoParams) -> Path:
+                out_path: str | Path, params: VideoParams,
+                should_stop: ShouldStop | None = None) -> Path:
     """Assemble image + titre(s) + audio en un MP4. Retourne le chemin écrit.
 
     `captions` accepte un titre unique — le cas d'une vidéo par morceau — ou une
@@ -293,13 +312,15 @@ def write_video(audio: str | Path, captions: str | list[Caption],
         # boucle. Le dérouler d'un bout à l'autre du concert demanderait neuf
         # cents entrées ffmpeg pour deux heures — et la ligne de commande de
         # Windows lâche bien avant, vers la centième.
-        chapters = _chapters(captions, params) if params.per_caption else None
+        chapters = (_chapters(captions, params, should_stop)
+                    if params.per_caption else None)
         if chapters is not None:
             # Le fond suit les morceaux : il dure ce que dure le concert, et
             # ne boucle donc pas.
             background = ["-i", str(chapters)]
         elif len(stills) > 1:
-            background = ["-stream_loop", "-1", "-i", str(_slideshow(params))]
+            background = ["-stream_loop", "-1",
+                          "-i", str(_slideshow(params, should_stop))]
         else:
             background = ["-loop", "1", "-framerate", str(params.fps),
                           "-i", stills[0]]
@@ -327,7 +348,7 @@ def write_video(audio: str | Path, captions: str | list[Caption],
             # télécharger la fin, ce qu'attendent les plateformes vidéo.
             "-movflags", "+faststart",
             str(out_path),
-        ])
+        ], should_stop=should_stop)
 
     return out_path
 
@@ -344,7 +365,8 @@ def _seconds(audio: str | Path) -> float:
         return 0.0
 
 
-def _chapters(captions: list[Caption], params: VideoParams) -> Path | None:
+def _chapters(captions: list[Caption], params: VideoParams,
+              should_stop: ShouldStop | None = None) -> Path | None:
     """Fond dont l'image change au morceau, encodé pour la durée du concert.
 
     C'est l'autre règle possible pour un fond : au lieu de tourner sur une
@@ -424,12 +446,13 @@ def _chapters(captions: list[Caption], params: VideoParams) -> Path | None:
             "-preset", "veryfast", "-pix_fmt", "yuv420p",
             "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
             str(out_path),
-        ])
+        ], should_stop=should_stop)
         _cycles[signature] = out_path
         return out_path
 
 
-def _slideshow(params: VideoParams) -> Path:
+def _slideshow(params: VideoParams,
+               should_stop: ShouldStop | None = None) -> Path:
     """Un cycle du diaporama, encodé à part, à rejouer en boucle.
 
     Trois raisons de passer par un fichier plutôt que par un graphe unique :
@@ -505,7 +528,7 @@ def _slideshow(params: VideoParams) -> Path:
             "-preset", "veryfast", "-pix_fmt", "yuv420p",
             "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
             str(out_path),
-        ])
+        ], should_stop=should_stop)
         _cycles[signature] = out_path
         return out_path
 
@@ -610,21 +633,72 @@ def _escape(path: str | None) -> str:
     return "'" + text.replace("'", r"'\''") + "'"
 
 
-def _run(command: list[str], capture: bool = False) -> str:
+def _run(command: list[str], capture: bool = False,
+         should_stop: ShouldStop | None = None,
+         timeout: float = ENCODE_TIMEOUT_S) -> str:
     """Lance ffmpeg. Lève RuntimeError avec sa dernière ligne s'il échoue.
 
     `CREATE_NO_WINDOW` : l'interface est bâtie sans console, et sans ce drapeau
     chaque appel ferait clignoter une fenêtre noire à l'écran.
+
+    Surveillé plutôt qu'attendu bêtement. `subprocess.run` sans délai rendait
+    deux choses impossibles :
+
+    - **arrêter un export.** Le fil du travail était bloqué dans un `wait()`
+      que rien ne réveille, si bien que « annuler » n'avait aucune prise —
+      l'encodage d'un concert de deux heures dure ce qu'il dure ;
+    - **survivre à un ffmpeg qui se fige.** Une entrée douteuse, un pilote
+      matériel qui ne rend pas la main, et le travail restait en l'état
+      jusqu'à la fermeture de l'application. Pire encore pour `_chapters` et
+      `_slideshow`, qui appellent d'ici en tenant `_cycle_lock` : les deux
+      fils d'encodage s'y accumulaient.
+
+    Le délai est large — six heures — parce qu'il ne borne pas un travail
+    normal mais une panne : un encodage légitime n'en approche jamais, et
+    c'est justement ce qui permet de le déclencher sans hésiter.
+
+    `communicate(timeout=…)` plutôt qu'une lecture directe des tuyaux : il vide
+    la sortie et l'erreur dans des fils à lui, là où lire soi-même par à-coups
+    finirait par remplir le tampon du tuyau et bloquer ffmpeg pour de bon.
     """
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    done = subprocess.run(
+    began = time.monotonic()
+    child = subprocess.Popen(
         command, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         creationflags=flags,
     )
-    if done.returncode != 0 and not capture:
-        detail = done.stderr.decode("utf-8", "replace").strip().splitlines()
+    while True:
+        try:
+            out, err = child.communicate(timeout=POLL_S)
+            break
+        except subprocess.TimeoutExpired:
+            if should_stop is not None and should_stop():
+                _end(child)
+                raise Cancelled()
+            if time.monotonic() - began > timeout:
+                _end(child)
+                raise RuntimeError(
+                    "ffmpeg ne répond plus : encodage abandonné après "
+                    f"{timeout / 3600:.0f} h.")
+
+    if child.returncode != 0 and not capture:
+        detail = err.decode("utf-8", "replace").strip().splitlines()
         raise RuntimeError(
             "ffmpeg a échoué : " + (detail[-1] if detail else "raison inconnue")
         )
-    return done.stdout.decode("utf-8", "replace")
+    return out.decode("utf-8", "replace")
+
+
+def _end(child: subprocess.Popen) -> None:
+    """Arrête ffmpeg, et attend qu'il ait vraiment rendu le fichier.
+
+    `kill` puis `communicate` : sans la seconde moitié, on laisserait un
+    processus zombie et, sous Windows, un fichier de sortie encore ouvert que
+    le nettoyage du dossier de travail ne pourrait pas effacer.
+    """
+    child.kill()
+    try:
+        child.communicate(timeout=10)
+    except Exception:  # noqa: BLE001 — on s'en va, plus rien n'en dépend
+        pass

@@ -7,7 +7,6 @@
 
   let recent = $state<RecentProject[]>([])
   let typed = $state('')
-  let isDragging = $state(false)
 
   $effect(() => {
     void api
@@ -19,36 +18,25 @@
       .catch(() => {})
   })
 
-  function onDragOver(event: DragEvent): void {
-    event.preventDefault()
-    isDragging = true
-  }
+  /* Pas de dépôt de fichier ici, et c'est une contrainte, pas un oubli.
 
-  function onDragLeave(event: DragEvent): void {
-    event.preventDefault()
-    isDragging = false
-  }
+     Il y en avait un. Il lisait `file.path` — une extension d'Electron, que
+     WebView2 n'a pas, et qu'Electron lui-même a retirée. La propriété valait
+     donc toujours `undefined`, le repli prenait `file.name`, et ConcertCutter
+     recevait « concert.wav » sans dossier : un chemin relatif que le serveur
+     résolvait depuis son dossier de travail. Au mieux « fichier introuvable »,
+     au pire l'ouverture d'un homonyme sans rapport. La bannière promettait
+     pourtant, en gras, de glisser son enregistrement ici.
 
-  function onDrop(event: DragEvent): void {
-    event.preventDefault()
-    isDragging = false
-    const files = event.dataTransfer?.files
-    if (!files || !files.length) return
-    const file = files[0]
-    // Sur Electron/WebView2 ou navigateur compatible, file.path existe
-    const path = (file as unknown as { path?: string }).path || file.name
-    if (path) {
-      void session.openFile(path.toLowerCase().endsWith('.json') ? 'project' : 'wav', path)
-    }
-  }
+     Le navigateur ne donne jamais de chemin — c'est délibéré de sa part, et
+     tout `read_span` de ce programme prend un `Path`. Remonter deux
+     gigaoctets par le tuyau HTTP pour les redescendre serait absurde là où le
+     fichier est déjà sur le disque du serveur. Le sélecteur natif reste donc
+     la seule porte, et on ne dessine plus l'autre. */
 </script>
 
-<main
-  ondragover={onDragOver}
-  ondragleave={onDragLeave}
-  ondrop={onDrop}
->
-  <div class="sheet" class:dragging={isDragging}>
+<main>
+  <div class="sheet">
     <div class="header-badge">
       <img class="hero-logo" src={logoUrl} alt="Logo ConcertCutter" width="40" height="40" />
       <div class="hero-title-group">
@@ -62,23 +50,13 @@
     </p>
 
     {#if session.dialogs}
-      <div class="dropzone" class:active={isDragging}>
-        <div class="drop-content">
-          <span class="drop-icon">🎵</span>
-          <div class="drop-text">
-            <strong>Glissez votre fichier WAV ici</strong>
-            <span>ou utilisez les boutons ci-dessous</span>
-          </div>
-        </div>
-
-        <div class="acts">
-          <button class="btn strong open-btn" onclick={() => session.openFile('wav')}>
-            <span>Ouvrir un enregistrement WAV</span>
-          </button>
-          <button class="btn resume-btn" onclick={() => session.openFile('project')}>
-            <span>Reprendre un travail…</span>
-          </button>
-        </div>
+      <div class="acts">
+        <button class="btn strong open-btn" onclick={() => session.openFile('wav')}>
+          <span>Ouvrir un enregistrement WAV</span>
+        </button>
+        <button class="btn resume-btn" onclick={() => session.openFile('project')}>
+          <span>Reprendre un travail…</span>
+        </button>
       </div>
     {:else}
       <form class="typed" onsubmit={(event) => (event.preventDefault(), session.openFile('wav', typed))}>
@@ -133,12 +111,6 @@
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-float);
     padding: 38px 36px 32px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .sheet.dragging {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float);
   }
 
   .header-badge {
@@ -181,53 +153,11 @@
     color: var(--ink-2);
   }
 
-  .dropzone {
-    border: 2px dashed var(--border);
-    border-radius: var(--radius);
-    padding: 24px 20px;
-    background: var(--surface-raised);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 18px;
-    transition: all 0.15s ease;
-  }
-
-  .dropzone.active {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-  }
-
-  .drop-content {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    text-align: center;
-  }
-
-  .drop-icon {
-    font-size: 28px;
-  }
-
-  .drop-text strong {
-    display: block;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--ink);
-  }
-
-  .drop-text span {
-    font-size: 12px;
-    color: var(--ink-3);
-  }
-
   .acts {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    justify-content: center;
   }
 
   .open-btn {

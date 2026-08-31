@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ConcertCutter</title>
+    <!-- L'icône était bien dans le dépôt, mais à la racine de `web/` : hors de
+         `public/`, Vite ne la copie pas, et sans ce lien personne ne la
+         demandait. Elle ne servait donc à rien. Elle compte pour le repli
+         navigateur, où la fenêtre native — qui porte la sienne — n'existe pas
+         et où l'onglet restait anonyme. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
     <!-- Le serveur remplace ce gabarit par le jeton du lancement avant de
          servir la page. Il n'arrive donc jamais par une URL qu'on pourrait
          relire dans un historique. -->

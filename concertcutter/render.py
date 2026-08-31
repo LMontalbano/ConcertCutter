@@ -21,6 +21,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,6 +33,7 @@ import soundfile as sf
 
 from . import video
 from .audio import probe, read_span
+from .cancel import ShouldStop, check
 from .labels import write_audacity_labels, write_cue
 from .segment import Analysis, Segment
 
@@ -158,6 +160,7 @@ def render(
     params: RenderParams | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
     replace: bool = False,
+    should_stop: ShouldStop | None = None,
 ) -> dict:
     """Construit à part, puis publie l'export achevé d'un seul basculement.
 
@@ -178,10 +181,12 @@ def render(
 
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     prefix = f".{out_dir.name or 'concert'}-export-"
+    _sweep_abandoned(out_dir.parent, prefix)
     with tempfile.TemporaryDirectory(prefix=prefix, dir=out_dir.parent) as temporary:
         root = Path(temporary)
         staged = root / "new"
-        result = _render_into(analysis, staged, titles, params, on_progress)
+        result = _render_into(analysis, staged, titles, params, on_progress,
+                              should_stop)
 
         candidate = root / "complete"
         if out_dir.exists():
@@ -216,6 +221,7 @@ def _render_into(
     titles: list[str] | None,
     params: RenderParams,
     on_progress: Callable[[int, int, str], None] | None,
+    should_stop: ShouldStop | None = None,
 ) -> dict:
     """Écrit le fichier complet, les pistes et les vidéos demandées.
 
@@ -310,14 +316,19 @@ def _render_into(
 
     def encode(track_path: Path, label: str, target: str, temporary: bool,
                rank: int) -> None:
+        check(should_stop)
         video.write_video(track_path, label, out_dir / target,
-                          _video_params(params, rank))
+                          _video_params(params, rank), should_stop)
         if temporary:
             track_path.unlink(missing_ok=True)
         step(target)
 
     try:
         for rank, number, start, stop in spans:
+            # Avant de lire le morceau suivant, et non après l'avoir écrit :
+            # c'est le moment où l'on n'a rien en main, et où s'arrêter ne
+            # laisse pas un WAV à moitié rempli dans le dossier de travail.
+            check(should_stop)
             audio = read_span(analysis.source, start, stop)
             audio = _apply_fades(audio, fade_len)
 
@@ -386,7 +397,7 @@ def _render_into(
             if on_progress:
                 on_progress(counter["done"], steps, params.video_name)
             video.write_video(full_path, captions, out_dir / params.video_name,
-                              _video_params(params))
+                              _video_params(params), should_stop)
             videos.append(params.video_name)
             step(params.video_name)
     finally:
@@ -640,6 +651,38 @@ def _write_manifest(out_dir: Path, analysis: Analysis, names: list[str]) -> None
     }
     (out_dir / DATA_DIR / MANIFEST).write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _sweep_abandoned(parent: Path, prefix: str, older_than_h: float = 24.0) -> None:
+    """Efface les dossiers de travail qu'un export interrompu a laissés.
+
+    `TemporaryDirectory` se referme toute seule — sauf quand le processus ne se
+    referme pas, lui : fenêtre fermée pendant l'encodage, application tuée,
+    coupure de courant. Il restait alors, *à côté du dossier d'export*, un
+    `.MonConcert-export-xxxx` portant un export à moitié fait, que rien ne
+    ramassait jamais. Sur des concerts en WAV plus vidéo, cela se compte en
+    gigaoctets, et l'utilisateur n'a aucune raison de deviner ce que c'est.
+
+    Vingt-quatre heures d'ancienneté avant d'y toucher, et c'est délibéré : un
+    autre ConcertCutter peut être en train d'exporter dans le même dossier au
+    même moment. Aucun export réel n'approche de ce délai, si bien qu'un dossier
+    plus vieux que ça est forcément l'orphelin d'une séance qui s'est mal finie.
+
+    Silencieux de bout en bout : le ménage ne doit jamais empêcher l'export qui
+    le suit — un dossier verrouillé par l'explorateur Windows attendra la fois
+    d'après.
+    """
+    cutoff = time.time() - older_than_h * 3600.0
+    try:
+        leftovers = list(parent.glob(f"{prefix}*"))
+    except OSError:
+        return
+    for stale in leftovers:
+        try:
+            if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def unique_dir(path: str | Path) -> Path:

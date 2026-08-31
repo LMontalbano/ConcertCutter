@@ -261,12 +261,6 @@ def section_start(segments: list[Segment], duration: float,
     return target
 
 
-def segment_at(segments: list[Segment], moment: float) -> int | None:
-    """Rang du segment qui contient cet instant, ou None."""
-    return next((index for index, segment in enumerate(segments)
-                 if segment.start <= moment < segment.end), None)
-
-
 def _hms(seconds: float) -> str:
     seconds = max(0.0, float(seconds))
     hours, rest = divmod(int(seconds), 3600)

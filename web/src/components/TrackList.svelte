@@ -104,15 +104,20 @@
   <div class="rows" bind:this={rows}>
     {#each session.segments as segment (segment.index)}
       {#if segment.kind === 'music'}
+        <!-- La ligne entière est cliquable par commodité, mais elle n'est pas
+             un bouton : elle en contient trois. Lui donner `role="button"` et
+             un `tabindex` — ce qu'elle avait — plaçait des contrôles
+             interactifs à l'intérieur d'un contrôle interactif, ce qu'aucun
+             lecteur d'écran ne sait annoncer, et posait un arrêt de tabulation
+             par morceau sur lequel aucune touche ne faisait rien. Le clavier
+             passe par les boutons de la ligne, qui sélectionnent déjà. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="track"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
-          class:playing-here={session.playing_at(segment.index)}
           onclick={() => session.select(segment.index)}
-          role="button"
-          tabindex="0"
         >
           <button
             class="listen"
@@ -164,15 +169,13 @@
           ></canvas>
         </div>
       {:else}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="gap"
           data-rank={segment.index}
           class:current={session.selected === segment.index}
-          class:playing-here={session.playing_at(segment.index)}
           onclick={() => session.select(segment.index)}
-          role="button"
-          tabindex="0"
         >
           <button
             class="listen thin"
@@ -186,9 +189,14 @@
 
           <span class="gap-icon" aria-hidden="true">✂</span>
 
-          <span class="mono gap-name">
-            Blanc de {spell(segment.end - segment.start)}
-          </span>
+          <!-- Un bouton, et non un simple texte : c'est la seule prise du
+               clavier sur un blanc. Devenu `<span>`, il ne laissait plus que
+               la souris pour en sélectionner un. -->
+          <button
+            class="mono gap-name"
+            onclick={(event) => (event.stopPropagation(), session.select(segment.index))}
+            aria-label="Sélectionner le blanc de {spell(segment.end - segment.start)}"
+          >Blanc de {spell(segment.end - segment.start)}</button>
 
           <button
             class="keep-btn"
@@ -314,10 +322,6 @@
     border-left-color: var(--accent);
   }
 
-  .track.playing-here {
-    border-left-color: var(--accent);
-  }
-
   .num-pill {
     flex: none;
     font: 600 12px/1 var(--mono);
@@ -412,8 +416,11 @@
     transition: background 0.12s ease;
   }
 
+  /* Assombri dans sa propre teinte, et non repeint en gris : `--hover` est
+     le survol des lignes de morceau, et l'emprunter faisait perdre au blanc la
+     seule couleur qui le distingue au premier coup d'œil. */
   .gap:hover {
-    background: var(--hover);
+    background: var(--gap-soft);
   }
 
   .gap.current {
@@ -428,6 +435,7 @@
 
   .gap-name {
     flex: 1;
+    text-align: left;
     color: var(--gap);
     font-weight: 500;
     white-space: nowrap;

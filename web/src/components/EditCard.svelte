@@ -361,8 +361,12 @@
 
       <div class="card-hints">
         <span class="hint"><span class="kbd">Molette</span> Zoomer</span>
-        <span class="hint"><span class="kbd">C</span> Couper</span>
-        <span class="hint"><span class="kbd">B</span> Boucler</span>
+        <!-- « c » en minuscule, parce que la majuscule désigne autre chose :
+             `Maj+C` sépare le morceau en deux pistes là où `c` pose une simple
+             coupe. Les afficher toutes deux en capitale renvoyait au mauvais
+             geste. -->
+        <span class="hint"><span class="kbd">c</span> Couper</span>
+        <span class="hint"><span class="kbd">b</span> Boucler</span>
       </div>
     </div>
 
