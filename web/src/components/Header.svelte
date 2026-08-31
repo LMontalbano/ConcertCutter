@@ -2,7 +2,6 @@
   /* La barre du haut : ce qui est ouvert, ce qui est à l'abri, et l'export. */
   import { session } from '../lib/session.svelte'
   import { hms, savedAgo } from '../lib/format'
-  import logoUrl from '../assets/logo.png'
 
   let {
     onExport,
@@ -20,13 +19,6 @@
 
 <header>
   <div class="left">
-    <div class="brand-group">
-      <img class="brand-logo" src={logoUrl} alt="Logo ConcertCutter" width="24" height="24" />
-      <span class="brand">ConcertCutter</span>
-    </div>
-
-    <span class="split"></span>
-
     <div class="doc">
       <span class="name" title={session.state?.name}>{session.state?.name}</span>
       <div class="meta">
@@ -120,27 +112,6 @@
     align-items: center;
     gap: 16px;
     min-width: 0;
-  }
-
-  .brand-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
-  }
-
-  .brand-logo {
-    width: 24px;
-    height: 24px;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  }
-
-  .brand {
-    font: 700 13px/1 var(--sans);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--ink);
   }
 
   .split {
