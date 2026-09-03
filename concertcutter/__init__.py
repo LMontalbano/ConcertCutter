@@ -1,3 +1,3 @@
 """ConcertCutter — découpage automatique de concerts enregistrés."""
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
