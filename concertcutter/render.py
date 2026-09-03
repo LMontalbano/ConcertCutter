@@ -757,15 +757,23 @@ def _padded_spans(
 def _album_durations(written: list[dict], crossfade_s: float) -> list[float]:
     """Durées telles qu'elles se suivent dans l'album continu.
 
-    Chaque fondu mange `crossfade_s` : le morceau suivant commence pendant que
-    le précédent s'éteint. La place occupée par un morceau dans l'album est
-    donc sa durée moins un fondu — sauf le dernier, que rien ne recouvre.
+    Le morceau suivant commence pendant la queue retenue du précédent.
+    Reprend les limites de `_crossfade` : au plus la moitié du morceau sortant,
+    et aucun recouvrement si le suivant est plus court que cette queue.
     """
     durations = [item["duration"] for item in written]
     if crossfade_s <= 0 or len(durations) < 2:
         return durations
-    return [max(0.0, duration - crossfade_s) for duration in durations[:-1]] \
-        + [durations[-1]]
+    occupied = durations.copy()
+    tail = 0.0
+    for index, duration in enumerate(durations):
+        if tail and duration <= tail:
+            tail = 0.0
+            continue
+        if index:
+            occupied[index - 1] -= tail
+        tail = min(crossfade_s, duration / 2)
+    return occupied
 
 
 def _on_album(written: list[dict], crossfade_s: float) -> list[dict]:

@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Interface de ConcertCutter, servie par le serveur local Python.",
   "scripts": {
+    "test": "node --conditions=browser --import ./tests/register.mjs --test tests/*.test.mjs",
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json"

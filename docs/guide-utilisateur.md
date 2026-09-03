@@ -54,7 +54,7 @@ retirés ou exclus d'un export partiel.
 | Geste | Résultat |
 |---|---|
 | Bouton de lecture ou `Espace` | Lire ou mettre en pause depuis la tête de lecture |
-| Clic dans la forme d'onde détaillée | Placer la tête de lecture sans démarrer le son |
+| Clic ou glissement dans le corps de la forme d'onde détaillée | Déplacer la tête de lecture sans démarrer le son |
 | Bouton `▶` d'une ligne | Sélectionner et lire ce segment depuis son début |
 | Clic dans la vue globale | Placer la tête et recentrer la vue détaillée |
 | Molette sur la forme d'onde | Zoomer autour du pointeur |
@@ -67,6 +67,9 @@ La vue détaillée suit la lecture tant qu'elle n'a pas été positionnée
 manuellement. Après un clic dans cette vue, elle reste fixe pour permettre de
 régler une coupe sans perdre le passage affiché.
 
+Écouter les marges orange conserve le segment sélectionné et ses deux bornes.
+Pour éditer une zone voisine, sélectionnez-la dans la liste ou la vue globale.
+
 ## Corriger les segments
 
 ### Déplacer une frontière
@@ -76,12 +79,17 @@ du premier déplace également le début du second.
 
 Trois méthodes sont disponibles dans la carte d'édition :
 
-- saisir la poignée verticale dans la forme d'onde et la faire glisser ;
+- saisir la frontière sur toute sa hauteur, ou l'une de ses poignées, et la faire glisser ;
 - saisir un horaire dans **Début de section** ou **Fin de section** ;
 - utiliser `−` et `+` pour déplacer la frontière de 0,5 seconde.
 
 Les horaires `12:34`, `1:02:14` et `754` sont acceptés. Une valeur invalide est
 refusée et l'ancienne frontière est conservée.
+
+Le pointeur devient une main au survol de la tête de lecture et une double
+flèche horizontale au survol d'une frontière. Lorsque les deux traits se
+superposent, saisissez le milieu pour déplacer la lecture, ou une poignée en
+haut ou en bas pour déplacer la frontière.
 
 ### Garder ou supprimer
 
@@ -177,6 +185,12 @@ Deux comportements sont possibles :
 Le **fondu entre images** règle la transition du diaporama. En mode une image
 par morceau, il agit aux frontières de la vidéo complète ; une vidéo de piste
 individuelle garde une image fixe.
+
+Avec une image par morceau, le fondu d'image commence avec le morceau entrant.
+Si le fondu enchaîné de la vidéo et celui des images valent tous deux 2 secondes,
+leurs transitions commencent et finissent ensemble, sous réserve que les
+morceaux soient assez longs pour appliquer cette durée. Un chapitre trop court
+limite uniquement la transition qui le concerne.
 
 Le titre du morceau est incrusté sur chaque vidéo. Les proportions de l'image
 sont conservées et l'espace restant est rempli en noir.

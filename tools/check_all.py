@@ -45,6 +45,7 @@ def main() -> int:
     run(sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v")
     web_api()
     npm = "npm.cmd" if os.name == "nt" else "npm"
+    run(npm, "test", cwd=ROOT / "web")
     run(npm, "run", "check", cwd=ROOT / "web")
     run(npm, "run", "build", cwd=ROOT / "web")
     print("\nToutes les vérifications automatisées passent.")
