@@ -293,16 +293,12 @@ class Session {
     })
   }
 
-  /** Fait suivre la sélection à la tête de lecture.
+  /** Change ensemble le segment édité et sa vue.
 
-      La vue d'ensemble déplace la loupe quand on y clique ; le transport doit
-      faire de même, sinon écouter un concert d'un bout à l'autre laisse la
-      carte d'édition sur le premier morceau. Le zoom, lui, est respecté : on
-      ne recadre que si l'utilisateur ne s'est pas placé lui-même.
-
-      Et la vue ne suit plus quand on l'a choisie à la main : `pinned` tient
-      jusqu'au prochain déplacement volontaire de la tête de lecture. */
-  private follow(): void {
+      Le suivi automatique attend que le son quitte le cadre et respecte le
+      zoom. Une navigation explicite (transport, vue globale, clavier) cadre
+      le segment demandé, même s'il apparaissait déjà dans une marge. */
+  private follow(navigate = false): void {
     const index = this.segments.findIndex(
       (segment) => segment.start <= this.playhead && this.playhead < segment.end,
     )
@@ -314,8 +310,12 @@ class Session {
     // quitter une longue zone montrée en partie, et la tête sortirait de
     // l'écran sans que rien ne la rattrape.
     const shown = this.shows(this.playhead)
+    // Le segment édité et ses poignées appartiennent au cadrage. Passer dans
+    // une marge orange ne doit pas les remplacer par ceux du voisin.
+    if (!navigate && (shown || this.zoomed)) return
+    const changed = this.selected !== index
     this.selected = index
-    if (!this.zoomed && !shown) this.frame()
+    if (navigate ? changed || !shown : !this.zoomed) this.frame()
   }
 
   /** Vrai quand cet instant est déjà dans la fenêtre montrée. */
@@ -376,7 +376,7 @@ class Session {
     // Déplacer la tête soi-même, c'est demander à voir là où l'on va : la vue
     // reprend sa liberté de suivre.
     this.pinned = false
-    this.follow()
+    this.follow(true)
   }
 
   /** Déplace la tête de lecture sans toucher au cadrage.
@@ -444,7 +444,7 @@ class Session {
       return
     }
     if (seconds >= segment.end || seconds < segment.start - 0.5) {
-      this.seek(segment.start)
+      this.scrub(segment.start)
     }
   }
 

@@ -45,6 +45,7 @@ committer.
 ## Contrôles
 
 ```powershell
+npm test
 npm run check
 npm run build
 ```

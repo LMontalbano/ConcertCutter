@@ -28,7 +28,12 @@
   let colours: Palette = palette()
   let heights = $state<Float32Array>(new Float32Array(0))
   let width = $state(736)
-  let dragging = $state<'start' | 'end' | null>(null)
+  let dragging = $state<'start' | 'end' | 'playhead' | null>(null)
+  let pointer = $state<{ x: number; y: number } | null>(null)
+  let gesture: {
+    pointerId: number; clientX: number; moment: number;
+    index: number; selected: number; segments: typeof session.segments;
+  } | null = null
   let preview = $state<{ edge: 'start' | 'end'; at: number } | null>(null)
   let renaming = $state(false)
   let draft = $state('')
@@ -42,6 +47,11 @@
     end: segment ? segment.index : -1,
   })
   const lastEdge = $derived(session.segments.length - 2)
+  const cursor = $derived.by(() => {
+    if (dragging) return dragging === 'playhead' ? 'grabbing' : 'ew-resize'
+    const target = pointer ? targetAt(pointer.x, pointer.y) : null
+    return target === 'playhead' ? 'grab' : target ? 'ew-resize' : 'crosshair'
+  })
 
   function shown(edge: 'start' | 'end'): number {
     if (preview?.edge === edge) return preview.at
@@ -106,25 +116,56 @@
     }
   }
 
-  function grabbed(clientX: number): 'start' | 'end' | null {
-    if (!segment) return null
-    const near = (moment: number) => Math.abs(x(moment) - (clientX - canvas.getBoundingClientRect().left)) < 9
-    if (edges.start >= 0 && near(segment.start)) return 'start'
-    if (edges.end >= 0 && edges.end <= lastEdge && near(segment.end)) return 'end'
-    return null
+  function targetAt(clientX: number, clientY: number): 'start' | 'end' | 'playhead' | null {
+    if (!segment || !canvas) return null
+    const box = canvas.getBoundingClientRect()
+    const y = clientY - box.top
+    const px = clientX - box.left
+    if (px < 0 || px > box.width || y < 0 || y > box.height) return null
+    const distance = (moment: number) => Math.abs(x(moment) - px)
+    let edge: 'start' | 'end' | null = null
+    let nearest = 9
+    for (const candidate of ['start', 'end'] as const) {
+      const index = edges[candidate]
+      if (index < 0 || index > lastEdge) continue
+      const gap = distance(shown(candidate))
+      if (gap < nearest) {
+        edge = candidate
+        nearest = gap
+      }
+    }
+    // Les frontières se saisissent sur toute leur hauteur. En cas de
+    // superposition, les poignées restent réservées à la coupe ; au milieu,
+    // le trait le plus proche gagne, avec priorité à la lecture à égalité.
+    if (edge && (y <= 28 || y >= canvas.clientHeight - 28)) return edge
+    if (session.playhead >= session.viewStart &&
+        session.playhead <= session.viewStart + session.viewSpan &&
+        distance(session.playhead) < 9 && distance(session.playhead) <= nearest) {
+      return 'playhead'
+    }
+    return edge
   }
 
   function onPointerDown(event: PointerEvent): void {
-    const grip = grabbed(event.clientX)
+    if (event.button !== 0 || gesture || !segment) return
+    event.preventDefault()
+    pointer = { x: event.clientX, y: event.clientY }
+    const target = targetAt(event.clientX, event.clientY)
+    const grip = target === 'playhead' ? null : target
+    dragging = grip ?? 'playhead'
+    gesture = {
+      pointerId: event.pointerId, clientX: event.clientX,
+      moment: grip ? segment[grip] : at(event.clientX),
+      index: grip ? edges[grip] : -1,
+      selected: session.selected, segments: session.segments,
+    }
+    session.pinned = true
     if (!grip) {
       // `scrub` et non `seek` : écouter la zone à retirer voisine, montrée
       // exprès aux deux bouts de la carte, ne doit pas recadrer la vue
       // dessus. Voir la note de `Session.scrub`.
       session.scrub(at(event.clientX))
-      return
     }
-    dragging = grip
-    preview = { edge: grip, at: at(event.clientX) }
     grab(event.pointerId, true)
   }
 
@@ -145,29 +186,59 @@
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!dragging) {
-      canvas.style.cursor = grabbed(event.clientX) ? 'ew-resize' : 'crosshair'
+    pointer = { x: event.clientX, y: event.clientY }
+    if (!dragging || !gesture) {
       return
     }
-    preview = { edge: dragging, at: at(event.clientX) }
+    if (event.pointerId !== gesture.pointerId) return
+    if (dragging === 'playhead') session.scrub(at(event.clientX))
+    else if (Math.abs(event.clientX - gesture.clientX) >= 3) {
+      preview = { edge: dragging, at: boundaryAt(event.clientX) }
+    }
+  }
+
+  function boundaryAt(clientX: number): number {
+    return gesture!.moment + at(clientX) - at(gesture!.clientX)
+  }
+
+  function onPointerCancel(event: PointerEvent): void {
+    if (event.pointerId !== gesture?.pointerId) return
+    dragging = null
+    gesture = null
+    preview = null
+    grab(event.pointerId, false)
   }
 
   async function onPointerUp(event: PointerEvent): Promise<void> {
-    if (!dragging) return
+    if (!dragging || !gesture || event.pointerId !== gesture.pointerId) return
+    pointer = { x: event.clientX, y: event.clientY }
     const edge = dragging
-    const moment = at(event.clientX)
+    const origin = gesture
+    const moment = edge === 'playhead' ? at(event.clientX) : boundaryAt(event.clientX)
     dragging = null
+    gesture = null
     grab(event.pointerId, false)
-    const index = edge === 'start' ? edges.start : edges.end
+    if (edge === 'playhead') {
+      session.scrub(moment)
+      return
+    }
+    // Un clic sans glissé ne modifie rien. Si le segment a changé pendant le
+    // geste, aucune coupe du nouveau segment ne doit recevoir ce déplacement.
+    if (Math.abs(event.clientX - origin.clientX) < 3 ||
+        session.selected !== origin.selected || session.segments !== origin.segments) {
+      preview = null
+      return
+    }
     // Le tracé provisoire ne s'efface qu'une fois la réponse arrivée, qu'elle
     // accepte ou qu'elle refuse : l'effacer avant ferait sauter la frontière à
     // son ancienne place le temps d'un aller-retour.
-    await session.edit({ op: 'move_boundary', index, moment })
+    await session.edit({ op: 'move_boundary', index: origin.index, moment })
     preview = null
   }
 
   function onWheel(event: WheelEvent): void {
     event.preventDefault()
+    if (dragging) return
     session.zoom(event.deltaY > 0 ? 1.25 : 0.8, at(event.clientX))
   }
 
@@ -358,6 +429,7 @@
       </div>
 
       <div class="card-hints">
+        <span class="hint">Glisser : lecture · frontières : découpe</span>
         <span class="hint"><span class="kbd">Molette</span> Zoomer</span>
         <!-- « c » en minuscule, parce que la majuscule désigne autre chose :
              `Maj+C` sépare le morceau en deux pistes là où `c` pose une simple
@@ -370,9 +442,13 @@
 
     <canvas
       bind:this={canvas}
+      style:cursor
       onpointerdown={onPointerDown}
       onpointermove={onPointerMove}
+      onpointerleave={() => (pointer = null)}
       onpointerup={onPointerUp}
+      onpointercancel={onPointerCancel}
+      onlostpointercapture={onPointerCancel}
       onwheel={onWheel}
       aria-label="Forme d'onde détaillée du segment"
     ></canvas>

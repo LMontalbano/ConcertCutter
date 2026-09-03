@@ -76,14 +76,17 @@ Il exécute successivement :
 1. la compilation syntaxique de `concertcutter/`, `tools/` et `tests/` ;
 2. les tests de régression Python ;
 3. le contrôle HTTP de bout en bout sur un concert généré temporairement ;
-4. `svelte-check` ;
-5. la construction Vite.
+4. les tests de sélection et de lecture du frontend avec `npm test` ;
+5. `svelte-check` ;
+6. la construction Vite.
 
 Le script configure lui-même `PYTHONPATH` pour les outils. Il fonctionne depuis
 PowerShell, `cmd` et les shells Unix tant que Python et npm sont disponibles.
 
 Les contrôles vidéo sont séparés car ils demandent ffmpeg et créent des fichiers
-plus lourds. Pour vérifier l'export MP4 avec le faux concert :
+plus lourds. Les petits tests de synchronisation des fondus font toutefois
+partie des régressions et s'exécutent si ffmpeg est disponible.
+Pour vérifier l'export MP4 avec le faux concert :
 
 ```powershell
 $env:PYTHONPATH = "."

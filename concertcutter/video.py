@@ -391,9 +391,12 @@ def _chapters(captions: list[Caption], params: VideoParams,
         return None
 
     lengths = [max(0.2, float(end) - start) for start, end in spans]
-    fade = max(0.0, min(params.slide_fade_s, min(lengths) / 2))
+    # Le début d'un chapitre est le début du recouvrement audio. L'image
+    # entrante doit commencer à apparaître là, et non avoir déjà fini son fondu.
+    # Seul un chapitre trop court limite sa propre transition, pas tout le film.
+    fades = [min(max(0.0, params.slide_fade_s), length) for length in lengths[1:]]
     chosen = [stills[rank % len(stills)] for rank in range(len(lengths))]
-    signature = (tuple(chosen), tuple(round(value, 3) for value in lengths), fade,
+    signature = (tuple(chosen), tuple(round(value, 3) for value in lengths), tuple(fades),
                  params.width, params.height, params.fps, params.crf)
 
     with _cycle_lock:
@@ -403,31 +406,24 @@ def _chapters(captions: list[Caption], params: VideoParams,
         if _cycle_dir is None:
             _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
 
-        # Chaque image tient son morceau, plus de quoi fondre vers la suivante
-        # — la dernière comprise, dont le rabiot est coupé par `-t`. Uniforme,
-        # parce que le calcul des offsets qui suit l'est aussi : une exception
-        # sur la dernière décalait tout le fond, et le concert perdait une
-        # seconde de fond par morceau.
+        # L'image sortante reste disponible pendant le fondu qui commence
+        # au chapitre suivant. La dernière tient jusqu'à la fin de l'audio.
         inputs: list[str] = []
-        for still, length in zip(chosen, lengths):
-            inputs += ["-loop", "1", "-t", f"{length + fade:.3f}",
+        for still, length, outgoing in zip(chosen, lengths, fades + [0.0]):
+            inputs += ["-loop", "1", "-t", f"{length + outgoing:.3f}",
                        "-framerate", str(params.fps), "-i", still]
 
         chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
                  for index in range(len(chosen))]
-        if fade:
+        if any(fades):
             previous = "[s0]"
             elapsed = 0.0
             for index in range(1, len(chosen)):
                 elapsed += lengths[index - 1]
                 label = f"[x{index}]"
-                # Le fondu se termine pile à la frontière : l'image du morceau
-                # suivant est pleinement là quand il commence. L'offset se
-                # compte sur le flux déjà assemblé, dont la longueur vaut la
-                # somme des morceaux servis plus le rabiot d'un fondu.
                 chain.append(f"{previous}[s{index}]xfade=transition=fade"
-                             f":duration={fade:.3f}"
-                             f":offset={elapsed - fade:.3f}{label}")
+                             f":duration={fades[index - 1]:.3f}"
+                             f":offset={elapsed:.3f}{label}")
                 previous = label
             last = previous
         else:
