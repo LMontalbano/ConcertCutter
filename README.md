@@ -1,89 +1,84 @@
 # ConcertCutter
 
-Français · [English](README.en.md)
+[Français](README.fr.md) · English
 
-ConcertCutter découpe automatiquement un concert enregistré en morceaux. Il
-repère les passages à retirer — applaudissements, discussions, accordage — puis
-permet de corriger chaque coupe avant d'exporter le résultat en WAV ou en MP4.
+ConcertCutter automatically splits a recorded concert into tracks. It detects
+sections to remove—applause, talking and tuning—then lets you adjust every cut
+before exporting WAV or MP4 files.
 
-L'analyse et les fichiers restent sur votre ordinateur. L'interface utilise un
-serveur local protégé, accessible uniquement depuis la machine.
+Analysis and files stay on your computer. The interface uses a protected local
+server accessible only from your machine.
 
-## Télécharger
+## Download
 
-**[Télécharger ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)**
-pour Windows 10 ou 11.
+**[Download ConcertCutter.exe](https://github.com/LMontalbano/ConcertCutter/releases/latest/download/ConcertCutter.exe)**
+for Windows 10 or 11.
 
-L'exécutable est autonome : posez-le où vous voulez et double-cliquez dessus.
-Il n'installe ni Python ni dépendance système. Pour le supprimer, mettez le
-fichier à la corbeille.
+The executable is self-contained: put it wherever you like and double-click it.
+It does not install Python or system dependencies. To remove it, delete the file.
 
-Windows SmartScreen peut avertir au premier lancement d'une version non signée.
-Choisissez **Informations complémentaires**, puis **Exécuter quand même** si le
-fichier vient bien du lien ci-dessus.
+Windows SmartScreen may warn you when you first run an unsigned version. Select
+**More info**, then **Run anyway**, if the file came from the link above.
 
-## Langue
+## Language
 
-Depuis l’accueil ou la barre du concert, ouvrez **Options**, choisissez
-**Automatique (Windows)**, **Français** ou **English**, puis **Enregistrer les
-options**. Le changement s’applique sans redémarrer ni perdre le travail ouvert.
-**Annuler** conserve la langue précédente.
+Open **Options** from the welcome screen or the concert toolbar, then select
+**Automatic (Windows)**, **Français** or **English** and click **Save options**.
+The interface changes immediately without restarting or losing your work.
+**Cancel** keeps the previous language.
 
-Le mode automatique est activé par défaut : une langue d’affichage Windows
-française donne une interface française ; les autres langues, ou un échec de
-détection, donnent une interface anglaise. Le choix manuel est prioritaire et
-conservé entre les lancements, indépendamment des projets.
+Automatic is the default. It uses French when your Windows display language is
+French, and English for all other languages or if detection fails. A manual
+choice takes priority and is remembered across launches, independently of your
+projects. Returning to Automatic uses the Windows language detected at startup.
 
-## Premier export
+Your preference is stored in `%LOCALAPPDATA%\ConcertCutter\preferences.json`.
+Track titles and exported filenames are preserved when switching languages.
+Native Windows dialog buttons follow Windows settings.
 
-1. Cliquez sur **Ouvrir un enregistrement WAV** et choisissez le concert.
-2. Cliquez sur **Analyser**. Les morceaux apparaissent dans la liste de gauche
-   et le segment sélectionné dans la carte d'édition.
-3. Écoutez les transitions, déplacez les frontières si nécessaire et donnez un
-   titre aux morceaux.
-4. Cliquez sur **Exporter**, choisissez les morceaux, les fichiers à produire
-   et leur destination.
+## First export
 
-Aucune sortie n'est cochée à l'avance : choisissez explicitement le concert en
-un seul fichier, les pistes séparées, leurs équivalents vidéo, ou plusieurs de
-ces sorties.
+1. Click **Open a WAV recording** and choose your concert.
+2. Click **Analyze**. Tracks appear in the list on the left, with the selected
+   segment in the editing card.
+3. Listen to transitions, move boundaries as needed and name your tracks.
+4. Click **Export**, select the tracks, output formats and destination.
 
-## Corriger le découpage
+No output format is selected in advance. Explicitly choose the concert in one
+file, individual tracks, their video equivalents, or any combination.
 
-- Sélectionnez un morceau ou une zone à retirer dans la liste de gauche.
-- Cliquez dans la forme d'onde détaillée pour placer la tête de lecture.
-- Faites glisser une poignée de frontière, saisissez un horaire précis ou
-  utilisez les boutons `−` et `+` par pas de 0,5 seconde.
-- Utilisez **Garder** ou **Supprimer** pour changer le sort du segment.
-- Utilisez **Couper ici** pour créer une frontière et **Fusionner** pour retirer
-  la frontière de fin du segment sélectionné.
-- Cliquez sur le titre dans la carte, ou double-cliquez son titre dans la liste,
-  pour le renommer.
+## Adjust the cuts
 
-Les modifications peuvent être annulées avec `Ctrl+Z` et rétablies avec
-`Ctrl+Y`.
+- Select a track or a section to remove from the list on the left.
+- Click the detailed waveform to position the playhead.
+- Drag a boundary handle, enter an exact time, or use `−` and `+` in 0.5-second steps.
+- Use **Keep** or **Remove** to change what happens to the segment.
+- Use **Split here** to add a boundary and **Merge** to remove the selected
+  segment's end boundary.
+- Click the title in the editing card, or double-click it in the list, to rename it.
 
-| Raccourci | Action |
+Undo changes with `Ctrl+Z` and redo them with `Ctrl+Y`.
+
+| Shortcut | Action |
 |---|---|
-| `Espace` | Lecture ou pause |
-| `←` / `→` | Frontière précédente ou suivante |
-| `Origine` | Début de la section courante, puis section précédente |
-| `B` | Boucler le segment sous la tête de lecture |
-| `C` | Couper à la tête de lecture |
-| `Maj+C` | Séparer un morceau en deux pistes |
-| `Suppr` | Fusionner à la frontière sélectionnée |
-| `Échap` | Arrêter la lecture |
+| `Space` | Play or pause |
+| `←` / `→` | Previous or next boundary |
+| `Home` | Start of the current section, then the previous section |
+| `B` | Loop the segment under the playhead |
+| `C` | Split at the playhead |
+| `Shift+C` | Split a track into two tracks |
+| `Delete` | Merge at the selected boundary |
+| `Escape` | Stop playback |
 
-La sauvegarde est automatique après l'analyse et les modifications. L'écran
-d'accueil permet de reprendre un travail récent sans relancer l'analyse.
+Your work is saved automatically after analysis and edits. The welcome screen
+lets you resume a recent project without analyzing it again.
 
-Le [guide utilisateur](docs/guide-utilisateur.md) détaille l'écoute, l'édition,
-la reprise et tous les choix d'export.
+The [user guide](docs/user-guide.en.md) covers playback, editing, resuming projects
+and every export option.
 
-## Fichiers produits
+## Output files
 
-ConcertCutter crée un dossier portant le nom de l'enregistrement dans la
-destination choisie :
+ConcertCutter creates a folder named after the recording in your chosen destination:
 
 ```text
 Concert Antidote/
@@ -101,44 +96,42 @@ Concert Antidote/
     └── segments.json
 ```
 
-Seuls les fichiers demandés sont écrits. Les vidéos nécessitent au moins une
-image de fond et **ffmpeg**. Si ffmpeg manque, la fenêtre d'export propose de
-l'installer ; c'est la seule action qui télécharge un composant externe.
+Only the requested files are written. Video requires at least one background
+image and **ffmpeg**. If ffmpeg is missing, the export dialog offers to install
+it; this is the only action that downloads an external component.
 
-Un export existant n'est jamais écrasé silencieusement. L'application propose
-d'écrire à côté, de remplacer les fichiers de l'export précédent, ou d'annuler.
-Les fichiers ajoutés manuellement au dossier sont conservés.
+An existing export is never overwritten silently. The application offers to
+write alongside it, replace the previous export or cancel. Files you added to
+the folder manually are preserved.
 
-## Limites connues
+## Known limitations
 
-- L'interface graphique accepte les enregistrements WAV.
-- La détection fonctionne mieux quand la musique est nettement plus forte que
-  les échanges avec le public. Une captation de salle ou de téléphone demande
-  généralement davantage de corrections.
-- Deux morceaux enchaînés sans baisse de niveau ne peuvent pas être séparés
-  automatiquement par l'interface.
-- Le nombre de morceaux attendus aide à fusionner de fausses coupures, mais ne
-  peut pas inventer une frontière absente du signal.
-- Une personne qui parle par-dessus la musique peut rester dans le morceau.
+- The graphical interface accepts WAV recordings.
+- Detection works best when music is noticeably louder than audience sounds.
+  Room or phone recordings usually need more manual adjustment.
+- Two tracks with no drop in volume between them cannot be automatically
+  separated by the interface.
+- The expected track count helps merge false cuts, but cannot invent a missing boundary.
+- Speech over music may remain in the track.
 
-## Ligne de commande
+## Command line
 
-Pour le traitement par lot et les contrôles avancés :
+For batch processing and advanced controls:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m concertcutter run concert.wav -d sortie --expected-tracks 24
+python -m concertcutter run concert.wav -d output --expected-tracks 24
 ```
 
-Les commandes `analyze`, `render`, `run`, `verify` et `segues`, leurs options et
-leurs sorties sont décrites dans la [référence en ligne de
-commande](docs/ligne-de-commande.md).
+The `analyze`, `render`, `run`, `verify` and `segues` commands are documented in the
+[command-line reference (French)](docs/ligne-de-commande.md). Command-line messages
+remain in French.
 
-## Développer
+## Development
 
-Le cœur est en Python. L'interface Svelte est compilée puis servie localement
-par l'application Python et affichée dans une fenêtre WebView2, avec repli vers
-le navigateur par défaut.
+The core uses Python. The compiled Svelte interface is served locally by the
+Python application and displayed in a WebView2 window, with a fallback to the
+default browser.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -146,18 +139,10 @@ python gui.py test/faux_concert.wav
 python tools/check_all.py
 ```
 
-Consultez le [guide de développement](docs/developpement.md) pour l'installation
-de Node.js, le mode Vite, les tests, la construction de l'exécutable et la
-publication d'une release.
+See the [development guide (French)](docs/developpement.md) for setup, Vite,
+tests, executable builds and releases, and the [frontend README (French)](web/README.md).
 
-## Documentation
+## License
 
-- [Guide utilisateur](docs/guide-utilisateur.md)
-- [Référence en ligne de commande](docs/ligne-de-commande.md)
-- [Guide de développement](docs/developpement.md)
-- [Développement du frontend](web/README.md)
-
-## Licence
-
-[MIT](LICENSE). ffmpeg, lorsqu'il est installé depuis l'application, reste
-distribué par ses auteurs sous ses propres conditions.
+[MIT](LICENSE). ffmpeg, when installed through the application, remains distributed
+by its authors under its own terms.

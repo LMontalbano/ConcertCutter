@@ -4,7 +4,7 @@
 
 This guide describes the ConcertCutter graphical interface. To make your first
 export without exploring every option, start with the
-[README](../README.en.md#first-export).
+[README](../README.md#first-export).
 
 ## Choose your language
 
