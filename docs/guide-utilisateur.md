@@ -1,10 +1,10 @@
 # Guide utilisateur
 
-Français · [English](user-guide.en.md)
+[English](user-guide.en.md) · Français
 
 Ce guide décrit l'interface graphique actuelle de ConcertCutter. Pour réaliser
 un premier export sans parcourir toutes les options, suivez la prise en main du
-[README](../README.md#premier-export).
+[README](../README.fr.md#premier-export).
 
 ## Choisir la langue
 

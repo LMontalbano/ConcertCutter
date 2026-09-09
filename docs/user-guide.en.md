@@ -1,6 +1,6 @@
 # User guide
 
-[Français](guide-utilisateur.md) · English
+English · [Français](guide-utilisateur.md)
 
 This guide describes the ConcertCutter graphical interface. To make your first
 export without exploring every option, start with the
@@ -246,4 +246,4 @@ previous export and cleans up temporary files.
   a list of moments to listen to without modifying the project by default.
 
 For this command and batch processing, see the
-[command-line reference (French)](ligne-de-commande.md).
+[command-line reference](command-line.md).

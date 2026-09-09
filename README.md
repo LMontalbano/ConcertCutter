@@ -1,6 +1,6 @@
 # ConcertCutter
 
-[Français](README.fr.md) · English
+English · [Français](README.fr.md)
 
 ConcertCutter automatically splits a recorded concert into tracks. It detects
 sections to remove—applause, talking and tuning—then lets you adjust every cut
@@ -123,9 +123,8 @@ python -m pip install -r requirements.txt
 python -m concertcutter run concert.wav -d output --expected-tracks 24
 ```
 
-The `analyze`, `render`, `run`, `verify` and `segues` commands are documented in the
-[command-line reference (French)](docs/ligne-de-commande.md). Command-line messages
-remain in French.
+The `analyze`, `render`, `run`, `verify` and `segues` commands, their options and
+their outputs are documented in the [command-line reference](docs/command-line.md).
 
 ## Development
 
@@ -139,8 +138,15 @@ python gui.py test/faux_concert.wav
 python tools/check_all.py
 ```
 
-See the [development guide (French)](docs/developpement.md) for setup, Vite,
-tests, executable builds and releases, and the [frontend README (French)](web/README.md).
+See the [development guide](docs/development.md) for setup, Vite, tests,
+executable builds and releases.
+
+## Documentation
+
+- [User guide](docs/user-guide.en.md)
+- [Command-line reference](docs/command-line.md)
+- [Development guide](docs/development.md)
+- [Frontend development](web/README.md)
 
 ## License
 

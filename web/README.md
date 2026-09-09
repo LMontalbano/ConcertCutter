@@ -1,15 +1,17 @@
-# Développement du frontend
+# Frontend development
 
-L'interface utilise Svelte, TypeScript et Vite. Elle est compilée dans
-`../concertcutter/web/static/`, puis servie par le serveur Python et embarquée
-par PyInstaller.
+English · [Français](README.fr.md)
 
-Pour l'architecture générale, les tests et la publication, consultez le
-[guide de développement](../docs/developpement.md).
+The interface uses Svelte, TypeScript and Vite. It is built into
+`../concertcutter/web/static/`, then served by the Python server and bundled by
+PyInstaller.
 
-## Installer et compiler
+For the overall architecture, tests and publishing process, see the
+[development guide](../docs/development.md).
 
-Depuis `web/` :
+## Install and build
+
+From `web/`:
 
 ```powershell
 npm ci
@@ -17,32 +19,31 @@ npm run check
 npm run build
 ```
 
-`build_exe.bat` relance lui-même `npm ci` et `npm run build` avant PyInstaller.
+`build_exe.bat` runs `npm ci` and `npm run build` again before PyInstaller.
 
-## Développement avec Vite
+## Development with Vite
 
-Lancez d'abord le serveur Python depuis la racine du dépôt :
+First start the Python server from the repository root:
 
 ```powershell
 python gui.py --headless --port 8722 test/faux_concert.wav
 ```
 
-Puis Vite depuis `web/` :
+Then start Vite from `web/`:
 
 ```powershell
 npm run dev
 ```
 
-Ouvrez l'adresse affichée par Vite. Les appels `/api` sont redirigés vers
+Open the address shown by Vite. Requests to `/api` are proxied to
 `http://127.0.0.1:8722`.
 
-Le serveur Python protège l'API avec un jeton injecté dans la balise
-`<meta name="cc-token">`. En mode Vite, `index.html` est servi directement et
-garde le gabarit `__CC_TOKEN__` : remplacez temporairement cette valeur par le
-jeton affiché par le serveur headless, puis restaurez le gabarit avant de
-committer.
+The Python server protects the API with a token injected into the
+`<meta name="cc-token">` tag. In Vite mode, `index.html` is served directly and
+keeps the `__CC_TOKEN__` placeholder: temporarily replace it with the token
+shown by the headless server, then restore the placeholder before committing.
 
-## Contrôles
+## Checks
 
 ```powershell
 npm test
@@ -50,25 +51,25 @@ npm run check
 npm run build
 ```
 
-Le contrôle HTTP de bout en bout se lance depuis la racine avec :
+Run the end-to-end HTTP check from the repository root with:
 
 ```powershell
 python tools/check_all.py
 ```
 
-Il vérifie notamment le jeton, la lecture partielle du WAV, les éditions, la
-sauvegarde et la reprise.
+It checks the token, WAV range requests, edits, saving and project recovery,
+among other behavior.
 
-## Organisation
+## Structure
 
-| Emplacement | Rôle |
+| Location | Role |
 |---|---|
-| `src/lib/api.ts` | Client HTTP et types échangés avec Python |
-| `src/lib/session.svelte.ts` | État d'affichage, lecture, zoom et navigation |
-| `src/lib/wave.ts` | Dessin des formes d'onde sur canvas |
-| `src/components/` | Accueil, pistes, édition, transport, options et export |
-| `src/tokens.css` | Couleurs, dimensions et thèmes partagés |
-| `public/` | Polices et favicon embarquées |
+| `src/lib/api.ts` | HTTP client and types exchanged with Python |
+| `src/lib/session.svelte.ts` | Display state, playback, zoom and navigation |
+| `src/lib/wave.ts` | Waveform rendering on canvas |
+| `src/components/` | Welcome screen, tracks, editing, transport, options and export |
+| `src/tokens.css` | Shared colors, dimensions and themes |
+| `public/` | Bundled fonts and favicon |
 
-L'état persistant du travail, les règles d'édition et les exports restent côté
-Python. Le frontend demande des opérations ; il ne réimplémente pas ces règles.
+Persistent project state, editing rules and exports remain on the Python side.
+The frontend requests operations; it does not reimplement those rules.
