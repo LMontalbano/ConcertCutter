@@ -1,6 +1,6 @@
 # ConcertCutter
 
-Français · [English](README.md)
+[English](README.md) · Français
 
 ConcertCutter découpe automatiquement un concert enregistré en morceaux. Il
 repère les passages à retirer — applaudissements, discussions, accordage — puis
@@ -155,7 +155,7 @@ publication d'une release.
 - [Guide utilisateur](docs/guide-utilisateur.md)
 - [Référence en ligne de commande](docs/ligne-de-commande.md)
 - [Guide de développement](docs/developpement.md)
-- [Développement du frontend](web/README.md)
+- [Développement du frontend](web/README.fr.md)
 
 ## Licence
 

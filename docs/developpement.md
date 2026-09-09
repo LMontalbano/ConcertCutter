@@ -1,5 +1,7 @@
 # Guide de développement
 
+[English](development.md) · Français
+
 ConcertCutter associe un cœur Python à une interface Svelte servie localement.
 Ce guide couvre l'installation, le développement, les contrôles, la
 construction Windows et la publication.
@@ -61,7 +63,7 @@ python gui.py --browser test/faux_concert.wav
 ```
 
 Le mode de développement avec rechargement à chaud est décrit dans
-[`web/README.md`](../web/README.md).
+[`web/README.fr.md`](../web/README.fr.md).
 
 ## Vérifications
 
@@ -135,8 +137,8 @@ La mise à jour des numéros de version et des notes de release doit être faite
 relue avant le tag. Une fois la branche principale vérifiée :
 
 ```powershell
-git tag v3.0
-git push origin v3.0
+git tag v3.2
+git push origin v3.2
 ```
 
 Le workflow reconstruit l'application sur Windows, contrôle que l'exécutable a
@@ -161,4 +163,4 @@ reste une décision de publication explicite.
   `npm run build` avant la construction PyInstaller.
 
 La carte détaillée des fichiers frontend est maintenue dans
-[`web/README.md`](../web/README.md#organisation).
+[`web/README.fr.md`](../web/README.fr.md#organisation).

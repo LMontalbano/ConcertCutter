@@ -1,5 +1,7 @@
 # Référence en ligne de commande
 
+[English](command-line.md) · Français
+
 La CLI sert au traitement par lot, à la correction manuelle de fichiers JSON et
 aux contrôles avancés. L'interface graphique reste le parcours recommandé pour
 un travail interactif.
