@@ -22,6 +22,8 @@ Les travaux longs ne tiennent pas dans une requête : `/api/analyze` et
 
 from __future__ import annotations
 
+from ..i18n import Message
+
 import json
 import math
 import mimetypes
@@ -40,6 +42,8 @@ from .. import edits, ffmpeg_install, video
 from . import dialogs
 from .jobs import Jobs
 from .session import MissingSource, Session, SessionError
+from .preferences import Preferences
+from ..i18n import error_message, localize_payload
 
 STATIC = Path(__file__).parent / "static"
 CHUNK = 512 * 1024
@@ -55,6 +59,7 @@ class Application:
     """Ce que les routes partagent : une séance, des travaux, un jeton."""
 
     def __init__(self) -> None:
+        self.preferences = Preferences()
         self.session = Session()
         self.jobs = Jobs()
         self.token = secrets.token_urlsafe(32)
@@ -91,19 +96,19 @@ class Handler(BaseHTTPRequestHandler):
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if length < 0 or length > 1024 * 1024:
-            raise SessionError("Corps de requête trop volumineux.")
+            raise SessionError(Message('server.request_body_is_too_large'))
         if not length:
             return {}
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            raise SessionError("Corps JSON illisible.")
+            raise SessionError(Message('server.invalid_json_body'))
         if not isinstance(payload, dict):
-            raise SessionError("Le corps JSON doit être un objet.")
+            raise SessionError(Message('server.the_json_body_must_be_an_object'))
         return payload
 
     def _send(self, payload, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(localize_payload(payload, self.app.preferences.effective), ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -130,34 +135,40 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_static(route)
             return
         if not self._allowed():
-            self._fail("Jeton absent ou invalide.", HTTPStatus.FORBIDDEN)
+            self._fail(Message('server.missing_or_invalid_token'), HTTPStatus.FORBIDDEN)
             return
         try:
             self._get(route)
         except SessionError as refusal:
-            self._fail(str(refusal))
+            self._fail(error_message(refusal))
         except (TypeError, ValueError, OverflowError):
-            self._fail("Paramètres de requête illisibles.")
+            self._fail(Message('server.invalid_request_parameters'))
+        except Exception as failure:
+            self._fail(error_message(failure), HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
         if not self._allowed():
-            self._fail("Jeton absent ou invalide.", HTTPStatus.FORBIDDEN)
+            self._fail(Message('server.missing_or_invalid_token'), HTTPStatus.FORBIDDEN)
             return
         try:
             self._post(route, self._body())
         except MissingSource as lost:
-            self._fail(str(lost), HTTPStatus.CONFLICT, missing=str(lost.source))
+            self._fail(error_message(lost), HTTPStatus.CONFLICT, missing=str(lost.source))
         except SessionError as refusal:
-            self._fail(str(refusal))
+            self._fail(error_message(refusal))
         except (TypeError, ValueError, OverflowError):
-            self._fail("Paramètres de requête illisibles.")
+            self._fail(Message('server.invalid_request_parameters'))
+        except Exception as failure:
+            self._fail(error_message(failure), HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _get(self, route: str) -> None:
         session, jobs = self.app.session, self.app.jobs
         query = self._query()
 
-        if route == "/api/state":
+        if route == "/api/preferences":
+            self._send(self.app.preferences.payload())
+        elif route == "/api/state":
             payload = session.state()
             startup = self.app.startup
             if startup is not None and startup.state != "done":
@@ -183,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/job":
             job = jobs.get(query.get("id", [""])[0])
             if job is None:
-                self._fail("Travail inconnu.", HTTPStatus.NOT_FOUND)
+                self._fail(Message('server.unknown_job'), HTTPStatus.NOT_FOUND)
             else:
                 self._send(job.payload())
         elif route == "/api/audio":
@@ -197,20 +208,25 @@ class Handler(BaseHTTPRequestHandler):
             raw, kind = session.image_bytes(query.get("path", [""])[0])
             self._send_bytes(raw, kind)
         else:
-            self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
+            self._fail(Message('server.unknown_route'), HTTPStatus.NOT_FOUND)
 
     def _post(self, route: str, body: dict) -> None:
         session, jobs = self.app.session, self.app.jobs
 
-        if route == "/api/open":
+        if route == "/api/preferences":
+            try:
+                self._send(self.app.preferences.update(body.get("language")))
+            except (ValueError, OSError) as failure:
+                self._fail(error_message(failure), 500 if isinstance(failure, OSError) else 400)
+        elif route == "/api/open":
             self._open(body)
         elif route == "/api/pick":
             self._pick(body)
         elif route == "/api/analyze":
             if jobs.running("analyze"):
-                self._fail("Une analyse est déjà en cours.")
+                self._fail(Message('server.analysis_is_already_running'))
                 return
-            job = jobs.start("analyze", session.analyze, "Préparation…")
+            job = jobs.start("analyze", session.analyze, Message('server.preparing'))
             self._send(job.payload())
         elif route == "/api/edit":
             self._send(self._edit(body))
@@ -225,10 +241,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(session.plan_export(body))
         elif route == "/api/export":
             if jobs.running("export"):
-                self._fail("Un export est déjà en cours.")
+                self._fail(Message('server.an_export_is_already_running'))
                 return
             job = jobs.start("export", lambda work: session.render(body, work),
-                             "Préparation…")
+                             Message('server.preparing'))
             self._send(job.payload())
         elif route == "/api/save":
             written = session.save()
@@ -249,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/api/cancel":
             job = jobs.cancel(str(body.get("id", "")))
             if job is None:
-                self._fail("Travail inconnu.", HTTPStatus.NOT_FOUND)
+                self._fail(Message('server.unknown_job'), HTTPStatus.NOT_FOUND)
             else:
                 self._send(job.payload())
         elif route == "/api/ffmpeg":
@@ -262,14 +278,14 @@ class Handler(BaseHTTPRequestHandler):
             jobs.stop_all()
             self.app.quit.set()
         else:
-            self._fail("Route inconnue.", HTTPStatus.NOT_FOUND)
+            self._fail(Message('server.unknown_route'), HTTPStatus.NOT_FOUND)
 
     @staticmethod
     def _float_query(query: dict, name: str, fallback: float,
                      low: float, high: float) -> float:
         value = float(query.get(name, [str(fallback)])[0])
         if not math.isfinite(value) or not low <= value <= high:
-            raise SessionError(f"Paramètre « {name} » hors limites.")
+            raise SessionError(Message('server.parameter_value_is_out_of_range', p0=str(name)))
         return value
 
     @staticmethod
@@ -278,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = query.get(name, [str(fallback)])[0]
         value = int(raw)
         if str(value) != str(raw).strip() or not low <= value <= high:
-            raise SessionError(f"Paramètre « {name} » hors limites.")
+            raise SessionError(Message('server.parameter_value_is_out_of_range', p0=str(name)))
         return value
 
     # -- gestes ------------------------------------------------------------
@@ -292,8 +308,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         path = body.get("path")
         if not path:
-            path = (dialogs.ask_project() if body.get("kind") == "project"
-                    else dialogs.ask_wav())
+            path = (dialogs.ask_project(self.app.preferences.effective) if body.get("kind") == "project"
+                    else dialogs.ask_wav(self.app.preferences.effective))
         if not path:
             self._send({"cancelled": True, **self.app.session.state()})
             return
@@ -301,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
             "open",
             lambda work: (self.app.session.open(path, work, body.get("source")),
                           self.app.session.state())[1],
-            "Import en cours…")
+            Message('server.importing'))
         self._send(job.payload())
 
     def _pick(self, body: dict) -> None:
@@ -312,13 +328,13 @@ class Handler(BaseHTTPRequestHandler):
             # Passées par la liste blanche au passage : ce sont les seules que
             # `/api/image` acceptera de servir en vignette.
             self._send({"paths": self.app.session.allow_image(
-                dialogs.ask_images())})
+                dialogs.ask_images(self.app.preferences.effective))})
         elif kind == "source":
-            self._send({"path": dialogs.ask_source() or ""})
+            self._send({"path": dialogs.ask_source(self.app.preferences.effective) or ""})
         elif kind == "project":
-            self._send({"path": dialogs.ask_project() or ""})
+            self._send({"path": dialogs.ask_project(self.app.preferences.effective) or ""})
         else:
-            self._send({"path": dialogs.ask_wav() or ""})
+            self._send({"path": dialogs.ask_wav(self.app.preferences.effective) or ""})
 
     def _edit(self, body: dict) -> dict:
         """Une opération d'édition, nommée par le front, exécutée par `edits`.
@@ -354,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
         if operation == "set_title":
             title = str(body.get("title", ""))
             return session.apply(lambda s: edits.set_title(s, index, title))
-        raise SessionError(f"Geste inconnu : {operation}")
+        raise SessionError(Message('server.unknown_action_value', p0=str(operation)))
 
     def _navigate(self, query: dict) -> float:
         """Où portent les flèches et la touche Origine.
@@ -376,15 +392,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _install_ffmpeg(self) -> None:
         if not ffmpeg_install.supported():
-            self._fail("L'installation automatique n'existe que sous Windows.")
+            self._fail(Message('server.automatic_installation_is_only_available_on_windows'))
             return
         if self.app.jobs.running("ffmpeg"):
-            self._fail("L'installation est déjà en cours.")
+            self._fail(Message('server.installation_is_already_running'))
             return
 
         def work(job):
             def tick(step: str, done: int, total: int) -> None:
-                job.phase = step
+                job.phase = Message('progress.' + step) if step in ('download', 'extract') else step
                 job.done, job.total = done, total
 
             path = ffmpeg_install.install(progress=tick)
@@ -393,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
             # laisse la vidéo indisponible, et il vaut mieux le dire.
             return {"path": str(path), "blocked": video.unavailable_reason()}
 
-        self._send(self.app.jobs.start("ffmpeg", work, "Téléchargement…").payload())
+        self._send(self.app.jobs.start("ffmpeg", work, Message('server.downloading')).payload())
 
     # -- fichiers ----------------------------------------------------------
 
@@ -401,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
         """Le WAV source, par tranches, tel que `<audio>` le réclame."""
         source = self.app.session.source
         if source is None or not source.exists():
-            self._fail("Aucun enregistrement ouvert.", HTTPStatus.NOT_FOUND)
+            self._fail(Message('server.no_recording_is_open'), HTTPStatus.NOT_FOUND)
             return
         size = source.stat().st_size
         kind = RANGE_TYPES.get(source.suffix.lower(), "application/octet-stream")
@@ -480,13 +496,13 @@ class Handler(BaseHTTPRequestHandler):
             route = "/index.html"
         target = (STATIC / route.lstrip("/")).resolve()
         if not target.is_relative_to(STATIC.resolve()):
-            self._fail("Chemin refusé.", HTTPStatus.FORBIDDEN)
+            self._fail(Message('server.path_not_allowed'), HTTPStatus.FORBIDDEN)
             return
         if not target.is_file():
             # Une seule page : tout ce qui n'est pas un fichier retombe dessus.
             target = STATIC / "index.html"
         if not target.is_file():
-            self._fail("L'interface n'est pas compilée. Voir web/README.md.",
+            self._fail(Message('server.the_interface_has_not_been_built_see_web'),
                        HTTPStatus.NOT_FOUND)
             return
 

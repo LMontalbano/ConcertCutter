@@ -1,3 +1,4 @@
+import { t } from './i18n.svelte'
 /* L'état de l'écran : ce que le serveur dit, plus ce qui ne le regarde pas.
 
    La segmentation, l'historique et les réglages vivent côté Python — le
@@ -149,7 +150,7 @@ class Session {
   private adopt(found: State): void {
     this.state = found
     if (!found.source) {
-      this.screen = 'empty'
+      if (this.screen !== 'options') this.screen = 'empty'
       return
     }
     if (this.screen === 'empty') this.screen = 'main'
@@ -188,7 +189,7 @@ class Session {
       this.playhead = 0
       this.framed = false
       await this.refresh()
-      this.note(`« ${this.state?.name ?? ''} » ouvert.`)
+      this.note(t('ui.opened_value', { p0: this.state?.name ?? '' }))
     })
   }
 
@@ -213,7 +214,7 @@ class Session {
       this.envelope = new Float32Array(0)
       await this.refresh()
       this.showFirstTrack()
-      this.note(`${this.counts.tracks} morceaux trouvés.`)
+      this.note(t('count.found', { count: this.counts.tracks }))
     })
   }
 
@@ -397,7 +398,7 @@ class Session {
   toggle(): void {
     if (!this.audio) return
     if (this.playing) this.audio.pause()
-    else void this.audio.play().catch(() => this.note("La lecture n'a pas démarré."))
+    else void this.audio.play().catch(() => this.note(t('ui.playback_could_not_start')))
   }
 
   stop(): void {
@@ -421,7 +422,7 @@ class Session {
       (segment) => segment.start <= this.playhead && this.playhead < segment.end,
     )
     if (index < 0) {
-      this.note('Aucun segment sous le curseur.')
+      this.note(t('ui.no_segment_under_the_playhead'))
       return
     }
     this.loop = index
@@ -494,8 +495,7 @@ class Session {
 
 export function message(failure: unknown): string {
   if (failure instanceof ApiError) return failure.message
-  if (failure instanceof Error) return failure.message
-  return String(failure)
+  return t('error.unexpected', { detail: failure instanceof Error ? failure.message : String(failure) })
 }
 
 export const session = new Session()

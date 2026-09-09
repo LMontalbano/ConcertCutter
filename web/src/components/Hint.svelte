@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Une explication qui ne prend de la place que si on la demande.
 
      La fenêtre d'export portait sous chaque case le paragraphe qui l'explique.
@@ -70,7 +71,7 @@
   bind:this={badge}
   class="badge"
   type="button"
-  aria-label="En savoir plus"
+  aria-label={t('ui.learn_more')}
   onmouseenter={show}
   onmouseleave={() => (open = false)}
   onfocus={show}

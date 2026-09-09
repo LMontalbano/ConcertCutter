@@ -18,6 +18,8 @@ que personne ne peut deviner.
 
 from __future__ import annotations
 
+from ..i18n import Message
+
 import argparse
 import sys
 import threading
@@ -68,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         app.startup = app.jobs.start(
             "open", lambda job: (app.session.open(chosen.input, job),
                                   app.session.state())[1],
-            "Import en cours…")
+            Message('server.importing'))
 
     page = f"{address}?token={app.token}"
     try:

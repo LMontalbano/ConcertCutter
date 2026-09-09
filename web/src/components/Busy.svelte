@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Ce qui se passe pendant qu'on attend.
 
      Deux barres différentes, parce que deux attentes différentes : l'export
@@ -31,7 +32,7 @@
 
 <div class="veil">
   <div class="panel">
-    <div class="phase">{job.phase || 'Un instant…'}</div>
+    <div class="phase">{job.phase || t('ui.one_moment')}</div>
     <div class="track" class:endless={job.total === 0}>
       <div class="fill" style={job.total > 0 ? `width:${share * 100}%` : ''}></div>
     </div>
@@ -40,7 +41,7 @@
          une lecture de quinze secondes : une phrase qui n'apprend rien vaut
          moins que le silence. -->
     {#if job.total > 0}
-      <div class="mono count">{job.done} sur {job.total}</div>
+      <div class="mono count">{t('progress.count', { done: job.done, total: job.total })}</div>
     {/if}
 
     <!-- L'arrêt se demande, il ne s'impose pas : l'export finit le morceau
@@ -50,7 +51,7 @@
     {#if stoppable}
       <div class="acts">
         <button class="btn quiet" onclick={stop} disabled={asked}>
-          {asked ? 'Arrêt demandé…' : 'Arrêter l’export'}
+          {asked ? t('ui.stop_requested') : t('ui.stop_export')}
         </button>
       </div>
     {/if}

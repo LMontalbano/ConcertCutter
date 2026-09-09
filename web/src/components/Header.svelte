@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* La barre du haut : ce qui est ouvert, ce qui est à l'abri, et l'export. */
   import { session } from '../lib/session.svelte'
   import { hms, savedAgo } from '../lib/format'
@@ -23,7 +24,7 @@
       <span class="name" title={session.state?.name}>{session.state?.name}</span>
       <div class="meta">
         <span class="mono badge accent">{hms(session.duration)}</span>
-        <span class="badge">{session.counts.tracks} morceaux</span>
+        <span class="badge">{t('count.tracks', { count: session.counts.tracks })}</span>
         {#if saved}
           <span class="saved-status" title={saved}>
             <span class="dot"></span>
@@ -35,13 +36,13 @@
   </div>
 
   <div class="right">
-    <div class="group" role="toolbar" aria-label="Historique">
+    <div class="group" role="toolbar" aria-label={t('ui.history')}>
       <button
         class="btn quiet icon"
         disabled={!session.state?.canUndo}
         onclick={() => session.undo()}
-        aria-label="Annuler"
-        title="Annuler (Ctrl+Z)"
+        aria-label={t('history.undo')}
+        title={t('ui.undo_ctrl_z')}
       >
         <span class="icon-glyph">↺</span>
       </button>
@@ -49,8 +50,8 @@
         class="btn quiet icon"
         disabled={!session.state?.canRedo}
         onclick={() => session.redo()}
-        aria-label="Rétablir"
-        title="Rétablir (Ctrl+Y)"
+        aria-label={t('ui.redo')}
+        title={t('ui.redo_ctrl_y')}
       >
         <span class="icon-glyph">↻</span>
       </button>
@@ -58,22 +59,22 @@
 
     <span class="split"></span>
 
-    <div class="group" role="toolbar" aria-label="Projet et réglages">
+    <div class="group" role="toolbar" aria-label={t('ui.project_and_settings')}>
       <button
         class="btn quiet"
         onclick={() => session.openFile('wav')}
-        title="Ouvrir un autre enregistrement, ou reprendre un travail"
+        title={t('ui.open_another_recording_or_resume_a_project')}
       >
-        <span>Importer…</span>
+        <span>{t('ui.import')}</span>
       </button>
-      <button class="btn quiet" onclick={onOptions} title="Réglages de détection et de montage">
-        <span>Options</span>
+      <button class="btn quiet" onclick={onOptions} title={t('ui.detection_and_editing_settings')}>
+        <span>{t('ui.options')}</span>
       </button>
       <button
         class="btn quiet icon theme-btn"
         onclick={() => session.flip()}
-        aria-label={session.theme === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
-        title={session.theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
+        aria-label={session.theme === 'dark' ? t('ui.switch_to_light_mode') : t('ui.switch_to_dark_mode')}
+        title={session.theme === 'dark' ? t('ui.switch_to_light') : t('ui.switch_to_dark')}
       >
         <span class="theme-icon">{session.theme === 'dark' ? '☀' : '☾'}</span>
       </button>
@@ -85,9 +86,9 @@
       class="btn strong export-btn"
       disabled={!session.analysed}
       onclick={onExport}
-      title="Exporter le concert et ses morceaux"
+      title={t('ui.export_the_concert_and_its_tracks')}
     >
-      <span>Exporter</span>
+      <span>{t('ui.export')}</span>
     </button>
   </div>
 </header>

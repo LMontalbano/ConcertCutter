@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* L'écran d'accueil : ouvrir un enregistrement ou reprendre un travail. */
   import { api, type RecentProject } from '../lib/api'
   import { session } from '../lib/session.svelte'
@@ -38,42 +39,40 @@
 <main>
   <div class="sheet">
     <div class="header-badge">
-      <img class="hero-logo" src={logoUrl} alt="Logo ConcertCutter" width="40" height="40" />
+      <img class="hero-logo" src={logoUrl} alt={t('ui.concertcutter_logo')} width="40" height="40" />
       <div class="hero-title-group">
         <h1>ConcertCutter</h1>
-        <span class="hero-tagline">Découpage & Montage Audio</span>
+        <span class="hero-tagline">{t('ui.audio_splitting_editing')}</span>
       </div>
     </div>
 
-    <p class="lead">
-      Découpez automatiquement un concert enregistré en morceaux, en retirant les blancs et applaudissements.
-    </p>
+    <p class="lead">{t('ui.automatically_split_a_recorded_concert_into_tracks_removing')}</p>
 
     {#if session.dialogs}
       <div class="acts">
         <button class="btn strong open-btn" onclick={() => session.openFile('wav')}>
-          <span>Ouvrir un enregistrement WAV</span>
+          <span>{t('ui.open_a_wav_recording')}</span>
         </button>
         <button class="btn resume-btn" onclick={() => session.openFile('project')}>
-          <span>Reprendre un travail…</span>
+          <span>{t('ui.resume_a_project')}</span>
         </button>
       </div>
     {:else}
       <form class="typed" onsubmit={(event) => (event.preventDefault(), session.openFile('wav', typed))}>
         <input
           bind:value={typed}
-          placeholder="C:\chemin\vers\le concert.wav"
+          placeholder={t('ui.c_path_to_concert_wav')}
           spellcheck="false"
         />
-        <button class="btn strong" type="submit">Ouvrir</button>
+        <button class="btn strong" type="submit">{t('ui.open')}</button>
       </form>
     {/if}
 
     {#if recent.length}
       <div class="recent">
         <div class="recent-header">
-          <span class="label">Travaux récents</span>
-          <span class="hint">Reprise instantanée</span>
+          <span class="label">{t('ui.recent_projects')}</span>
+          <span class="hint">{t('ui.resume_instantly')}</span>
         </div>
         <div class="recent-list">
           {#each recent as work (work.path)}
@@ -82,19 +81,23 @@
               <div class="work-info">
                 <span class="who">{work.name}</span>
                 <span class="mono when">
-                  {savedAgo(work.saved) || 'enregistré'}
+                  {savedAgo(work.saved) || t('ui.saved')}
                 </span>
               </div>
-              <span class="badge accent">{work.tracks} morceaux</span>
+              <span class="badge accent">{t('count.tracks', { count: work.tracks })}</span>
             </button>
           {/each}
         </div>
       </div>
     {/if}
+    <div class="preferences-link">
+      <button class="btn quiet" onclick={() => (session.screen = 'options')}>{t('ui.options')}</button>
+    </div>
   </div>
 </main>
 
 <style>
+  .preferences-link { margin-top: 18px; display: flex; justify-content: flex-end; }
   main {
     flex: 1;
     display: grid;

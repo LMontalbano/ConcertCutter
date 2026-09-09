@@ -22,6 +22,8 @@ jamais chercher quoi que ce soit toute seule au démarrage.
 
 from __future__ import annotations
 
+from .i18n import Message, error_message
+
 import os
 import shutil
 import subprocess
@@ -84,7 +86,7 @@ def install(progress: Progress | None = None,
     qu'une fois qu'il a répondu à `ffmpeg -version`.
     """
     if not supported():
-        raise RuntimeError("L'installation automatique n'existe que sous Windows.")
+        raise RuntimeError(Message('server.automatic_installation_is_only_available_on_windows'))
 
     target = video.install_dir()
     target.mkdir(parents=True, exist_ok=True)
@@ -97,9 +99,9 @@ def install(progress: Progress | None = None,
         except Cancelled:
             raise
         except Exception as error:  # réseau, archive illisible, disque plein…
-            problems.append(f"{label} : {error}")
+            problems.append(Message('error.download_source', source=label, detail=error_message(error)))
 
-    raise RuntimeError("Le téléchargement a échoué.\n" + "\n".join(problems))
+    raise RuntimeError(Message('error.download_failed', first=problems[0], second=problems[1] if len(problems) > 1 else ''))
 
 
 def _sweep(target: Path) -> None:
@@ -158,8 +160,7 @@ def _download(url: str, into: Path, progress: Progress | None,
     # contrôle, l'échec se manifesterait plus loin sous la forme d'une archive
     # « corrompue », qui n'oriente vers rien.
     if total and into.stat().st_size != total:
-        raise RuntimeError("téléchargement interrompu "
-                           f"({into.stat().st_size} octets sur {total})")
+        raise RuntimeError(Message('server.download_interrupted_value_bytes_out_of_value', p0=str(into.stat().st_size), p1=str(total)))
 
 
 def _extract(archive: Path, work: Path, progress: Progress | None,
@@ -178,7 +179,7 @@ def _extract(archive: Path, work: Path, progress: Progress | None,
             None,
         )
         if member is None:
-            raise RuntimeError("l'archive ne contient pas bin/ffmpeg.exe")
+            raise RuntimeError(Message('server.the_archive_does_not_contain_bin_ffmpeg_exe'))
 
         _tick(progress, "extract", 0, member.file_size)
         out_path = work / "ffmpeg.exe"
@@ -209,10 +210,9 @@ def _check(exe: Path) -> None:
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               creationflags=flags, timeout=60)
     except OSError as error:
-        raise RuntimeError(f"ffmpeg téléchargé mais inutilisable ({error})")
+        raise RuntimeError(Message('server.downloaded_ffmpeg_is_unusable_value', p0=str(error)))
     if done.returncode != 0:
-        raise RuntimeError("ffmpeg téléchargé mais inutilisable "
-                           f"(code {done.returncode})")
+        raise RuntimeError(Message('server.downloaded_ffmpeg_is_unusable_code_value', p0=str(done.returncode)))
 
 
 def uninstall() -> bool:

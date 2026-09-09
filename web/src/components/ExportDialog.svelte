@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Ce qu'on écrit, et où. Les décisions d'interface sont explicites ici :
 
      - **trois questions numérotées, dans l'ordre où on se les pose** : quels
@@ -24,40 +25,28 @@
   import { duration as spell, trackLabel } from '../lib/format'
   import Hint from './Hint.svelte'
   import ExportImages from './ExportImages.svelte'
+  import NumberInput from './NumberInput.svelte'
 
   /* Les explications, à part du balisage : elles restent aussi longues et
      aussi précises qu'avant, mais se lisent à la demande. Les rassembler ici
      les rend aussi relisibles d'un coup d'œil, ce qu'elles n'étaient plus une
      fois dispersées entre les cases. */
-  const WHY = {
+  const WHY = $derived({
     pieces:
-      "Décocher un morceau ne change ni le découpage ni la numérotation : la " +
-      "piste 7 s'appellera « 07 » même si elle part seule. Pour retirer un " +
-      "passage du concert lui-même, c'est la carte d'édition.",
+      t('ui.deselecting_a_track_changes_neither_the_edits_nor'),
     full:
-      "Un seul WAV : les morceaux bout à bout, blancs retirés. Une cue sheet " +
-      "l'accompagne dans « infos », pour retrouver les morceaux à la lecture " +
-      'ou à la gravure.',
+      t('ui.a_single_wav_containing_the_tracks_back_to'),
     tracks:
-      "Numéroté et nommé d'après le titre saisi. C'est ce qu'attend un lecteur " +
-      'ou une clé USB.',
+      t('ui.numbered_and_named_using_the_title_you_entered'),
     crossfade:
-      "La fin d'un morceau se fond dans le début du suivant. À zéro, ils se " +
-      'suivent bout à bout, comme sur un disque. Le réglage ne vaut que pour ' +
-      'la sortie sous laquelle il se trouve : le WAV et le MP4 du concert ' +
-      "entier s'enchaînent chacun à sa façon, et les fichiers par morceau " +
-      "n'ont rien à enchaîner.",
+      t('ui.the_end_of_each_track_fades_into_the'),
     videoFull:
-      "Sur l'image de fond. Le titre affiché suit le morceau en cours plutôt " +
-      'que de rester figé deux heures.',
+      t('ui.uses_the_background_image_the_displayed_title_follows'),
     videoTracks:
-      "Son titre incrusté. C'est la forme qu'attendent les plateformes qui " +
-      "n'acceptent que de la vidéo.",
+      t('ui.includes_the_track_title_overlaid_on_the_image'),
     dir:
-      "Le concert reçoit son propre dossier ici, nommé d'après " +
-      "l'enregistrement. Un export déjà présent n'est jamais écrasé sans qu'on " +
-      'le demande.',
-  }
+      t('ui.the_concert_gets_its_own_folder_here_named'),
+  })
 
   let { onClose, onBusy }: { onClose: () => void; onBusy: (job: Job | null) => void } =
     $props()
@@ -116,13 +105,13 @@
 
   const missing = $derived(
     !picked.size
-      ? 'Cocher au moins un morceau à exporter.'
+      ? t('ui.select_at_least_one_track_to_export')
       : !(choice.full || choice.tracks || choice.video_full || choice.video_tracks)
-        ? 'Cocher au moins un fichier à écrire.'
+        ? t('ui.select_at_least_one_output_file')
         : (choice.video_full || choice.video_tracks) && !choice.images.length
-          ? 'Choisir au moins une image de fond des vidéos.'
+          ? t('ui.choose_at_least_one_video_background_image')
           : !choice.dir
-            ? 'Choisir la destination.'
+            ? t('ui.choose_a_destination')
             : '',
   )
 
@@ -151,6 +140,7 @@
   let asking = $state(false)
 
   function attempt(): void {
+    if (![...panel.querySelectorAll('input')].every(input => input.reportValidity())) return
     if (mismatch) {
       asking = true
       return
@@ -216,11 +206,11 @@
       const done = await follow(job, (tick) => onBusy(tick))
       onBusy(null)
       if (done.state === 'cancelled') {
-        session.note('Export interrompu. Le précédent est resté en place.')
+        session.note(t('ui.export_stopped_the_previous_export_was_preserved'))
         return
       }
       const written = (done.result as { dir?: string })?.dir ?? target
-      session.note(`Export terminé — ${written}`)
+      session.note(t('ui.export_complete_value', { p0: written }))
       await session.refresh()
     } catch (failure) {
       onBusy(null)
@@ -244,14 +234,12 @@
      suivante. -->
 {#snippet crossfadeKnob(field: 'crossfade' | 'video_crossfade', on: boolean)}
   <div class="knob" class:off={!on}>
-    <label for={field}>Fondu enchaîné<Hint text={WHY.crossfade} /></label>
-    <input
+    <label for={field}>{t('ui.crossfade')}<Hint text={WHY.crossfade} /></label>
+    <NumberInput
       id={field}
-      class="mono"
-      type="number"
-      min="0"
-      max="60"
-      step="0.5"
+      min={0}
+      max={60}
+      step={0.5}
       disabled={!on}
       bind:value={choice[field]}
     />
@@ -274,15 +262,14 @@
     tabindex="-1"
   >
     <header>
-      <h1 id="export-title">Exporter</h1>
-      <button class="btn quiet" onclick={onClose}>Fermer</button>
+      <h1 id="export-title">{t('ui.export')}</h1>
+      <button class="btn quiet" onclick={onClose}>{t('ui.close')}</button>
     </header>
 
     <div class="body">
       <section>
         <h2>
-          <span class="step">1</span> Quels morceaux ?
-          <Hint text={WHY.pieces} side="right" />
+          <span class="step">1</span>{t('ui.which_tracks')}<Hint text={WHY.pieces} side="right" />
           <!-- Le bouton est passé du bas de la liste à la ligne du titre :
                sous vingt-cinq morceaux qui défilent, il attendait qu'on
                descende pour se montrer, alors qu'on s'en sert avant de
@@ -297,7 +284,7 @@
                   ? new Set()
                   : new Set(tracks.map((track) => track.number)))}
           >
-            {allPicked ? 'Tout décocher' : 'Tout cocher'}
+            {allPicked ? t('ui.deselect_all') : t('ui.select_all')}
           </button>
         </h2>
         <div class="picks">
@@ -309,7 +296,7 @@
                 onchange={() => toggle(track.number)}
               />
               <span class="mono num">{trackLabel(track.number)}</span>
-              <span class="who">{track.title || `Piste ${trackLabel(track.number)}`}</span>
+              <span class="who">{track.title || t('ui.track_value_116', { p0: trackLabel(track.number) })}</span>
               <span class="mono len">{spell(track.end - track.start)}</span>
             </label>
           {/each}
@@ -318,34 +305,29 @@
 
       <div class="right">
       <section class="scrolls">
-        <h2><span class="step">2</span> Sous quelle forme ?</h2>
+        <h2><span class="step">2</span>{t('ui.which_formats')}</h2>
 
-        <span class="label">Audio</span>
+        <span class="label">{t('ui.audio')}</span>
         <div class="line">
           <label>
             <input type="checkbox" bind:checked={choice.full} />
-            <b>Le concert en un seul fichier</b>
+            <b>{t('ui.the_concert_in_one_file')}</b>
           </label>
           <Hint text={WHY.full} />
         </div>
         <div class="line">
           <label>
             <input type="checkbox" bind:checked={choice.tracks} />
-            <b>Un fichier par morceau</b>
+            <b>{t('ui.one_file_per_track')}</b>
           </label>
           <Hint text={WHY.tracks} />
         </div>
 
         {@render crossfadeKnob('crossfade', choice.full)}
 
-        <span class="label vid">Vidéo</span>
+        <span class="label vid">{t('ui.video')}</span>
         {#if blocked}
-          <p class="why">
-            La vidéo demande ffmpeg, un outil qui ne fait pas partie de
-            ConcertCutter — une centaine de mégaoctets, contre 27 pour
-            l'application entière, pour une sortie dont on se passe souvent. Le
-            bouton s'en charge, une fois pour toutes.
-          </p>
+          <p class="why">{t('ui.video_requires_ffmpeg_a_tool_supplied_separately_from')}</p>
           {#if installing}
             <p class="mono progress">
               {installing.phase}
@@ -354,20 +336,20 @@
               {/if}
             </p>
           {:else}
-            <button class="btn" onclick={installFfmpeg}>Installer ffmpeg (110 Mo)</button>
+            <button class="btn" onclick={installFfmpeg}>{t('ui.install_ffmpeg_110_mb')}</button>
           {/if}
         {:else}
           <div class="line">
             <label>
               <input type="checkbox" bind:checked={choice.video_full} />
-              <b>Un MP4 du concert entier</b>
+              <b>{t('ui.one_mp4_of_the_entire_concert')}</b>
             </label>
             <Hint text={WHY.videoFull} />
           </div>
           <div class="line">
             <label>
               <input type="checkbox" bind:checked={choice.video_tracks} />
-              <b>Un MP4 par morceau</b>
+              <b>{t('ui.one_mp4_per_track')}</b>
             </label>
             <Hint text={WHY.videoTracks} />
           </div>
@@ -383,17 +365,16 @@
 
       <section class="anchored">
         <h2>
-          <span class="step">3</span> Où ?
-          <Hint text={WHY.dir} />
+          <span class="step">3</span>{t('ui.where')}<Hint text={WHY.dir} />
         </h2>
         <div class="dir">
-          <input class="mono" bind:value={choice.dir} placeholder="Aucun dossier choisi" />
+          <input class="mono" bind:value={choice.dir} placeholder={t('ui.no_folder_selected')} />
           {#if session.dialogs}
             <!-- Tonal comme « Ajouter des images… » : un bouton de contour
                  posé contre un champ de saisie a le même dessin que lui, et
                  se lit comme une deuxième case plutôt que comme l'action qui
                  remplit la première. -->
-            <button class="btn tonal" onclick={chooseDir}>Parcourir…</button>
+            <button class="btn tonal" onclick={chooseDir}>{t('ui.browse')}</button>
           {/if}
         </div>
       </section>
@@ -403,22 +384,14 @@
     {#if asking && mismatch}
       <div class="conflict">
         <b>
-          {mismatch.images} image{mismatch.images > 1 ? 's' : ''} pour
-          {mismatch.wanted} morceau{mismatch.wanted > 1 ? 'x' : ''} à exporter.
+          {t('export.mismatch', { images: t('count.images', { count: mismatch.images }), tracks: t('count.tracks', { count: mismatch.wanted }) })}
         </b>
         <ul>
           {#if mismatch.short}
-            <li>
-              « Une seule image par morceau » est cochée, et il en manque : une
-              fois la dernière atteinte, l'export repart de la première. Les
-              images se répètent donc jusqu'au bout du concert.
-            </li>
+            <li>{t('ui.one_image_per_track_is_selected_but_there')}</li>
           {:else}
             <li>
-              « Une seule image par morceau » est cochée, et il y en a plus que
-              de morceaux : {mismatch.images - mismatch.wanted} ne
-              {mismatch.images - mismatch.wanted > 1 ? 'seront' : 'sera'} pas
-              utilisée{mismatch.images - mismatch.wanted > 1 ? 's' : ''}.
+              {t('export.unused_images', { count: mismatch.images - mismatch.wanted })}
             </li>
           {/if}
         </ul>
@@ -429,48 +402,39 @@
               asking = false
               start()
             }}
-          >
-            Exporter quand même
-          </button>
-          <button class="btn quiet" onclick={() => (asking = false)}>
-            Revenir aux images
-          </button>
+          >{t('ui.export_anyway')}</button>
+          <button class="btn quiet" onclick={() => (asking = false)}>{t('ui.back_to_images')}</button>
         </div>
       </div>
     {/if}
 
     {#if conflict}
       <div class="conflict">
-        <b>Ce dossier contient déjà un export.</b>
+        <b>{t('ui.this_folder_already_contains_an_export')}</b>
         <ul>
           {#if conflict.overwritten}
-            <li>{conflict.overwritten} fichier(s) seraient écrasés</li>
+            <li>{t('export.overwritten', { count: conflict.overwritten })}</li>
           {/if}
           {#if conflict.leftovers}
             <li>
-              {conflict.leftovers} fichier(s) d'un export précédent resteraient
-              mélangés aux nouveaux
+              {t('export.leftovers', { count: conflict.leftovers })}
             </li>
           {/if}
         </ul>
         <div class="issues">
           <button class="btn accent" onclick={() => start(conflict!.proposed, false)}>
-            Écrire à côté, dans « {conflict.proposed.split(/[\\/]/).pop()} »
+            {t('export.beside', { name: conflict.proposed.split(/[\\/]/).pop() })}
           </button>
-          <button class="btn" onclick={() => start(conflict!.target, true)}>
-            Remplacer l'export précédent
-          </button>
-          <button class="btn quiet" onclick={() => (conflict = null)}>Ne rien faire</button>
+          <button class="btn" onclick={() => start(conflict!.target, true)}>{t('ui.replace_the_previous_export')}</button>
+          <button class="btn quiet" onclick={() => (conflict = null)}>{t('ui.do_nothing')}</button>
         </div>
       </div>
     {/if}
 
     <footer>
       <span class="refuse">{refused || missing}</span>
-      <button class="btn quiet" onclick={onClose}>Annuler</button>
-      <button class="btn strong" disabled={Boolean(missing)} onclick={attempt}>
-        Exporter
-      </button>
+      <button class="btn quiet" onclick={onClose}>{t('ui.cancel')}</button>
+      <button class="btn strong" disabled={Boolean(missing)} onclick={attempt}>{t('ui.export')}</button>
     </footer>
   </div>
 </div>
@@ -678,7 +642,7 @@
     color: var(--ink-2);
   }
 
-  .knob input,
+  .knob :global(input),
   .dir input {
     height: 32px;
     padding: 0 8px;
@@ -689,12 +653,12 @@
     outline: none;
   }
 
-  .knob input {
+  .knob :global(input) {
     text-align: right;
     font: 600 13px var(--mono);
   }
 
-  .knob input:focus,
+  .knob :global(input:focus),
   .dir input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-soft);

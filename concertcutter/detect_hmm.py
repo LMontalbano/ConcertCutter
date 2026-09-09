@@ -17,6 +17,8 @@ plus les frontières sont nettes.
 
 from __future__ import annotations
 
+from .i18n import Message
+
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -55,7 +57,7 @@ def analyze(
     info = probe(path)
     feats = features or extract(path, frame_s=params.frame_s)
     if len(feats) == 0:
-        raise ValueError("Fichier trop court pour être analysé.")
+        raise ValueError(Message('server.the_recording_is_too_short_to_analyze'))
 
     level = moving_average(feats.rms_db, int(round(params.smooth_s * feats.fps)))
 
@@ -87,8 +89,7 @@ def analyze(
 
     if modes.separation_db < MIN_SEPARATION_DB:
         warnings.append(
-            f"Modes très proches ({modes.separation_db:.1f} dB) : le niveau seul "
-            "ne suffit probablement pas sur cet enregistrement."
+            Message('server.the_levels_are_very_close_value_db_volume', p0=format(modes.separation_db, '.1f'))
         )
 
     found = Analysis(
@@ -237,9 +238,7 @@ def _enforce_track_count(runs, level, modes, fps, expected: int):
         index, score = min(candidates, key=lambda item: item[1])
         start, stop, _ = working[index]
         notes.append(
-            f"Blanc fusionné à {_stamp(start / fps)} "
-            f"({(stop - start) / fps:.0f} s, score {score:.0f}) "
-            "pour atteindre le nombre de morceaux attendu."
+            Message('server.merged_gap_at_value_value_s_score_value', p0=str(_stamp(start / fps)), p1=format((stop - start) / fps, '.0f'), p2=format(score, '.0f'))
         )
         working[index] = (start, stop, True)
         working = merge_runs(working)
@@ -247,8 +246,7 @@ def _enforce_track_count(runs, level, modes, fps, expected: int):
     found = track_count(working)
     if found < expected:
         notes.append(
-            f"{found} morceaux détectés pour {expected} attendus. Il manque des "
-            "frontières : essayer --min-gap plus court ou --min-song plus court."
+            Message('server.detected_value_tracks_expected_value_boundaries_are_missing', p0=str(found), p1=str(expected))
         )
     return working, notes
 

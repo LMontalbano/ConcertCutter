@@ -81,6 +81,7 @@ python -m PyInstaller ^
     --name ConcertCutter ^
     --add-data "concertcutter/web/static;concertcutter/web/static" ^
     --add-data "concertcutter/assets;concertcutter/assets" ^
+    --add-data "concertcutter/locales;concertcutter/locales" ^
     --icon concertcutter/assets/icon.ico ^
     --exclude-module matplotlib ^
     --exclude-module scipy ^

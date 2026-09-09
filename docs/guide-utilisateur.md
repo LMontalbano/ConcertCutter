@@ -1,8 +1,27 @@
 # Guide utilisateur
 
+Français · [English](user-guide.en.md)
+
 Ce guide décrit l'interface graphique actuelle de ConcertCutter. Pour réaliser
 un premier export sans parcourir toutes les options, suivez la prise en main du
 [README](../README.md#premier-export).
+
+## Choisir la langue
+
+Ouvrez **Options** depuis l’accueil ou la barre du concert. Dans **Langue**,
+choisissez **Automatique (Windows)**, **Français** ou **English**, puis
+**Enregistrer les options**. La traduction s’applique immédiatement, sans
+redémarrage ni perte du travail ouvert. **Annuler** conserve le choix précédent.
+
+Le mode automatique, activé par défaut, suit la langue d’affichage de Windows :
+français pour une langue française, anglais dans les autres cas et si la
+détection échoue. Windows est interrogé à chaque lancement. Un choix manuel
+prend la priorité et reste conservé pour tous les projets dans
+`%LOCALAPPDATA%\ConcertCutter\preferences.json`.
+
+Les titres saisis et les noms des fichiers exportés restent inchangés. Les
+boutons des dialogues natifs suivent Windows. Les détails techniques des outils
+externes peuvent rester dans leur langue d’origine sous un message traduit.
 
 ## Ouvrir ou reprendre un concert
 
@@ -241,7 +260,7 @@ Si la destination contient déjà un export, trois choix sont proposés :
 Le manifeste caché dans `infos/` permet de remplacer uniquement les fichiers
 produits par ConcertCutter. Un fichier ajouté manuellement est conservé.
 
-L'analyse et l'export peuvent être interrompus depuis leur écran de progression.
+L'export peut être interrompu depuis son écran de progression.
 Un export interrompu laisse l'export précédent en place et nettoie ses fichiers
 temporaires.
 

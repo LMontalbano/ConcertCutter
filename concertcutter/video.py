@@ -19,6 +19,8 @@ au lieu d'échouer une heure plus tard.
 
 from __future__ import annotations
 
+from .i18n import Message
+
 import os
 import shutil
 import subprocess
@@ -213,13 +215,11 @@ def unavailable_reason() -> str | None:
     """Ce qui manque pour exporter en vidéo, en une phrase. None si tout va bien."""
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
-        return ("ffmpeg est introuvable. Installez-le, ou déposez ffmpeg.exe "
-                "à côté de ConcertCutter.exe.")
+        return (Message('server.ffmpeg_could_not_be_found_install_it_or'))
     if not _has_filter("drawtext"):
-        return ("Cette version de ffmpeg ne sait pas incruster de texte "
-                "(filtre drawtext absent).")
+        return (Message('server.this_version_of_ffmpeg_cannot_overlay_text_the'))
     if find_font() is None:
-        return "Aucune police de caractères trouvée pour écrire le titre."
+        return Message('server.no_font_was_found_for_the_title_overlay')
     return None
 
 
@@ -285,10 +285,10 @@ def write_video(audio: str | Path, captions: str | list[Caption],
 
     stills = params.stills()
     if not stills:
-        raise ValueError("Choisir l'image de fond des vidéos.")
+        raise ValueError(Message('server.choose_a_video_background_image'))
     for still in stills:
         if not Path(still).exists():
-            raise FileNotFoundError(f"Image de fond introuvable : {still}")
+            raise FileNotFoundError(Message('server.background_image_not_found_value', p0=str(still)))
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -675,13 +675,12 @@ def _run(command: list[str], capture: bool = False,
             if time.monotonic() - began > timeout:
                 _end(child)
                 raise RuntimeError(
-                    "ffmpeg ne répond plus : encodage abandonné après "
-                    f"{timeout / 3600:.0f} h.")
+                    Message('server.ffmpeg_stopped_responding_encoding_abandoned_after_value_hours', p0=format(timeout / 3600, '.0f')))
 
     if child.returncode != 0 and not capture:
         detail = err.decode("utf-8", "replace").strip().splitlines()
         raise RuntimeError(
-            "ffmpeg a échoué : " + (detail[-1] if detail else "raison inconnue")
+            Message('error.ffmpeg_failed', detail=detail[-1] if detail else Message('server.unknown_reason'))
         )
     return out.decode("utf-8", "replace")
 

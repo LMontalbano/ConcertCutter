@@ -1,29 +1,22 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   import { tick } from 'svelte'
   import { api, type ExportChoice } from '../lib/api'
   import Hint from './Hint.svelte'
+  import NumberInput from './NumberInput.svelte'
 
   let { choice, enabled }: { choice: ExportChoice; enabled: boolean } = $props()
 
-  const HELP = {
+  const HELP = $derived({
     onePerTrack:
-      'Le morceau 1 reçoit la première image, le 2 la deuxième, et ainsi de ' +
-      "suite ; le cycle recommence s'il y a moins d'images que de morceaux. " +
-      'Dans la vidéo du concert entier, le fond change donc au morceau ; dans ' +
-      'les vidéos de morceaux, chacune garde la sienne. Décochée, les images ' +
-      'défilent au chronomètre, ici comme là.',
+      t('ui.track_1_gets_the_first_image_track_2'),
     slideOnly:
-      'Durée du fondu entre deux images. Avec une image par morceau, il joue ' +
-      'aux frontières de morceaux, dans la vidéo du concert entier ; une vidéo ' +
-      "de morceau n'a qu'une image, donc rien à fondre.",
+      t('ui.duration_of_the_transition_between_images_with_one'),
     slideshow:
-      "Les images se relaient dans l'ordre ci-dessus, une toutes les huit " +
-      'secondes, et le cycle recommence aussi longtemps que dure le son. ' +
-      'Chacune garde ses proportions et se centre sur du noir.',
+      t('ui.images_play_in_the_order_above_changing_every'),
     stills:
-      'Photos du concert, pochette, affiche. Le titre du morceau est incrusté ' +
-      'par-dessus.',
-  }
+      t('ui.concert_photos_cover_art_or_a_poster_the'),
+  })
 
   let dragged = $state<number | null>(null)
   let over = $state<{ index: number; after: boolean } | null>(null)
@@ -84,8 +77,8 @@
 
 <div class="images" class:off={!enabled}>
   <div class="images-head">
-    <span class="label">Fonds</span>
-    <button class="btn tonal" onclick={add}>Ajouter des images…</button>
+    <span class="label">{t('ui.backgrounds')}</span>
+    <button class="btn tonal" onclick={add}>{t('ui.add_images')}</button>
   </div>
   {#if choice.images.length}
     <ul ondragover={(event) => event.preventDefault()} ondragleave={leave}>
@@ -101,8 +94,8 @@
               class="move"
               bind:this={tiles[index]}
               draggable="true"
-              title="Glisser pour changer l'ordre"
-              aria-label="Fond {index + 1} sur {choice.images.length}. Flèches gauche et droite pour déplacer."
+              title={t('ui.drag_to_reorder')}
+              aria-label={t('images.reorder', { index: index + 1, total: choice.images.length })}
               ondragstart={(event) => grab(index, event)}
               ondragover={(event) => hover(index, event)}
               ondrop={drop}
@@ -126,8 +119,8 @@
                 class="drop"
                 onclick={() =>
                   (choice.images = choice.images.filter((_, rank) => rank !== index))}
-                aria-label="Retirer cette image"
-                title="Retirer"
+                aria-label={t('ui.remove_this_image')}
+                title={t('ui.remove_174')}
               >×</button>
             </div>
           </div>
@@ -138,30 +131,27 @@
     <div class="line tight">
       <label>
         <input type="checkbox" bind:checked={choice.one_per_track} />
-        <b>Une seule image par morceau</b>
+        <b>{t('ui.one_image_per_track')}</b>
       </label>
       <Hint text={HELP.onePerTrack} />
     </div>
 
     <div class="knob" class:off={choice.one_per_track && !choice.video_full}>
-      <label for="slide">
-        Fondu entre images<Hint
+      <label for="slide">{t('ui.image_transition')}<Hint
           text={choice.one_per_track ? HELP.slideOnly : HELP.slideshow}
         />
       </label>
-      <input
+      <NumberInput
         id="slide"
-        class="mono"
-        type="number"
-        min="0"
-        max="60"
-        step="0.5"
+        min={0}
+        max={60}
+        step={0.5}
         bind:value={choice.slide_fade}
       />
       <span class="unit">s</span>
     </div>
   {:else}
-    <em>Photos du concert, pochette, affiche.<Hint text={HELP.stills} /></em>
+    <em>{t('ui.concert_photos_cover_art_poster')}<Hint text={HELP.stills} /></em>
   {/if}
 </div>
 
@@ -327,7 +317,7 @@
     white-space: nowrap;
   }
 
-  .knob input {
+  .knob :global(input) {
     height: 30px;
     padding: 0 8px;
     border: 1px solid var(--border);
@@ -336,7 +326,7 @@
     text-align: right;
   }
 
-  .knob input:focus { border-color: var(--accent); }
+  .knob :global(input:focus) { border-color: var(--accent); }
 
   .unit,
   em {
