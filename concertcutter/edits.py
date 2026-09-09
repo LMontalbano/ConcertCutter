@@ -19,6 +19,8 @@ rien ne s'est passé.
 
 from __future__ import annotations
 
+from .i18n import Message
+
 from .segment import GAP, MUSIC, Segment, normalize
 
 SPLIT_GAP_S = 2.0
@@ -52,7 +54,7 @@ def delete_boundary(segments: list[Segment], index: int) -> list[Segment]:
     `segments[index + 1]` — la même numérotation que la vue forme d'onde.
     """
     if not (0 <= index < len(segments) - 1):
-        raise EditError("Aucune frontière sélectionnée.")
+        raise EditError(Message('server.no_boundary_selected'))
     result = copy(segments)
     before, after = result[index], result[index + 1]
     # Le segment fusionné prend le type du plus long des deux : supprimer la
@@ -111,11 +113,10 @@ def _cut(segments: list[Segment], moment: float, join: bool) -> list[Segment]:
         if not (segment.start < moment < segment.end):
             continue
         if join and segment.kind != MUSIC:
-            raise EditError("Un blanc n'a pas à être séparé en morceaux. "
-                            "« Couper ici » y pose une frontière.")
+            raise EditError(Message('server.a_gap_cannot_be_split_into_tracks_use'))
         if (moment - half - segment.start < MIN_PIECE_S
                 or segment.end - (moment + half) < MIN_PIECE_S):
-            raise EditError("Trop près du bord du segment pour couper ici.")
+            raise EditError(Message('server.too_close_to_the_segment_edge_to_split'))
 
         result = copy(segments)
         pieces = [
@@ -135,7 +136,7 @@ def _cut(segments: list[Segment], moment: float, join: bool) -> list[Segment]:
         result[index : index + 1] = pieces
         return result
 
-    raise EditError("Aucun segment sous le curseur.")
+    raise EditError(Message('server.no_segment_under_the_playhead'))
 
 
 def set_kinds(segments: list[Segment], wanted: dict[int, str]) -> list[Segment]:
@@ -154,7 +155,7 @@ def set_kinds(segments: list[Segment], wanted: dict[int, str]) -> list[Segment]:
                if 0 <= position < len(segments)
                and segments[position].kind != kind}
     if not changes:
-        raise EditError("Rien à changer.")
+        raise EditError(Message('server.nothing_to_change'))
     result = copy(segments)
     for position, kind in changes.items():
         result[position].kind = kind
@@ -164,7 +165,7 @@ def set_kinds(segments: list[Segment], wanted: dict[int, str]) -> list[Segment]:
 def toggle_kind(segments: list[Segment], position: int) -> list[Segment]:
     """Inverse le sort d'un segment."""
     if not (0 <= position < len(segments)):
-        raise EditError("Segment inconnu.")
+        raise EditError(Message('server.unknown_segment'))
     current = segments[position].kind
     return set_kinds(segments, {position: GAP if current == MUSIC else MUSIC})
 
@@ -178,12 +179,11 @@ def move_boundary(segments: list[Segment], index: int,
     concert et ne se déplacent pas — ils n'ont pas de frontière derrière eux.
     """
     if not (0 <= index < len(segments) - 1):
-        raise EditError("Le début du concert et sa fin ne se déplacent pas.")
+        raise EditError(Message('server.the_start_and_end_of_the_concert_cannot'))
     floor, ceiling = bounds(segments, index)
     if not (floor <= moment <= ceiling):
         raise EditError(
-            f"À placer entre {_hms(floor)} et {_hms(ceiling)} — au-delà, la "
-            "frontière traverserait un segment voisin.")
+            Message('server.place_between_value_and_value_otherwise_the_boundary', p0=str(_hms(floor)), p1=str(_hms(ceiling))))
     result = copy(segments)
     result[index].end = moment
     result[index + 1].start = moment
@@ -206,7 +206,7 @@ def set_title(segments: list[Segment], position: int, title: str) -> list[Segmen
     `Analysis.track_at` n'irait jamais lire, la tête ayant la priorité.
     """
     if not (0 <= position < len(segments)):
-        raise EditError("Segment inconnu.")
+        raise EditError(Message('server.unknown_segment'))
     result = copy(segments)
     result[track_start(segments, position)].title = title.strip()
     return result

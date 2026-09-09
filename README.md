@@ -1,5 +1,7 @@
 # ConcertCutter
 
+Français · [English](README.en.md)
+
 ConcertCutter découpe automatiquement un concert enregistré en morceaux. Il
 repère les passages à retirer — applaudissements, discussions, accordage — puis
 permet de corriger chaque coupe avant d'exporter le résultat en WAV ou en MP4.
@@ -19,6 +21,18 @@ fichier à la corbeille.
 Windows SmartScreen peut avertir au premier lancement d'une version non signée.
 Choisissez **Informations complémentaires**, puis **Exécuter quand même** si le
 fichier vient bien du lien ci-dessus.
+
+## Langue
+
+Depuis l’accueil ou la barre du concert, ouvrez **Options**, choisissez
+**Automatique (Windows)**, **Français** ou **English**, puis **Enregistrer les
+options**. Le changement s’applique sans redémarrer ni perdre le travail ouvert.
+**Annuler** conserve la langue précédente.
+
+Le mode automatique est activé par défaut : une langue d’affichage Windows
+française donne une interface française ; les autres langues, ou un échec de
+détection, donnent une interface anglaise. Le choix manuel est prioritaire et
+conservé entre les lancements, indépendamment des projets.
 
 ## Premier export
 

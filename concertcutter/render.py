@@ -14,6 +14,8 @@ explicite, et tient un manifeste pour savoir exactement ce qu'il avait écrit.
 
 from __future__ import annotations
 
+from .i18n import Message
+
 import json
 import math
 import os
@@ -88,7 +90,7 @@ class ExportConflict(Exception):
         self.leftovers = leftovers       # resteraient d'un export précédent
         total = len(overwritten) + len(leftovers)
         super().__init__(
-            f"{out_dir} contient déjà un export ({total} fichier(s) concerné(s))."
+            Message('server.value_already_contains_an_export_value_affected_file', p0=str(out_dir), p1=str(total))
         )
 
 
@@ -179,7 +181,7 @@ def render(
     _validate_params(analysis, params)
     out_dir = Path(out_dir)
     if out_dir.exists() and not out_dir.is_dir():
-        raise NotADirectoryError(f"La destination n'est pas un dossier : {out_dir}")
+        raise NotADirectoryError(Message('server.the_destination_is_not_a_folder_value', p0=str(out_dir)))
 
     info = probe(analysis.source)
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
@@ -243,12 +245,12 @@ def _render_into(
     info = probe(analysis.source)
     tracks = analysis.tracks
     if not tracks:
-        raise ValueError("Aucun segment musical à rendre.")
+        raise ValueError(Message('server.no_music_segment_to_render'))
     if not (params.write_full or params.write_tracks or params.write_video):
         raise ValueError(
-            "Choisir au moins une sortie : album continu, pistes ou vidéos.")
+            Message('server.choose_at_least_one_output_full_concert_tracks'))
     if params.selection is not None and not params.selection:
-        raise ValueError("Choisir au moins un morceau à exporter.")
+        raise ValueError(Message('server.choose_at_least_one_track_to_export'))
     # Contrôlé avant d'écrire quoi que ce soit : découvrir à la vingtième piste
     # que ffmpeg manque laisserait un export à moitié fait.
     if params.write_video:
@@ -256,7 +258,7 @@ def _render_into(
 
     spans = _padded_spans(analysis, params, info.samplerate, info.frames)
     if not spans:
-        raise ValueError("La sélection ne contient aucun morceau exportable.")
+        raise ValueError(Message('server.the_selection_contains_no_exportable_tracks'))
     fade_len = int(round(params.fade_ms / 1000.0 * info.samplerate))
     names = _planned_names(spans, titles, params, tracks)
 
@@ -482,22 +484,22 @@ def _link_or_copy(source: str, target: str) -> str:
 
 def _validate_params(analysis: Analysis, params: RenderParams) -> None:
     limits = (
-        (params.fade_ms, "Fondus", 0.0, 10_000.0),
-        (params.pad_start_s, "Amorce", 0.0, 60.0),
-        (params.pad_end_s, "Queue", 0.0, 60.0),
-        (params.crossfade_s, "Fondu enchaîné", 0.0, 60.0),
-        (params.video_crossfade_s, "Fondu enchaîné de la vidéo", 0.0, 60.0),
-        (params.video_slide_fade_s, "Fondu entre images", 0.0, 60.0),
+        (params.fade_ms, Message('settings.fades'), 0.0, 10_000.0),
+        (params.pad_start_s, Message('settings.lead_in'), 0.0, 60.0),
+        (params.pad_end_s, Message('settings.tail'), 0.0, 60.0),
+        (params.crossfade_s, Message('server.crossfade'), 0.0, 60.0),
+        (params.video_crossfade_s, Message('server.video_crossfade'), 0.0, 60.0),
+        (params.video_slide_fade_s, Message('server.image_transition'), 0.0, 60.0),
     )
     for value, label, low, high in limits:
         if not math.isfinite(value) or not low <= value <= high:
-            raise ValueError(f"{label} doit être compris entre {low:g} et {high:g}.")
+            raise ValueError(Message('server.value_must_be_between_value_and_value', p0=label, p1=format(low, 'g'), p2=format(high, 'g')))
     if params.selection is None:
         return
     allowed = {track.number for track in analysis.tracks}
     if (not params.selection or len(set(params.selection)) != len(params.selection)
             or not set(params.selection) <= allowed):
-        raise ValueError("La sélection contient un morceau inconnu.")
+        raise ValueError(Message('server.the_selection_contains_an_unknown_track'))
 
 
 def _check_video(params: RenderParams) -> None:
@@ -509,10 +511,10 @@ def _check_video(params: RenderParams) -> None:
     """
     stills = _video_params(params).stills()
     if not stills:
-        raise ValueError("Choisir l'image de fond des vidéos.")
+        raise ValueError(Message('server.choose_a_video_background_image'))
     for still in stills:
         if not Path(still).exists():
-            raise FileNotFoundError(f"Image de fond introuvable : {still}")
+            raise FileNotFoundError(Message('server.background_image_not_found_value', p0=str(still)))
     reason = video.unavailable_reason()
     if reason:
         raise ValueError(reason)

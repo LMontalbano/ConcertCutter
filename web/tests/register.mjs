@@ -7,7 +7,7 @@ import { compileModule } from 'svelte/compiler'
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith('.') && context.parentURL?.endsWith('.ts') &&
-        !specifier.endsWith('.ts')) {
+        !specifier.endsWith('.ts') && !specifier.endsWith('.json')) {
       return nextResolve(`${specifier}.ts`, context)
     }
     return nextResolve(specifier, context)

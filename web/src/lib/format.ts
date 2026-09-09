@@ -1,3 +1,4 @@
+import { t, locale } from './i18n.svelte'
 /* Les horaires, tels qu'ils s'écrivent et se relisent.
 
    Trois formes, et une seule raison à chacune : `hms` pour situer (11:24),
@@ -18,7 +19,8 @@ export function tenths(seconds: number): string {
   // — qui vaut 217,099999… en virgule flottante — s'affichait « 03:37,0 » :
   // le stepper avait bougé la coupe, et le champ jurait le contraire.
   const dixiemes = Math.round(Math.max(0, seconds) * 10)
-  return `${hms(Math.floor(dixiemes / 10))},${dixiemes % 10}`
+  const separator = locale.effectiveLanguage === 'fr' ? ',' : '.'
+  return `${hms(Math.floor(dixiemes / 10))}${separator}${dixiemes % 10}`
 }
 
 export function duration(seconds: number): string {
@@ -59,10 +61,10 @@ export function savedAgo(stamp: string): string {
   const when = new Date(stamp)
   if (Number.isNaN(when.getTime())) return ''
   const elapsed = (Date.now() - when.getTime()) / 1000
-  if (elapsed < 45) return "Enregistré à l'instant"
-  if (elapsed < 90) return 'Enregistré il y a une minute'
-  if (elapsed < 3600) return `Enregistré il y a ${Math.round(elapsed / 60)} minutes`
-  if (elapsed < 7200) return 'Enregistré il y a une heure'
-  if (elapsed < 86400) return `Enregistré il y a ${Math.round(elapsed / 3600)} heures`
-  return `Enregistré le ${when.toLocaleDateString('fr-FR')}`
+  if (elapsed < 45) return t('ui.saved_just_now')
+  if (elapsed < 90) return t('ui.saved_a_minute_ago')
+  if (elapsed < 3600) return t('ui.saved_value_minutes_ago', { p0: Math.round(elapsed / 60) })
+  if (elapsed < 7200) return t('ui.saved_an_hour_ago')
+  if (elapsed < 86400) return t('ui.saved_value_hours_ago', { p0: Math.round(elapsed / 3600) })
+  return t('ui.saved_on_value', { p0: when.toLocaleDateString(locale.effectiveLanguage) })
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from './lib/i18n.svelte'
   /* L'assemblage, et les raccourcis.
 
      Ils sont neutralisés pendant une saisie, faute de quoi taper « c » dans un
@@ -31,12 +32,13 @@
       active &&
         (active.tagName === 'INPUT' ||
           active.tagName === 'TEXTAREA' ||
+          active.tagName === 'SELECT' ||
           (active as HTMLElement).isContentEditable),
     )
   }
 
   async function onKey(event: KeyboardEvent): Promise<void> {
-    if (typing() || session.job || exportOpen) {
+    if (typing() || session.job || exportOpen || session.screen === 'options') {
       if (event.key === 'Escape' && exportOpen) exportOpen = false
       return
     }
@@ -103,15 +105,14 @@
   onplay={() => (session.playing = true)}
   onpause={() => (session.playing = false)}
   onended={() => (session.playing = false)}
-  onerror={() => session.note("L'enregistrement n'a pas pu être lu.")}
+  onerror={() => session.note(t('ui.the_recording_could_not_be_played'))}
 ></audio>
 
 <div class="app">
-  {#if !session.open}
+  {#if session.screen === 'options'}
+    <Options onClose={() => (session.screen = session.open ? 'main' : 'empty')} />
+  {:else if !session.open}
     <Empty />
-  {:else if session.screen === 'options'}
-    <Header onExport={() => (exportOpen = true)} onOptions={() => (session.screen = 'main')} />
-    <Options onClose={() => (session.screen = 'main')} />
   {:else}
     <Header
       onExport={() => (exportOpen = true)}
@@ -135,14 +136,8 @@
              attendre l'extraction des descripteurs. -->
         <div class="detail">
           <div class="waiting">
-            <p>
-              La forme d'onde est là, et le concert s'écoute déjà. L'analyse
-              cherche les morceaux : elle prend environ une minute par demi-heure
-              d'enregistrement.
-            </p>
-            <button class="btn strong" onclick={() => session.analyze()}>
-              Analyser
-            </button>
+            <p>{t('ui.the_waveform_is_ready_and_you_can_already')}</p>
+            <button class="btn strong" onclick={() => session.analyze()}>{t('ui.analyze')}</button>
           </div>
           <Transport />
         </div>
@@ -157,7 +152,7 @@
   {#if session.problem}
     <div class="veil">
       <div class="alert" role="alertdialog">
-        <b>Quelque chose n'a pas marché</b>
+        <b>{t('ui.something_went_wrong')}</b>
         <p>{session.problem}</p>
         <div class="issues">
           {#if session.missingSource?.project}
@@ -167,16 +162,14 @@
                 const recovery = session.missingSource
                 if (recovery) void session.relocate(recovery.project, recovery.missing)
               }}
-            >
-              Choisir un autre fichier…
-            </button>
+            >{t('ui.choose_another_file')}</button>
           {/if}
           <button
             class="btn"
             onclick={() => {
               session.problem = ''
               session.missingSource = null
-            }}>Fermer</button
+            }}>{t('ui.close')}</button
           >
         </div>
       </div>

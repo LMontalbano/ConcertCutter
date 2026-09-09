@@ -16,6 +16,8 @@ termine pendant qu'on déplace une frontière écrirait sinon par-dessus.
 
 from __future__ import annotations
 
+from ..i18n import Message, error_message
+
 import math
 import mimetypes
 import threading
@@ -51,12 +53,12 @@ DEFAULT_SETTINGS = {
 }
 
 SETTING_LIMITS = {
-    "min_gap": (0.1, 3600.0, "Blanc minimum"),
-    "min_song": (1.0, 7200.0, "Morceau minimum"),
-    "expected": (0.0, 10_000.0, "Morceaux attendus"),
-    "pad_start": (0.0, 60.0, "Amorce"),
-    "pad_end": (0.0, 60.0, "Queue"),
-    "fade_ms": (0.0, 10_000.0, "Fondus"),
+    "min_gap": (0.1, 3600.0, Message('server.minimum_gap')),
+    "min_song": (1.0, 7200.0, Message('server.minimum_track')),
+    "expected": (0.0, 10_000.0, Message('server.expected_tracks')),
+    "pad_start": (0.0, 60.0, Message('settings.lead_in')),
+    "pad_end": (0.0, 60.0, Message('settings.tail')),
+    "fade_ms": (0.0, 10_000.0, Message('settings.fades')),
 }
 
 # Aucune sortie n'est cochée d'avance, pas même les deux audio. Elles
@@ -106,8 +108,7 @@ class MissingSource(SessionError):
     """
 
     def __init__(self, source: Path, project_path: Path | None = None) -> None:
-        super().__init__("L'enregistrement de ce travail est introuvable : "
-                         f"{source}")
+        super().__init__(Message('server.the_recording_for_this_project_could_not_be', p0=str(source)))
         self.source = source
         self.project_path = project_path
         self.job_payload = {
@@ -158,7 +159,7 @@ class Session:
         """
         path = Path(path)
         if not path.exists():
-            raise SessionError(f"Fichier introuvable : {path}")
+            raise SessionError(Message('server.file_not_found_value', p0=str(path)))
         if path.suffix.lower() == ".json" or path.name.endswith(project.SUFFIX):
             self._open_project(path, job, source)
         else:
@@ -169,7 +170,7 @@ class Session:
         try:
             found = project.read(path)
         except project.Unreadable as failure:
-            raise SessionError(str(failure)) from failure
+            raise SessionError(error_message(failure)) from failure
         wav = Path(source) if source else found.source
         if not wav.exists():
             raise MissingSource(found.source, path)
@@ -201,7 +202,7 @@ class Session:
                 analysis.assign_numbers()
 
         if job is not None:
-            job.phase = "Import en cours…"
+            job.phase = Message('server.importing')
         levels, fps = envelope(path)
         with self._lock:
             # Un autre fichier a pu être ouvert pendant les cinq secondes de
@@ -225,19 +226,19 @@ class Session:
     def analyze(self, job: Job) -> dict:
         source = self.source
         if source is None:
-            raise SessionError("Aucun enregistrement ouvert.")
+            raise SessionError(Message('server.no_recording_is_open'))
         params = self.params()
 
         features = self.features
         if features is None or abs(features.fps - 1.0 / params.frame_s) > 1e-6:
-            job.phase = "Extraction des descripteurs…"
+            job.phase = Message('server.extracting_audio_features')
             features = extract(source, frame_s=params.frame_s)
-        job.phase = "Détection des morceaux…"
+        job.phase = Message('server.detecting_tracks')
         found = analyze(source, params, features=features)
 
         with self._lock:
             if self.source != source:
-                raise SessionError("Le concert a changé pendant l'analyse.")
+                raise SessionError(Message('server.the_concert_changed_during_analysis'))
             self.analysis = found
             self.features = features
             self.duration = found.duration
@@ -259,11 +260,11 @@ class Session:
         """
         with self._lock:
             if self.analysis is None:
-                raise SessionError("Aucune segmentation à modifier.")
+                raise SessionError(Message('server.no_segmentation_to_edit'))
             try:
                 segments = operation(self.analysis.segments)
             except edits.EditError as refusal:
-                raise SessionError(str(refusal)) from refusal
+                raise SessionError(error_message(refusal)) from refusal
             self.history.push(self.analysis.snapshot())
             self.analysis.segments = segments
             self.analysis.assign_numbers()
@@ -271,10 +272,10 @@ class Session:
         return self.state()
 
     def undo(self) -> dict:
-        return self._rewind(self.history.undo, "Rien à annuler.")
+        return self._rewind(self.history.undo, Message('server.nothing_to_undo'))
 
     def redo(self) -> dict:
-        return self._rewind(self.history.redo, "Rien à rétablir.")
+        return self._rewind(self.history.redo, Message('server.nothing_to_redo'))
 
     def _rewind(self, step, empty: str) -> dict:
         with self._lock:
@@ -296,12 +297,12 @@ class Session:
         """
         with self._lock:
             if self.analysis is None:
-                raise SessionError("Aucune segmentation.")
+                raise SessionError(Message('server.no_segmentation'))
             if not len(self.levels):
-                raise SessionError("La forme d'onde n'est pas encore lue.")
+                raise SessionError(Message('server.the_waveform_has_not_loaded_yet'))
             segments = self.analysis.segments
             if not (0 <= index < len(segments) - 1):
-                raise SessionError("Frontière inconnue.")
+                raise SessionError(Message('server.unknown_boundary'))
             entering = segments[index + 1].kind == MUSIC
             here = segments[index].end
             moment = refine_boundary(self.levels, self.levels_fps, here,
@@ -311,7 +312,7 @@ class Session:
         # détecteur les a recalées. Le dire, plutôt que d'empiler dans
         # l'historique une annulation qui ne défait rien.
         if abs(moment - here) < 1e-6:
-            raise SessionError("Cette coupe est déjà sur l'attaque.")
+            raise SessionError(Message('server.this_cut_is_already_on_the_onset'))
         return self.apply(
             lambda current: edits.move_boundary(current, index, moment))
 
@@ -356,13 +357,13 @@ class Session:
     def render_params(self, choice: dict, analysis: Analysis | None = None) -> RenderParams:
         selection = self._selection(choice.get("selection"), analysis)
         return RenderParams(
-            fade_ms=_bounded(self.settings["fade_ms"], "Fondus", 0.0, 10_000.0),
-            pad_start_s=_bounded(self.settings["pad_start"], "Amorce", 0.0, 60.0),
-            pad_end_s=_bounded(self.settings["pad_end"], "Queue", 0.0, 60.0),
+            fade_ms=_bounded(self.settings["fade_ms"], Message('settings.fades'), 0.0, 10_000.0),
+            pad_start_s=_bounded(self.settings["pad_start"], Message('settings.lead_in'), 0.0, 60.0),
+            pad_end_s=_bounded(self.settings["pad_end"], Message('settings.tail'), 0.0, 60.0),
             crossfade_s=_bounded(choice.get("crossfade") or 0.0,
-                                 "Fondu enchaîné", 0.0, 60.0),
+                                 Message('server.crossfade'), 0.0, 60.0),
             video_crossfade_s=_bounded(_video_crossfade(choice),
-                                       "Fondu enchaîné de la vidéo", 0.0, 60.0),
+                                       Message('server.video_crossfade'), 0.0, 60.0),
             write_full=_flag(choice, "full"),
             write_tracks=_flag(choice, "tracks"),
             video_full=_flag(choice, "video_full"),
@@ -371,7 +372,7 @@ class Session:
             video_images=_images(choice.get("images")),
             video_slide_fade_s=_bounded(
                 choice.get("slide_fade") or video.SLIDE_FADE_S,
-                "Fondu entre images", 0.0, 60.0),
+                Message('server.image_transition'), 0.0, 60.0),
             video_one_per_track=_flag(choice, "one_per_track"),
             selection=selection,
         )
@@ -380,7 +381,7 @@ class Session:
         if selection is None:
             return None
         if not isinstance(selection, (list, tuple)) or not selection:
-            raise SessionError("Choisir au moins un morceau à exporter.")
+            raise SessionError(Message('server.choose_at_least_one_track_to_export'))
         if analysis is None:
             analysis = self.analysis
         allowed = {track.number for track in analysis.tracks} if analysis else set()
@@ -388,10 +389,10 @@ class Session:
         for value in selection:
             if isinstance(value, bool) or not isinstance(value, (int, float)) \
                     or not math.isfinite(float(value)) or int(value) != value:
-                raise SessionError("La sélection de morceaux est illisible.")
+                raise SessionError(Message('server.the_track_selection_is_invalid'))
             numbers.append(int(value))
         if len(set(numbers)) != len(numbers) or not set(numbers) <= allowed:
-            raise SessionError("La sélection contient un morceau inconnu.")
+            raise SessionError(Message('server.the_selection_contains_an_unknown_track'))
         return tuple(numbers)
 
     def plan_export(self, choice: dict) -> dict:
@@ -402,11 +403,11 @@ class Session:
         """
         with self._lock:
             if self.analysis is None:
-                raise SessionError("Rien à exporter.")
+                raise SessionError(Message('server.nothing_to_export'))
             analysis = self.analysis
         directory = choice.get("dir") or ""
         if not directory:
-            raise SessionError("Choisir un dossier de destination.")
+            raise SessionError(Message('server.choose_a_destination_folder'))
         # Le concert reçoit son propre dossier dans l'emplacement choisi : on
         # désigne un emplacement une fois, sans préparer un dossier vierge à
         # chaque export.
@@ -423,13 +424,13 @@ class Session:
                 "leftovers": len(conflict.leftovers),
             }
         except (ValueError, OSError) as failure:
-            raise SessionError(str(failure)) from failure
+            raise SessionError(error_message(failure)) from failure
         return {"target": str(target), "conflict": False}
 
     def render(self, choice: dict, job: Job) -> dict:
         with self._lock:
             if self.analysis is None:
-                raise SessionError("Rien à exporter.")
+                raise SessionError(Message('server.nothing_to_export'))
             analysis = self.analysis
             # Même exception qu'à la reprise : l'export retient où il a écrit
             # et avec quoi, pas ce qu'il a écrit. Sans quoi la fenêtre
@@ -445,7 +446,7 @@ class Session:
         wanted = (len(params.selection) if params.selection is not None
                   else len(analysis.tracks))
         job.total = wanted * (2 if params.video_tracks else 1) + int(params.video_full)
-        job.phase = "Export en cours…"
+        job.phase = Message('server.exporting')
 
         def tick(done: int, total: int, name: str) -> None:
             job.done, job.total, job.phase = done, total, name
@@ -539,10 +540,10 @@ class Session:
         with self._lock:
             known = str(target.resolve()) in self.allowed_images
         if not known or not target.is_file():
-            raise SessionError("Cette image n'a pas été choisie dans l'export.")
+            raise SessionError(Message('server.this_image_was_not_selected_for_export'))
         kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if not kind.startswith("image/"):
-            raise SessionError("Ce fichier n'est pas une image.")
+            raise SessionError(Message('server.this_file_is_not_an_image'))
         return target.read_bytes(), kind
 
     def _apply_export(self, saved: dict) -> None:
@@ -573,7 +574,7 @@ class Session:
             number = _bounded(value, label, low, high)
             if name == "expected":
                 if int(number) != number:
-                    raise SessionError("Morceaux attendus doit être un entier.")
+                    raise SessionError(Message('server.expected_tracks_must_be_an_integer'))
                 clean[name] = int(number)
             else:
                 clean[name] = number
@@ -647,9 +648,9 @@ def _bounded(value, label: str, low: float, high: float) -> float:
     try:
         number = float(str(value).replace(",", "."))
     except (TypeError, ValueError) as error:
-        raise SessionError(f"{label} doit être un nombre.") from error
+        raise SessionError(Message('server.value_must_be_a_number', p0=label)) from error
     if not math.isfinite(number) or not low <= number <= high:
-        raise SessionError(f"{label} doit être compris entre {low:g} et {high:g}.")
+        raise SessionError(Message('server.value_must_be_between_value_and_value', p0=label, p1=format(low, 'g'), p2=format(high, 'g')))
     return number
 
 
@@ -669,7 +670,7 @@ def _video_crossfade(choice: dict):
 def _flag(choice: dict, name: str) -> bool:
     value = choice.get(name, False)
     if not isinstance(value, bool):
-        raise SessionError(f"Le choix « {name} » doit être vrai ou faux.")
+        raise SessionError(Message('server.the_value_option_must_be_true_or_false', p0=str(name)))
     return value
 
 
@@ -678,5 +679,5 @@ def _images(value) -> tuple[str, ...]:
         return ()
     if not isinstance(value, (list, tuple)) or any(
             not isinstance(path, str) or not path for path in value):
-        raise SessionError("La liste des images est illisible.")
+        raise SessionError(Message('server.the_image_list_is_invalid'))
     return tuple(value)

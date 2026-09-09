@@ -23,6 +23,8 @@ fichier pour une durée qu'on passe de toute façon à ouvrir le concert.
 
 from __future__ import annotations
 
+from .i18n import Message
+
 import hashlib
 import json
 import os
@@ -107,19 +109,19 @@ def read(path: str | Path) -> Project:
         # l'intérêt de `Unreadable` est que l'appelant puisse passer au projet
         # suivant. Un fichier illisible reste un fichier illisible, quelle que
         # soit la raison.
-        raise Unreadable(f"{path.name} : {error}") from error
+        raise Unreadable(Message('server.could_not_read_value_details_value', p0=str(path.name), p1=str(error))) from error
     if not isinstance(payload, dict):
-        raise Unreadable(f"{path.name} n'est pas un projet ConcertCutter.")
+        raise Unreadable(Message('server.value_is_not_a_concertcutter_project', p0=str(path.name)))
 
     # Un `segments.json` d'export est accepté tel quel : c'est le même contenu
     # sans l'enveloppe, et refuser de rouvrir un export passé serait absurde.
     body = payload.get("analysis") if payload.get("format") == FORMAT else payload
     if not isinstance(body, dict) or "segments" not in body:
-        raise Unreadable(f"{path.name} ne contient pas de segmentation.")
+        raise Unreadable(Message('server.value_does_not_contain_segmentation_data', p0=str(path.name)))
     try:
         analysis = Analysis.from_payload(body)
     except (TypeError, ValueError) as error:
-        raise Unreadable(f"{path.name} : segmentation illisible ({error})") from error
+        raise Unreadable(Message('server.value_invalid_segmentation_data_value', p0=str(path.name), p1=str(error))) from error
 
     return Project(
         analysis=analysis,

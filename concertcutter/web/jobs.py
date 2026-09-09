@@ -15,6 +15,8 @@ moment doit encore pouvoir apprendre que l'export a réussi.
 
 from __future__ import annotations
 
+from ..i18n import Message, error_message
+
 import threading
 import traceback
 import uuid
@@ -85,13 +87,13 @@ class Jobs:
                 # l'export précédent reste intact — tient au dossier de
                 # travail, refermé en remontant.
                 job.state = CANCELLED
-                job.phase = "Interrompu."
+                job.phase = Message('progress.stopped')
             except Exception as failure:  # noqa: BLE001 — tout remonte à l'écran
                 job.state = FAILED
                 # Deux niveaux : la phrase pour l'utilisateur, la trace pour la
                 # console. Une trace dans une fenêtre modale n'aide personne, et
                 # la perdre empêcherait de comprendre un échec rapporté.
-                job.error = str(failure) or failure.__class__.__name__
+                job.error = error_message(failure)
                 job.extra = dict(getattr(failure, "job_payload", {}) or {})
                 job.detail = traceback.format_exc()
                 print(job.detail, flush=True)
@@ -117,7 +119,7 @@ class Jobs:
             job = self._jobs.get(job_id)
         if job is not None and job.state == RUNNING:
             job.stop.set()
-            job.phase = "Arrêt en cours…"
+            job.phase = Message('server.stopping')
         return job
 
     def stop_all(self) -> None:

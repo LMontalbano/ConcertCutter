@@ -6,6 +6,8 @@ V0 : WAV uniquement, lu par blocs. Un concert de 2 h en stéréo 44,1 kHz pèse
 
 from __future__ import annotations
 
+from .i18n import Message
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -30,7 +32,7 @@ class AudioInfo:
 def probe(path: str | Path) -> AudioInfo:
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Fichier introuvable : {path}")
+        raise FileNotFoundError(Message('server.file_not_found_value', p0=str(path)))
     info = sf.info(str(path))
     return AudioInfo(
         path=path,

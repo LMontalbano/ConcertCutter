@@ -1,3 +1,4 @@
+import { t, translatePayload, type Preferences, type LanguageChoice } from './i18n.svelte'
 /* Le seul endroit qui parle au serveur.
 
    Toutes les requêtes portent le jeton du lancement, lu une fois dans la page
@@ -107,10 +108,10 @@ async function call<T>(route: string, body?: unknown): Promise<T> {
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  const payload = await answer.json().catch(() => ({}))
+  const payload = translatePayload(await answer.json().catch(() => ({})))
   if (!answer.ok) {
     const { error, ...extra } = payload as { error?: string }
-    throw new ApiError(error ?? `Erreur ${answer.status}`, answer.status, extra)
+    throw new ApiError(error ?? t('ui.error_value', { p0: answer.status }), answer.status, extra)
   }
   return payload as T
 }
@@ -130,11 +131,13 @@ async function binary(
     headers: { 'X-ConcertCutter-Token': TOKEN },
     signal,
   })
-  if (!answer.ok) throw new ApiError(`Erreur ${answer.status}`, answer.status)
+  if (!answer.ok) throw new ApiError(t('ui.error_value', { p0: answer.status }), answer.status)
   return { data: new Float32Array(await answer.arrayBuffer()), headers: answer.headers }
 }
 
 export const api = {
+  preferences: () => call<Preferences>('/api/preferences'),
+  setLanguage: (language: LanguageChoice) => call<Preferences>('/api/preferences', { language }),
   token: TOKEN,
   state: () => call<State>('/api/state'),
   open: (path?: string, kind?: string, source?: string) =>

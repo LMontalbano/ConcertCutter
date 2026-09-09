@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Le segment sous la loupe, et ses deux coupes.
 
      C'est l'évolution A du canevas : la vue déborde de quinze secondes sur les
@@ -85,7 +86,7 @@
       if (mine === pending) heights = data
     } catch (failure) {
       if (failure instanceof DOMException && failure.name === 'AbortError') return
-      session.note("Le détail de la forme d'onde n'a pas pu être lu.")
+      session.note(t('ui.the_detailed_waveform_could_not_be_loaded'))
     }
   }
 
@@ -259,7 +260,7 @@
     const moment = parseTime(field.value)
     const index = edge === 'start' ? edges.start : edges.end
     if (moment === null) {
-      session.note('Horaire illisible. Attendu : 12:34, 1:02:14 ou 754.')
+      session.note(t('ui.invalid_time_use_12_34_1_02_14'))
       field.value = tenths(edge === 'start' ? (segment?.start ?? 0) : (segment?.end ?? 0))
       return
     }
@@ -300,7 +301,7 @@
 
   async function merge(): Promise<void> {
     if (edges.end < 0 || edges.end > lastEdge) {
-      session.note('La fin du concert ne se fusionne pas.')
+      session.note(t('ui.the_end_of_the_concert_cannot_be_merged'))
       return
     }
     await session.edit({ op: 'delete_boundary', index: edges.end })
@@ -368,12 +369,11 @@
       <div class="meta-row">
         <span class="badge {segment.kind === 'music' ? 'accent' : 'gap'}">
           {segment.kind === 'music'
-            ? `MORCEAU ${trackLabel(segment.number)}`
-            : 'ZONE À RETIRER · DÉTECTION AUTOMATIQUE'}
+            ? t('ui.track_value', { p0: trackLabel(segment.number) })
+            : t('ui.section_to_remove_automatic_detection')}
         </span>
         {#if segment.confidence}
-          <span class="badge">
-            confiance {Math.round(segment.confidence * 100)} %
+          <span class="badge">{t('ui.confidence')} {Math.round(segment.confidence * 100)} %
           </span>
         {/if}
       </div>
@@ -386,8 +386,8 @@
           onblur={rename}
           onkeydown={onTitleKey}
           autofocus
-          placeholder="Sans titre"
-          aria-label="Titre du morceau"
+          placeholder={t('ui.untitled')}
+          aria-label={t('ui.track_title')}
         />
       {:else}
         <button
@@ -396,10 +396,10 @@
           onclick={startRename}
           disabled={segment.kind !== 'music'}
           title={segment.kind === 'music'
-            ? 'Cliquer pour nommer ce morceau'
-            : 'Une zone à retirer ne se nomme pas'}
+            ? t('ui.click_to_name_this_track')
+            : t('ui.sections_to_remove_cannot_be_named')}
         >
-          <span>{segment.trackTitle || 'Sans titre'}</span>
+          <span>{segment.trackTitle || t('ui.untitled')}</span>
           {#if segment.kind === 'music'}
             <span class="edit-icon" aria-hidden="true">✎</span>
           {/if}
@@ -408,13 +408,9 @@
     </div>
 
     <div class="fate-wrapper">
-      <div class="fate" role="group" aria-label="Sort du segment">
-        <button class:on={segment.kind === 'music'} onclick={() => setKind('music')}>
-          Garder
-        </button>
-        <button class:on={segment.kind === 'gap'} onclick={() => setKind('gap')}>
-          Supprimer
-        </button>
+      <div class="fate" role="group" aria-label={t('ui.segment_action')}>
+        <button class:on={segment.kind === 'music'} onclick={() => setKind('music')}>{t('ui.keep')}</button>
+        <button class:on={segment.kind === 'gap'} onclick={() => setKind('gap')}>{t('ui.remove')}</button>
       </div>
     </div>
   </div>
@@ -423,20 +419,20 @@
     <div class="card-head">
       <div class="card-title">
         <span class="label">
-          {segment.kind === 'music' ? 'Morceau & Frontières' : 'Zone à retirer & Frontières'}
+          {segment.kind === 'music' ? t('ui.track_boundaries') : t('ui.section_to_remove_boundaries')}
         </span>
         <span class="badge accent mono">{hms(segment.end - segment.start)}</span>
       </div>
 
       <div class="card-hints">
-        <span class="hint">Glisser : lecture · frontières : découpe</span>
-        <span class="hint"><span class="kbd">Molette</span> Zoomer</span>
+        <span class="hint">{t('ui.drag_playback_boundaries_trimming')}</span>
+        <span class="hint"><span class="kbd">{t('ui.mouse_wheel')}</span>{t('ui.zoom')}</span>
         <!-- « c » en minuscule, parce que la majuscule désigne autre chose :
              `Maj+C` sépare le morceau en deux pistes là où `c` pose une simple
              coupe. Les afficher toutes deux en capitale renvoyait au mauvais
              geste. -->
-        <span class="hint"><span class="kbd">c</span> Couper</span>
-        <span class="hint"><span class="kbd">b</span> Boucler</span>
+        <span class="hint"><span class="kbd">c</span>{t('ui.split')}</span>
+        <span class="hint"><span class="kbd">b</span>{t('ui.loop')}</span>
       </div>
     </div>
 
@@ -450,11 +446,11 @@
       onpointercancel={onPointerCancel}
       onlostpointercapture={onPointerCancel}
       onwheel={onWheel}
-      aria-label="Forme d'onde détaillée du segment"
+      aria-label={t('ui.detailed_segment_waveform')}
     ></canvas>
 
     <div class="tools">
-      {#each [['start', 'Début de section'], ['end', 'Fin de section']] as [edge, label] (edge)}
+      {#each [['start', t('ui.section_start')], ['end', t('ui.section_end')]] as [edge, label] (edge)}
         {@const index = edge === 'start' ? edges.start : edges.end}
         {@const fixed = index < 0 || index > lastEdge}
         <div class="edge" class:off={fixed}>
@@ -463,8 +459,8 @@
             <div class="stepper">
               <button
                 onclick={() => nudge(edge as 'start' | 'end', -1)}
-                title="Reculer d'une demi-seconde (-0.5s)"
-                aria-label="{label} : reculer d'une demi-seconde"
+                title={t('ui.move_back_half_a_second_0_5s')}
+                aria-label={t('boundary.backward', { label })}
               >
                 −
               </button>
@@ -472,12 +468,12 @@
                 class="mono"
                 value={tenths(edge === 'start' ? segment.start : segment.end)}
                 onchange={(event) => typed(edge as 'start' | 'end', event)}
-                aria-label="{label} du segment"
+                aria-label={t('boundary.segment', { label })}
               />
               <button
                 onclick={() => nudge(edge as 'start' | 'end', 1)}
-                title="Avancer d'une demi-seconde (+0.5s)"
-                aria-label="{label} : avancer d'une demi-seconde"
+                title={t('ui.move_forward_half_a_second_0_5s')}
+                aria-label={t('boundary.forward', { label })}
               >
                 +
               </button>
@@ -487,11 +483,11 @@
       {/each}
 
       <div class="spacer"></div>
-      <button class="btn" onclick={merge} title="Supprimer la frontière de fin et fusionner">
-        <span>Fusionner</span>
+      <button class="btn" onclick={merge} title={t('ui.remove_the_end_boundary_and_merge')}>
+        <span>{t('ui.merge')}</span>
       </button>
-      <button class="btn accent" onclick={split} title="Poser une frontière à la tête de lecture (C)">
-        <span>✂ Couper ici</span>
+      <button class="btn accent" onclick={split} title={t('ui.add_a_boundary_at_the_playhead_c')}>
+        <span>{t('ui.split_here')}</span>
       </button>
     </div>
   </div>

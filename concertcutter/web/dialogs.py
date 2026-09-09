@@ -15,6 +15,7 @@ un champ de saisie de chemin.
 from __future__ import annotations
 
 from pathlib import Path
+from ..i18n import Message
 
 WAV_TYPES = ("Fichiers WAV", "*.wav *.WAV")
 PROJECT_TYPES = ("Travaux ConcertCutter", "*.json")
@@ -103,15 +104,15 @@ def use(host: Dialogs) -> None:
     HOST = host
 
 
-def ask_wav() -> str | None:
-    return HOST.open_file([WAV_TYPES])
+def ask_wav(language: str = "fr") -> str | None:
+    return HOST.open_file([(Message('dialog.wav').translate(language), WAV_TYPES[1])])
 
 
-def ask_project() -> str | None:
-    return HOST.open_file([PROJECT_TYPES])
+def ask_project(language: str = "fr") -> str | None:
+    return HOST.open_file([(Message('dialog.project').translate(language), PROJECT_TYPES[1])])
 
 
-def ask_source() -> str | None:
+def ask_source(language: str = "fr") -> str | None:
     """Redemande l'enregistrement d'un travail dont la source a bougé.
 
     Identique à `ask_wav` dans les faits, et nommée à part pour ce qu'elle dit
@@ -120,11 +121,11 @@ def ask_source() -> str | None:
     phrase était calculée pour rien. Elle est déjà à l'écran de toute façon,
     portée par le refus `MissingSource` que la page affiche juste avant.
     """
-    return HOST.open_file([WAV_TYPES])
+    return ask_wav(language)
 
 
-def ask_images() -> list[str]:
-    return HOST.open_files([IMAGE_TYPES])
+def ask_images(language: str = "fr") -> list[str]:
+    return HOST.open_files([(Message('dialog.images').translate(language), IMAGE_TYPES[1])])
 
 
 def ask_dir(start: str = "") -> str | None:

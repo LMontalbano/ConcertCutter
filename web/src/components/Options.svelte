@@ -1,12 +1,16 @@
 <script lang="ts">
+  import { t, locale, applyLanguage, type LanguageChoice } from '../lib/i18n.svelte'
   /* Les réglages, sortis de l'écran principal. */
   import { api, type Settings } from '../lib/api'
   import { session, message } from '../lib/session.svelte'
+  import NumberInput from './NumberInput.svelte'
 
   let { onClose }: { onClose: () => void } = $props()
 
   let draft = $state<Settings>({ ...(session.state?.settings as Settings) })
   let saving = $state(false)
+  let language = $state<LanguageChoice>(locale.language)
+  let panel: HTMLElement
 
   const fields: Array<{
     key: keyof Settings
@@ -16,64 +20,67 @@
     help: string
     max: number
     step?: number
-  }> = [
+  }> = $derived([
     {
       key: 'min_gap',
       family: 'detection',
-      label: 'Silence minimum',
+      label: t('ui.minimum_silence'),
       unit: 's',
-      help: "En dessous, un silence n'est pas compté comme une zone à retirer : c'est une respiration au milieu d'un morceau.",
+      help: t('ui.shorter_silences_are_treated_as_pauses_within_a'),
       max: 3600,
     },
     {
       key: 'min_song',
       family: 'detection',
-      label: 'Morceau minimum',
+      label: t('ui.minimum_track'),
       unit: 's',
-      help: "En dessous, un passage n'est pas compté comme un morceau. Soixante-quinze secondes écartent les annonces sans écarter les rappels courts.",
+      help: t('ui.shorter_passages_are_not_counted_as_tracks_seventy'),
       max: 7200,
     },
     {
       key: 'expected',
       family: 'detection',
-      label: 'Morceaux attendus',
+      label: t('ui.expected_tracks'),
       unit: '',
-      help: 'Si vous savez combien le concert en compte, la détection s\'y tient. Zéro la laisse décider.',
+      help: t('ui.if_you_know_how_many_tracks_the_concert'),
       max: 10000,
       step: 1,
     },
     {
       key: 'pad_start',
       family: 'montage',
-      label: 'Amorce avant',
+      label: t('ui.lead_in'),
       unit: 's',
-      help: "Conservée avant l'entrée du morceau. Elle mord sur la fin de la zone retirée qui précède, donc elle rattrape le retard de la détection sans coûter d'applaudissements.",
+      help: t('ui.audio_kept_before_the_track_starts_it_extends'),
       max: 60,
     },
     {
       key: 'pad_end',
       family: 'montage',
-      label: 'Queue après',
+      label: t('ui.tail'),
       unit: 's',
-      help: 'Conservée après la fin du morceau : la note qui traîne, et le début des applaudissements.',
+      help: t('ui.audio_kept_after_the_track_ends_the_lingering'),
       max: 60,
     },
     {
       key: 'fade_ms',
       family: 'montage',
-      label: 'Fondus anti-clic',
+      label: t('ui.anti_click_fades'),
       unit: 'ms',
-      help: 'Très courts et inaudibles : ils suppriment le clic que produirait une coupe franche au milieu d\'une onde.',
+      help: t('ui.very_short_inaudible_fades_prevent_clicks_caused_by'),
       max: 10000,
     },
-  ]
+  ])
 
   async function apply(): Promise<void> {
+    if (![...panel.querySelectorAll('input')].every(input => input.reportValidity())) return
     saving = true
     try {
       await api.settings(draft)
+      const preferences = await api.setLanguage(language)
+      applyLanguage(preferences)
       await session.refresh()
-      session.note('Réglages enregistrés.')
+      session.note(t('ui.settings_saved'))
       onClose()
     } catch (failure) {
       session.note(message(failure))
@@ -83,17 +90,27 @@
   }
 </script>
 
-<main>
+<main bind:this={panel}>
   <div class="sheet">
     <header>
       <div class="title-wrap">
-        <h1>Options & Réglages</h1>
-        <p class="subtitle">Paramètres d'analyse acoustique et d'export</p>
+        <h1>{t('ui.options_settings')}</h1>
+        <p class="subtitle">{t('ui.audio_analysis_and_export_settings')}</p>
       </div>
-      <button class="btn quiet" onclick={onClose} aria-label="Fermer les options">
+      <button class="btn quiet" disabled={saving} onclick={onClose} aria-label={t('ui.close_options')}>
         ✕
       </button>
     </header>
+
+    <section class="language-section">
+      <label for="language">{t('preferences.language')}</label>
+      <select id="language" bind:value={language} disabled={saving} aria-describedby="language-help">
+        <option value="auto">{t('preferences.automatic')}</option>
+        <option value="fr" lang="fr">Français</option>
+        <option value="en" lang="en">English</option>
+      </select>
+      <p class="help" id="language-help">{t('preferences.help')}</p>
+    </section>
 
     {#each ['detection', 'montage'] as family (family)}
       <section>
@@ -102,25 +119,24 @@
                même page de réglages. La pastille grise du second le faisait
                passer pour une note en marge de la première. -->
           <span class="badge accent">
-            {family === 'detection' ? '1. Détection & IA' : '2. Montage & Rendu'}
+            {family === 'detection' ? t('ui.1_detection_ai') : t('ui.2_editing_rendering')}
           </span>
         </div>
         <p class="why">
           {family === 'detection'
-            ? "Règles appliquées lors de l'analyse du concert. Modifier ces valeurs demande de relancer l'analyse."
-            : "Règles de coupe et fondus appliquées lors de la génération des fichiers à l'export."}
+            ? t('ui.rules_used_when_analyzing_the_concert_run_analysis')
+            : t('ui.trimming_and_fade_rules_applied_when_generating_export')}
         </p>
         <div class="fields-list">
           {#each fields.filter((field) => field.family === family) as field (field.key)}
             <div class="field">
               <label for={field.key}>{field.label}</label>
               <div class="entry">
-                <input
+                <NumberInput
                   id={field.key}
-                  class="mono"
-                  type="number"
+                  disabled={saving}
                   step={field.step ?? 0.1}
-                  min="0"
+                  min={field.key === 'min_gap' ? 0.1 : field.key === 'min_song' ? 1 : 0}
                   max={field.max}
                   bind:value={draft[field.key]}
                 />
@@ -134,15 +150,31 @@
     {/each}
 
     <footer>
-      <button class="btn quiet" onclick={onClose}>Annuler</button>
+      <button class="btn quiet" disabled={saving} onclick={onClose}>{t('ui.cancel')}</button>
       <button class="btn strong" disabled={saving} onclick={apply}>
-        {saving ? 'Enregistrement…' : 'Enregistrer les options'}
+        {saving ? t('ui.saving') : t('ui.save_options')}
       </button>
     </footer>
   </div>
 </main>
 
 <style>
+  .language-section {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 12px 16px;
+    align-items: center;
+  }
+  .language-section .help { grid-column: 1 / -1; }
+  select {
+    width: 100%;
+    padding: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font: inherit;
+  }
   main {
     flex: 1;
     overflow-y: auto;
@@ -233,7 +265,7 @@
     gap: 8px;
   }
 
-  .entry input {
+  .entry :global(input) {
     width: 80px;
     height: 32px;
     padding: 0 8px;
@@ -246,7 +278,7 @@
     text-align: right;
   }
 
-  .entry input:focus {
+  .entry :global(input:focus) {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent-soft);
   }

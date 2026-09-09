@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Le transport : lecture, position, durée. */
   import { session } from '../lib/session.svelte'
   import { hms } from '../lib/format'
@@ -38,8 +39,8 @@
       class="play-btn"
       class:playing={session.playing}
       onclick={() => session.toggle()}
-      title={session.playing ? 'Mettre en pause (Espace)' : 'Lancer la lecture (Espace)'}
-      aria-label={session.playing ? 'Pause' : 'Lecture'}
+      title={session.playing ? t('ui.pause_space') : t('ui.start_playback_space')}
+      aria-label={session.playing ? t('ui.pause') : t('ui.play')}
     >
       <span class="play-glyph">{session.playing ? '❚❚' : '▶'}</span>
     </button>
@@ -58,7 +59,7 @@
       onpointerup={onPointerUp}
       role="slider"
       tabindex="0"
-      aria-label="Position dans le concert"
+      aria-label={t('ui.position_in_the_concert')}
       aria-valuemin="0"
       aria-valuemax={session.duration}
       aria-valuenow={session.playhead}
@@ -73,10 +74,10 @@
       class="btn loop-btn"
       class:active={session.loop !== null}
       onclick={() => session.toggleLoop()}
-      title="Répéter en boucle le segment sous le curseur (B)"
+      title={t('ui.loop_the_segment_under_the_playhead_b')}
     >
       <span class="loop-dot"></span>
-      <span>Boucler (B)</span>
+      <span>{t('ui.loop_b')}</span>
     </button>
   </div>
 </footer>

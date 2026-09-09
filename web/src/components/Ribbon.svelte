@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* Le concert entier, en une bande. Cliquer y déplace la loupe, et le
      rectangle clair montre ce que la carte d'édition regarde en ce moment. */
   import { session } from '../lib/session.svelte'
@@ -91,18 +92,18 @@
 
 <section class="ribbon">
   <header>
-    <span class="label">Vue globale du concert</span>
+    <span class="label">{t('ui.full_concert_view')}</span>
     <span class="rule"></span>
     <span class="hint">
       {#if session.duration}<span class="badge accent mono">{hms(session.duration)}</span>{/if}
-      <span>Cliquer pour déplacer la loupe</span>
+      <span>{t('ui.click_to_move_the_detail_view')}</span>
     </span>
   </header>
   <canvas
     bind:this={canvas}
     style="height:{HEIGHT}px"
     onclick={onClick}
-    aria-label="Vue d'ensemble du concert"
+    aria-label={t('ui.concert_overview')}
   ></canvas>
 </section>
 

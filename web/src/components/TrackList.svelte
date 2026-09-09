@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte'
   /* La colonne de gauche : les morceaux, et les zones à retirer entre eux.
 
      « Blanc » est le mot du métier, et il ne disait rien à qui ouvre le
@@ -96,18 +97,18 @@
 <aside>
   <header>
     <div class="header-left">
-      <span class="label">Pistes & Segments</span>
+      <span class="label">{t('ui.tracks_segments')}</span>
     </div>
     <div class="header-right">
-      <span class="badge accent" title="Morceaux gardés à l'export"
-        >{session.counts.tracks} morceaux</span
+      <span class="badge accent" title={t('ui.tracks_kept_in_the_export')}
+        >{t('count.tracks', { count: session.counts.tracks })}</span
       >
       <!-- Deux compteurs, et rien derrière : le titre dit ce qu'ils comptent,
            et `cursor: default` évite de laisser croire à une action. -->
       <span
         class="badge gap"
-        title="Zones détectées automatiquement, retirées de l'export"
-        >{session.counts.gaps} à retirer</span
+        title={t('ui.automatically_detected_sections_removed_from_the_export')}
+        >{session.counts.gaps} {t('ui.to_remove')}</span
       >
     </div>
   </header>
@@ -134,10 +135,8 @@
             class="listen"
             class:sounding={session.playing_at(segment.index)}
             onclick={(event) => (event.stopPropagation(), session.play(segment.index))}
-            aria-label="{session.playing_at(segment.index)
-              ? 'Arrêter'
-              : 'Écouter'} le morceau {trackLabel(segment.number)}"
-            title={session.playing_at(segment.index) ? 'Arrêter' : 'Écouter ce morceau'}
+            aria-label={t(session.playing_at(segment.index) ? 'track.stop' : 'track.listen', { number: trackLabel(segment.number) })}
+            title={session.playing_at(segment.index) ? t('ui.stop') : t('ui.listen_to_this_track')}
           >
             <span class="play-icon">{session.playing_at(segment.index) ? '❚❚' : '▶'}</span>
           </button>
@@ -153,7 +152,7 @@
                 onblur={commit}
                 onkeydown={onKey}
                 autofocus
-                placeholder="Sans titre"
+                placeholder={t('ui.untitled')}
               />
             {:else}
               <div class="title-row">
@@ -162,9 +161,9 @@
                   class:empty={!segment.trackTitle}
                   ondblclick={(event) => (event.stopPropagation(), startEdit(segment))}
                   onclick={(event) => (event.stopPropagation(), session.select(segment.index))}
-                  title="Double-cliquer pour renommer"
+                  title={t('ui.double_click_to_rename')}
                 >
-                  {segment.trackTitle || 'Sans titre'}
+                  {segment.trackTitle || t('ui.untitled')}
                 </button>
               </div>
             {/if}
@@ -192,8 +191,8 @@
             class="listen thin"
             class:sounding={session.playing_at(segment.index)}
             onclick={(event) => (event.stopPropagation(), session.play(segment.index))}
-            aria-label="Écouter ce passage"
-            title="Écouter ce passage"
+            aria-label={t('ui.listen_to_this_passage')}
+            title={t('ui.listen_to_this_passage')}
           >
             <span class="play-icon">{session.playing_at(segment.index) ? '❚❚' : '▶'}</span>
           </button>
@@ -206,17 +205,15 @@
           <button
             class="mono gap-name"
             onclick={(event) => (event.stopPropagation(), session.select(segment.index))}
-            title="Blanc ou applaudissements, détecté automatiquement : ce passage ne sera pas exporté."
-            aria-label="Sélectionner le passage à retirer de {spell(segment.end - segment.start)}"
-          >À retirer — {spell(segment.end - segment.start)}</button>
+            title={t('ui.automatically_detected_gap_or_applause_this_passage_will')}
+            aria-label={t('track.select_gap', { duration: spell(segment.end - segment.start) })}
+          >{t('ui.to_remove_249')} {spell(segment.end - segment.start)}</button>
 
           <button
             class="keep-btn"
             onclick={(event) => (event.stopPropagation(), keep(segment))}
-            title="Garder ce passage dans l'export au lieu de le retirer"
-          >
-            Conserver
-          </button>
+            title={t('ui.keep_this_passage_in_the_export_instead_of')}
+          >{t('ui.keep_251')}</button>
         </div>
       {/if}
     {/each}
