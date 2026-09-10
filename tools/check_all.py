@@ -11,13 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def run(*command: str, cwd: Path = ROOT) -> None:
+def run(*command: str, cwd: Path = ROOT,
+        environment: dict[str, str] | None = None) -> None:
     print("\n>", " ".join(command), flush=True)
     # `PYTHONPATH` pointé sur la racine : les scripts de `tools/` importent
     # `concertcutter`, et lancer `python tools/x.py` ne met que `tools/` sur le
     # chemin. Sans cette ligne, chacun d'eux devrait bricoler son `sys.path`.
-    subprocess.run(command, cwd=cwd, check=True,
-                   env={**os.environ, "PYTHONPATH": str(ROOT)})
+    variables = {**os.environ, "PYTHONPATH": str(ROOT), **(environment or {})}
+    subprocess.run(command, cwd=cwd, check=True, env=variables)
 
 
 def web_api() -> None:
@@ -36,8 +37,10 @@ def web_api() -> None:
     """
     with tempfile.TemporaryDirectory(prefix="cc-verif-") as scratch:
         wav = Path(scratch) / "faux_concert.wav"
+        local_data = Path(scratch) / "local-data"
         run(sys.executable, "tools/make_fake_concert.py", "-o", str(wav))
-        run(sys.executable, "tools/check_web_api.py", str(wav))
+        run(sys.executable, "tools/check_web_api.py", str(wav),
+            environment={"LOCALAPPDATA": str(local_data)})
 
 
 def main() -> int:

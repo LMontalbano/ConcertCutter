@@ -140,6 +140,12 @@ class Jobs:
             return next((job for job in self._jobs.values()
                          if job.kind == kind and job.state == RUNNING), None)
 
+    def running_any(self, except_kind: str | None = None) -> Job | None:
+        """Travail encore actif, avec une exclusion utile au redémarrage."""
+        with self._lock:
+            return next((job for job in self._jobs.values()
+                         if job.state == RUNNING and job.kind != except_kind), None)
+
     def sweep(self, keep: int = 20) -> None:
         """Oublie les travaux terminés les plus anciens."""
         with self._lock:

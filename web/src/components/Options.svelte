@@ -9,7 +9,9 @@
 
   let draft = $state<Settings>({ ...(session.state?.settings as Settings) })
   let saving = $state(false)
+  let checking = $state(false)
   let language = $state<LanguageChoice>(locale.language)
+  let checkUpdates = $state(session.automaticUpdateChecks)
   let panel: HTMLElement
 
   const fields: Array<{
@@ -77,8 +79,9 @@
     saving = true
     try {
       await api.settings(draft)
-      const preferences = await api.setLanguage(language)
+      const preferences = await api.setPreferences(language, checkUpdates)
       applyLanguage(preferences)
+      session.automaticUpdateChecks = preferences.checkUpdates
       await session.refresh()
       session.note(t('ui.settings_saved'))
       onClose()
@@ -86,6 +89,15 @@
       session.note(message(failure))
     } finally {
       saving = false
+    }
+  }
+
+  async function verifyUpdate(): Promise<void> {
+    checking = true
+    try {
+      await session.checkUpdate(true)
+    } finally {
+      checking = false
     }
   }
 </script>
@@ -110,6 +122,20 @@
         <option value="en" lang="en">English</option>
       </select>
       <p class="help" id="language-help">{t('preferences.help')}</p>
+    </section>
+
+    <section class="maintenance-section">
+      <div class="section-badge"><span class="badge accent">{t('update.maintenance')}</span></div>
+      <label class="toggle-line">
+        <input type="checkbox" bind:checked={checkUpdates} disabled={saving} />
+        <span>
+          <strong>{t('update.check_automatically')}</strong>
+          <small>{t('update.check_automatically_help')}</small>
+        </span>
+      </label>
+      <button class="btn quiet" type="button" disabled={saving || checking} onclick={verifyUpdate}>
+        {checking ? t('update.checking') : t('update.check_now')}
+      </button>
     </section>
 
     {#each ['detection', 'montage'] as family (family)}
@@ -166,6 +192,26 @@
     align-items: center;
   }
   .language-section .help { grid-column: 1 / -1; }
+  .maintenance-section {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px 18px;
+    align-items: center;
+  }
+  .maintenance-section .section-badge { grid-column: 1 / -1; }
+  .toggle-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .toggle-line input { margin-top: 3px; accent-color: var(--accent); }
+  .toggle-line span { display: flex; flex-direction: column; gap: 4px; }
+  .toggle-line small {
+    color: var(--ink-3);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+  }
   select {
     width: 100%;
     padding: 8px;

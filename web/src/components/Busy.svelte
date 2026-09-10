@@ -41,7 +41,14 @@
          une lecture de quinze secondes : une phrase qui n'apprend rien vaut
          moins que le silence. -->
     {#if job.total > 0}
-      <div class="mono count">{t('progress.count', { done: job.done, total: job.total })}</div>
+      <div class="mono count">
+        {job.kind === 'update'
+          ? t('update.download_progress', {
+              done: (job.done / 1024 / 1024).toFixed(1),
+              total: (job.total / 1024 / 1024).toFixed(1),
+            })
+          : t('progress.count', { done: job.done, total: job.total })}
+      </div>
     {/if}
 
     <!-- L'arrêt se demande, il ne s'impose pas : l'export finit le morceau

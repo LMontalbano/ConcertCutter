@@ -30,6 +30,7 @@ class Preferences:
         self.path = path if path is not None else preferences_path()
         self.system_language = windows_language()
         self.language = "auto"
+        self.check_updates = True
         self._lock = threading.RLock()
         self._saved: dict = {}
         try:
@@ -38,6 +39,8 @@ class Preferences:
                 self._saved = saved
                 if saved.get("language") in ("auto", "fr", "en"):
                     self.language = saved["language"]
+                if isinstance(saved.get("checkUpdates"), bool):
+                    self.check_updates = saved["checkUpdates"]
         except (OSError, ValueError):
             pass
 
@@ -47,16 +50,26 @@ class Preferences:
 
     def payload(self) -> dict:
         with self._lock:
-            return {"language": self.language, "effectiveLanguage": self.effective}
+            return {
+                "language": self.language,
+                "effectiveLanguage": self.effective,
+                "checkUpdates": self.check_updates,
+            }
 
-    def update(self, language: str) -> dict:
+    def update(self, language: str, check_updates: bool | None = None) -> dict:
         if language not in ("auto", "fr", "en"):
             raise ValueError(Message("preferences.invalid_language"))
+        if check_updates is not None and not isinstance(check_updates, bool):
+            raise ValueError(Message("preferences.invalid_check_updates"))
         with self._lock:
             scratch = None
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                updated = {**self._saved, "language": language}
+                updated = {
+                    **self._saved,
+                    "language": language,
+                    "checkUpdates": self.check_updates if check_updates is None else check_updates,
+                }
                 with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
                                                  prefix="preferences-", suffix=".tmp", delete=False) as handle:
                     scratch = Path(handle.name)
@@ -73,4 +86,5 @@ class Preferences:
                     except OSError:
                         pass
             self._saved, self.language = updated, language
+            self.check_updates = updated["checkUpdates"]
             return self.payload()

@@ -489,6 +489,15 @@ class Session:
             self.saved = work.saved or ""
         return written
 
+    def save_for_restart(self) -> Path | None:
+        """Sauvegarde stricte utilisée avant de céder la place à un nouvel exe."""
+        with self._lock:
+            active = self.analysis is not None and self.source is not None
+        saved = self.save()
+        if active and saved is None:
+            raise SessionError(Message("update.save_failed"))
+        return saved
+
     def recent(self) -> list[dict]:
         """Les travaux en cours, en sautant ceux qu'on ne sait plus lire.
 

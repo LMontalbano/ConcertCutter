@@ -34,6 +34,14 @@ française donne une interface française ; les autres langues, ou un échec de
 détection, donnent une interface anglaise. Le choix manuel est prioritaire et
 conservé entre les lancements, indépendamment des projets.
 
+## Mises à jour
+
+L'exécutable Windows recherche les nouvelles releases stables au lancement,
+sans retarder l'ouverture de l'interface. Si une version est disponible, une
+bannière permet de la télécharger, d'en vérifier l'empreinte SHA-256 puis de
+redémarrer ConcertCutter sur le travail en cours. Ce contrôle peut être
+désactivé ou lancé manuellement depuis **Options**.
+
 ## Premier export
 
 1. Cliquez sur **Ouvrir un enregistrement WAV** et choisissez le concert.
@@ -103,7 +111,8 @@ Concert Antidote/
 
 Seuls les fichiers demandés sont écrits. Les vidéos nécessitent au moins une
 image de fond et **ffmpeg**. Si ffmpeg manque, la fenêtre d'export propose de
-l'installer ; c'est la seule action qui télécharge un composant externe.
+l'installer. Ces téléchargements, comme celui d'une mise à jour, commencent
+uniquement après un clic de l'utilisateur.
 
 Un export existant n'est jamais écrasé silencieusement. L'application propose
 d'écrire à côté, de remplacer les fichiers de l'export précédent, ou d'annuler.
