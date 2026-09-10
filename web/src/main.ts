@@ -8,9 +8,12 @@ import { session } from './lib/session.svelte'
 
 async function start() {
   try {
-    applyLanguage(await api.preferences())
+    const preferences = await api.preferences()
+    applyLanguage(preferences)
+    session.automaticUpdateChecks = preferences.checkUpdates
   } catch {
-    applyLanguage({ language: 'auto', effectiveLanguage: 'en' })
+    applyLanguage({ language: 'auto', effectiveLanguage: 'en', checkUpdates: true })
+    session.automaticUpdateChecks = true
     session.note(t('preferences.load_failed'))
   }
   return mount(App, { target: document.getElementById('app')! })

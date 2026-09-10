@@ -36,6 +36,13 @@ Your preference is stored in `%LOCALAPPDATA%\ConcertCutter\preferences.json`.
 Track titles and exported filenames are preserved when switching languages.
 Native Windows dialog buttons follow Windows settings.
 
+## Updates
+
+The Windows executable checks for new stable releases at launch without
+delaying the interface. When a version is available, a banner can download it,
+verify its SHA-256 checksum and restart ConcertCutter on the current project.
+Automatic checks can be disabled or run manually from **Options**.
+
 ## First export
 
 1. Click **Open a WAV recording** and choose your concert.
@@ -98,7 +105,7 @@ Concert Antidote/
 
 Only the requested files are written. Video requires at least one background
 image and **ffmpeg**. If ffmpeg is missing, the export dialog offers to install
-it; this is the only action that downloads an external component.
+it. These downloads, like an application update, start only after you click.
 
 An existing export is never overwritten silently. The application offers to
 write alongside it, replace the previous export or cancel. Files you added to

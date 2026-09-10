@@ -231,6 +231,18 @@ by ConcertCutter. Manually added files are preserved.
 You can stop an export from its progress screen. A stopped export preserves the
 previous export and cleans up temporary files.
 
+## Update ConcertCutter
+
+By default, the Windows executable checks for the latest stable release at
+launch. This request contacts GitHub, but sends no recording or project data.
+Use **Options > Maintenance** to disable automatic checks or select **Check
+now**.
+
+When the update banner appears, **Update** downloads `ConcertCutter.exe`, checks
+its size and SHA-256 digest, saves the open project, and restarts the
+application. If replacement fails, the previous version is restored and the
+official website is offered as the manual update path.
+
 ## Troubleshooting and limitations
 
 - **SmartScreen blocks the executable:** check that it came from the official

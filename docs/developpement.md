@@ -137,13 +137,15 @@ La mise à jour des numéros de version et des notes de release doit être faite
 relue avant le tag. Une fois la branche principale vérifiée :
 
 ```powershell
-git tag v3.2
-git push origin v3.2
+git tag v3.3
+git push origin v3.3
 ```
 
-Le workflow reconstruit l'application sur Windows, contrôle que l'exécutable a
-une taille plausible, le joint à la release et génère les notes depuis GitHub.
-La pièce jointe conserve le nom `ConcertCutter.exe`, ce qui maintient le lien
+Le workflow vérifie que le tag normalisé correspond exactement aux versions
+Python et web, reconstruit l'application sur Windows et contrôle que
+l'exécutable a une taille plausible. Il joint `ConcertCutter.exe` et
+`SHA256SUMS.txt` à la release puis génère les notes depuis GitHub. Le nom stable
+de l'exécutable maintient le lien
 `releases/latest/download/ConcertCutter.exe` utilisé par le README.
 
 Le tag n'est pas créé automatiquement par les scripts locaux : cette étape

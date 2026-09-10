@@ -264,6 +264,19 @@ L'export peut être interrompu depuis son écran de progression.
 Un export interrompu laisse l'export précédent en place et nettoie ses fichiers
 temporaires.
 
+## Mettre ConcertCutter à jour
+
+L'exécutable Windows recherche par défaut la dernière release stable au
+lancement. Cette requête contacte GitHub, mais n'envoie ni enregistrement ni
+donnée de projet. **Options > Maintenance** permet de désactiver ce contrôle ou
+de lancer **Vérifier maintenant**.
+
+Lorsqu'une bannière annonce une nouvelle version, **Mettre à jour** télécharge
+`ConcertCutter.exe`, contrôle sa taille et son empreinte SHA-256, sauvegarde le
+travail ouvert puis redémarre l'application. Si le remplacement échoue,
+l'ancienne version est restaurée et le site officiel est proposé pour une mise
+à jour manuelle.
+
 ## Dépannage et limites
 
 - **SmartScreen bloque l'exécutable** : vérifiez qu'il vient de la release

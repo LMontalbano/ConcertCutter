@@ -1,4 +1,4 @@
-"""Le serveur local : vingt-deux routes, la bibliothèque standard, rien de plus.
+"""Le serveur local : quelques routes, la bibliothèque standard, rien de plus.
 
 `http.server` plutôt qu'un cadriciel. Les dépendances de ConcertCutter tiennent
 en trois lignes — numpy, soundfile, pywebview — et FastAPI avec uvicorn
@@ -38,7 +38,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from .. import edits, ffmpeg_install, video
+from .. import __version__, edits, ffmpeg_install, update, video
 from . import dialogs
 from .jobs import Jobs
 from .session import MissingSource, Session, SessionError
@@ -62,10 +62,23 @@ class Application:
         self.preferences = Preferences()
         self.session = Session()
         self.jobs = Jobs()
+        self.updater = update.Updater(__version__)
         self.token = secrets.token_urlsafe(32)
         self.quit = threading.Event()
         self.startup = None
         self.on_theme = None
+        self.on_quit = None
+        self.browser_mode = False
+
+    def request_quit(self) -> None:
+        self.jobs.stop_all()
+        self.quit.set()
+        callback, self.on_quit = self.on_quit, None
+        if callback:
+            try:
+                callback()
+            except Exception as failure:  # noqa: BLE001
+                print(f"Fermeture de fenêtre non appliquée ({failure}).", flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -168,6 +181,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/preferences":
             self._send(self.app.preferences.payload())
+        elif route == "/api/update":
+            online = query.get("online", ["1"])[0] != "0"
+            self._send(self.app.updater.check() if online else self.app.updater.status())
         elif route == "/api/state":
             payload = session.state()
             startup = self.app.startup
@@ -215,9 +231,33 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/preferences":
             try:
-                self._send(self.app.preferences.update(body.get("language")))
+                language = body.get("language", self.app.preferences.language)
+                if "checkUpdates" in body and not isinstance(body["checkUpdates"], bool):
+                    raise ValueError(Message("preferences.invalid_check_updates"))
+                check_updates = body.get("checkUpdates", self.app.preferences.check_updates)
+                self._send(self.app.preferences.update(language, check_updates))
             except (ValueError, OSError) as failure:
                 self._fail(error_message(failure), 500 if isinstance(failure, OSError) else 400)
+        elif route == "/api/update/download":
+            if jobs.running_any():
+                self._fail(Message("update.busy"), HTTPStatus.CONFLICT)
+                return
+            job = jobs.start("update", self.app.updater.download,
+                             Message("update.downloading"))
+            self._send(job.payload())
+        elif route == "/api/update/restart":
+            if jobs.running_any():
+                self._fail(Message("update.busy"), HTTPStatus.CONFLICT)
+                return
+            resume = session.save_for_restart()
+            self.app.updater.prepare_restart(resume, self.app.browser_mode)
+            self._send({"restarting": True})
+            timer = threading.Timer(.1, self.app.request_quit)
+            timer.daemon = True
+            timer.start()
+        elif route == "/api/update/site":
+            self.app.updater.open_site()
+            self._send({"opened": True})
         elif route == "/api/open":
             self._open(body)
         elif route == "/api/pick":
@@ -275,8 +315,7 @@ class Handler(BaseHTTPRequestHandler):
             # Ce qui tourne encore est prévenu avant qu'on ferme : un export
             # en cours a ainsi le temps de refermer son dossier de travail au
             # lieu de le laisser derrière lui.
-            jobs.stop_all()
-            self.app.quit.set()
+            self.app.request_quit()
         else:
             self._fail(Message('server.unknown_route'), HTTPStatus.NOT_FOUND)
 

@@ -37,7 +37,9 @@ class PreferencesTests(unittest.TestCase):
 
     def test_missing_invalid_and_corrupt_preferences(self):
         with patch('concertcutter.web.preferences.windows_language', return_value='fr'):
-            self.assertEqual(Preferences(self.path).payload(), {'language': 'auto', 'effectiveLanguage': 'fr'})
+            self.assertEqual(Preferences(self.path).payload(), {
+                'language': 'auto', 'effectiveLanguage': 'fr', 'checkUpdates': True,
+            })
             self.path.parent.mkdir()
             for contents in ('{broken', '[]', 'null', '{"language":"de"}', '{"language":[]}', '\ufffd'):
                 self.path.write_text(contents, encoding='utf-8')
@@ -55,6 +57,15 @@ class PreferencesTests(unittest.TestCase):
             self.assertEqual(Preferences(self.path).effective, 'fr')
             preferences.update('auto')
             self.assertEqual(Preferences(self.path).effective, 'en')
+
+    def test_update_check_preference_defaults_on_and_persists(self):
+        preferences = Preferences(self.path)
+        self.assertTrue(preferences.check_updates)
+        self.assertFalse(preferences.update('auto', False)['checkUpdates'])
+        self.assertFalse(Preferences(self.path).check_updates)
+        self.assertTrue(preferences.update('fr', True)['checkUpdates'])
+        with self.assertRaises(ValueError):
+            preferences.update('fr', 'yes')
 
     def test_invalid_update_and_failed_write_preserve_previous_preference(self):
         preferences = Preferences(self.path)
@@ -136,11 +147,24 @@ class PreferencesApiTests(unittest.TestCase):
     def test_preferences_and_error_contract_preserve_session(self):
         before = self.app.session.state()
         self.assertEqual(self.request('/api/preferences', token=False)[0], 403)
+        self.assertEqual(self.request('/api/update?online=0', token=False)[0], 403)
+        status, updater = self.request('/api/update?online=0')
+        self.assertEqual(status, 200)
+        self.assertEqual(updater['status'], 'idle')
+        self.assertFalse(updater['canAutoUpdate'])
         for language in ('fr', 'en', 'auto'):
             status, response = self.request('/api/preferences', {'language': language})
             self.assertEqual(status, 200)
             self.assertEqual(response['language'], language)
+            self.assertTrue(response['checkUpdates'])
             self.assertEqual(self.app.session.state(), before)
+        status, response = self.request('/api/preferences', {'checkUpdates': False})
+        self.assertEqual(status, 200)
+        self.assertFalse(response['checkUpdates'])
+        self.assertEqual(response['language'], 'auto')
+        status, error = self.request('/api/preferences', {'checkUpdates': None})
+        self.assertEqual(status, 400)
+        self.assertEqual(error['errorMessage']['key'], 'preferences.invalid_check_updates')
         self.request('/api/preferences', {'language': 'en'})
         status, error = self.request('/api/analyze', {})
         # Analysis runs asynchronously; failures retain the message descriptor.
@@ -163,6 +187,48 @@ class PreferencesApiTests(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertEqual(error['errorMessage']['key'], 'preferences.save_failed')
         self.assertEqual(self.app.preferences.language, 'fr')
+
+    def test_update_download_is_a_job_and_refuses_concurrent_work(self):
+        with patch.object(self.app.updater, 'download',
+                          side_effect=lambda job: {'ready': True}):
+            status, started = self.request('/api/update/download', {})
+            self.assertEqual(status, 200)
+            self.assertEqual(started['kind'], 'update')
+            job = self.app.jobs.get(started['id'])
+            while job.state == 'running':
+                threading.Event().wait(.01)
+            self.assertEqual(job.result, {'ready': True})
+
+        release = threading.Event()
+        blocker = self.app.jobs.start('export', lambda _job: release.wait(1))
+        try:
+            status, error = self.request('/api/update/download', {})
+            self.assertEqual(status, 409)
+            self.assertEqual(error['errorMessage']['key'], 'update.busy')
+        finally:
+            release.set()
+        while blocker.state == 'running':
+            threading.Event().wait(.01)
+
+    def test_update_restart_saves_and_passes_the_project_to_the_helper(self):
+        resume = Path(self.temporary.name) / 'travail été.ccproj.json'
+        timer = Mock()
+        with patch.object(self.app.session, 'save_for_restart', return_value=resume), \
+                patch.object(self.app.updater, 'prepare_restart') as prepare, \
+                patch('concertcutter.web.server.threading.Timer', return_value=timer):
+            status, response = self.request('/api/update/restart', {})
+        self.assertEqual(status, 200)
+        self.assertTrue(response['restarting'])
+        prepare.assert_called_once_with(resume, False)
+        timer.start.assert_called_once_with()
+
+        with patch.object(
+                self.app.session, 'save_for_restart',
+                side_effect=server.SessionError(Message('update.save_failed')),
+        ):
+            status, error = self.request('/api/update/restart', {})
+        self.assertEqual(status, 400)
+        self.assertEqual(error['errorMessage']['key'], 'update.save_failed')
 
 
 if __name__ == '__main__':

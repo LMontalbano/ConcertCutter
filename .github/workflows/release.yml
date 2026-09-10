@@ -51,6 +51,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Vérifier les versions
+        shell: pwsh
+        run: |
+          $pythonVersion = python -c "import concertcutter; print(concertcutter.__version__)"
+          $webVersion = (Get-Content web\package.json | ConvertFrom-Json).version
+          if ($pythonVersion -ne $webVersion) {
+            throw "versions Python ($pythonVersion) et web ($webVersion) différentes"
+          }
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            if ($env:GITHUB_REF_NAME -notmatch '^v(?<major>\d+)\.(?<minor>\d+)(?:\.(?<patch>\d+))?$') {
+              throw "tag de release invalide : $env:GITHUB_REF_NAME"
+            }
+            $patch = if ($Matches.patch) { $Matches.patch } else { "0" }
+            $tagVersion = "$($Matches.major).$($Matches.minor).$patch"
+            if ($tagVersion -ne $pythonVersion) {
+              throw "tag $env:GITHUB_REF_NAME différent de la version $pythonVersion"
+            }
+          }
+
       - name: Construire
         run: .\build_exe.bat
 
@@ -63,18 +82,28 @@ jobs:
           "{0:N1} Mo" -f ($exe.Length / 1MB)
           if ($exe.Length -lt 15MB) { throw "executable trop petit : construction incomplete" }
 
+      - name: Produire l'empreinte SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\ConcertCutter.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ConcertCutter.exe" | Set-Content dist\SHA256SUMS.txt -Encoding ascii
+
       # Disponible même sans publication : c'est ce qui rend le déclenchement
       # manuel utile, on récupère l'exécutable dans l'onglet Actions.
       - uses: actions/upload-artifact@v4
         with:
-          name: ConcertCutter.exe
-          path: dist/ConcertCutter.exe
+          name: ConcertCutter-release
+          path: |
+            dist/ConcertCutter.exe
+            dist/SHA256SUMS.txt
 
       - name: Publier la release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ConcertCutter.exe
+          files: |
+            dist/ConcertCutter.exe
+            dist/SHA256SUMS.txt
           # Le nom du fichier attaché ne changeant pas d'une version à l'autre,
           # le lien .../releases/latest/download/ConcertCutter.exe du README
           # reste valable sans être réécrit à chaque publication.

@@ -15,6 +15,7 @@
   import Busy from './components/Busy.svelte'
   import Options from './components/Options.svelte'
   import ExportDialog from './components/ExportDialog.svelte'
+  import UpdateBanner from './components/UpdateBanner.svelte'
 
   let audio: HTMLAudioElement
   let exportOpen = $state(false)
@@ -176,6 +177,8 @@
     </div>
   {/if}
 </div>
+
+<UpdateBanner />
 
 {#if session.job}
   <Busy job={session.job} />

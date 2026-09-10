@@ -28,6 +28,7 @@ from pathlib import Path
 
 from .. import __version__
 from . import dialogs, server
+from .. import update
 
 # Ce que Windows affiche dans la barre des tâches quand il regroupe les
 # fenêtres. Sans identité propre, le regroupement se fait sous l'exécutable qui
@@ -44,6 +45,10 @@ MIN_WIDTH, MIN_HEIGHT = 1040, 680
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["--apply-update"]:
+        return _run_update_helper(arguments[1:])
+
     parser = argparse.ArgumentParser(
         prog="concertcutter-web",
         description="Ouvre ConcertCutter dans une fenêtre web locale.")
@@ -55,9 +60,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Servir sans rien ouvrir : affiche l'adresse et attend")
     parser.add_argument("--port", type=int, default=0,
                         help="Port d'écoute (0 : choisi par le système)")
-    chosen = parser.parse_args(argv)
+    chosen = parser.parse_args(arguments)
 
     httpd, app = server.serve(chosen.port)
+    app.browser_mode = chosen.browser
     address = server.url_for(httpd)
     threading.Thread(target=httpd.serve_forever, daemon=True,
                      name="http").start()
@@ -96,6 +102,23 @@ def icon_path() -> Path:
     root = Path(getattr(sys, "_MEIPASS",
                         Path(__file__).resolve().parent.parent.parent))
     return root / "concertcutter" / "assets" / "icon.ico"
+
+
+def _run_update_helper(argv: list[str]) -> int:
+    """Mode interne du clone temporaire chargé de remplacer le vrai exe."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("parent_pid", type=int)
+    parser.add_argument("target", type=Path)
+    parser.add_argument("staged", type=Path)
+    parser.add_argument("backup", type=Path)
+    parser.add_argument("status", type=Path)
+    parser.add_argument("--resume-after-update", type=Path)
+    parser.add_argument("--browser-after-update", action="store_true")
+    chosen = parser.parse_args(argv)
+    return update.apply_staged_update(
+        chosen.parent_pid, chosen.target, chosen.staged, chosen.backup,
+        chosen.status, chosen.resume_after_update, chosen.browser_after_update,
+    )
 
 
 # Dernier thème demandé par la page. Retenu ici, et non déduit à chaque fois,
@@ -221,6 +244,7 @@ def _in_window(page: str, app) -> None:
 
     # Synchronisation du thème entre le frontend web et la fenêtre native Windows
     app.on_theme = lambda theme: _apply_theme_to_window(window, theme)
+    app.on_quit = window.destroy
 
     # La fenêtre n'existe pas encore ici : son habillage se pose une fois qu'elle
     # est à l'écran.
@@ -230,7 +254,13 @@ def _in_window(page: str, app) -> None:
     # sans fenêtre tenir un port jusqu'au prochain redémarrage. Ce qui tourne
     # est prévenu d'abord : un export en cours referme ainsi son dossier de
     # travail au lieu de l'abandonner à côté de l'export.
-    window.events.closed += lambda *_: (app.jobs.stop_all(), app.quit.set())
+    def closed(*_args) -> None:
+        # La fenêtre est déjà fermée : ne pas rappeler destroy depuis le
+        # callback réservé aux fermetures demandées par le serveur.
+        app.on_quit = None
+        app.request_quit()
+
+    window.events.closed += closed
     try:
         webview.start()
     except Exception as failure:  # noqa: BLE001 — WebView2 absent, pilote cassé…
@@ -238,6 +268,7 @@ def _in_window(page: str, app) -> None:
         # chaque bascule imprimait ensuite un « habillage non appliqué » dans
         # la console, pour une fenêtre native dont il n'y a plus rien à peindre.
         app.on_theme = None
+        app.on_quit = None
         print(f"Fenêtre native indisponible ({failure}) : passage au navigateur.",
               flush=True)
         _in_browser(page, app)
@@ -246,6 +277,7 @@ def _in_window(page: str, app) -> None:
 def _in_browser(page: str, app) -> None:
     """Le navigateur par défaut, avec saisie manuelle des chemins."""
     dialogs.use(dialogs.NoDialogs())
+    app.browser_mode = True
     webbrowser.open(page)
     print(f"ConcertCutter sert sur {page}", flush=True)
     app.quit.wait()

@@ -3,15 +3,22 @@ import en from '../../../concertcutter/locales/en.json' with { type: 'json' }
 
 export type Language = 'fr' | 'en'
 export type LanguageChoice = 'auto' | Language
-export interface Preferences { language: LanguageChoice; effectiveLanguage: Language }
+export interface Preferences {
+  language: LanguageChoice
+  effectiveLanguage: Language
+  checkUpdates: boolean
+}
 export interface LocalizedMessage { key: string; params?: Record<string, string | number | LocalizedMessage> }
 type Entry = string | { one: string; other: string }
 const catalogs: Record<Language, Record<string, Entry>> = { fr, en }
-export const locale = $state<Preferences>({ language: 'auto', effectiveLanguage: 'en' })
+export const locale = $state<Preferences>({
+  language: 'auto', effectiveLanguage: 'en', checkUpdates: true,
+})
 
 export function applyLanguage(preferences: Preferences): void {
   locale.language = preferences.language
   locale.effectiveLanguage = preferences.effectiveLanguage
+  locale.checkUpdates = preferences.checkUpdates
   document.documentElement.lang = preferences.effectiveLanguage
 }
 

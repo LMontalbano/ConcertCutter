@@ -9,7 +9,9 @@ import { t } from './i18n.svelte'
    La distinction n'est pas de principe. Elle décide de ce qui survit à un
    rechargement de la page : le travail, oui ; la position de la loupe, non. */
 
-import { api, follow, ApiError, type Job, type Segment, type State } from './api'
+import {
+  api, follow, ApiError, type Job, type Segment, type State, type UpdateInfo,
+} from './api'
 
 export const MIN_VIEW_S = 4
 /** Ce que la carte d'édition montre au-delà du morceau, de chaque côté.
@@ -52,6 +54,10 @@ class Session {
   missingSource = $state<{ project: string; missing: string } | null>(null)
   job = $state<Job | null>(null)
   dialogs = $state(true)
+  automaticUpdateChecks = $state(true)
+  update = $state<UpdateInfo | null>(null)
+  updateError = $state('')
+  updateDismissed = $state(false)
 
   private audio: HTMLAudioElement | null = null
   private noteTimer = 0
@@ -114,6 +120,7 @@ class Session {
 
   async boot(): Promise<void> {
     this.dress()
+    void this.bootUpdates()
     try {
       const found = await api.recent()
       this.dialogs = found.dialogs
@@ -121,6 +128,68 @@ class Session {
       /* l'accueil se passe de la liste des travaux */
     }
     await this.run(() => this.refresh())
+  }
+
+  private async bootUpdates(): Promise<void> {
+    try {
+      const startup = await api.updateStatus()
+      if (startup.status === 'failed') {
+        this.updateError = startup.error || t('update.replacement_failed')
+        return
+      }
+      if (!startup.canAutoUpdate) return
+    } catch {
+      /* L'état local d'un updater absent ne doit jamais gêner le lancement. */
+    }
+    if (this.automaticUpdateChecks) await this.checkUpdate(false)
+  }
+
+  async checkUpdate(manual = false): Promise<void> {
+    if (manual) {
+      this.updateError = ''
+      this.updateDismissed = false
+    }
+    try {
+      const found = await api.checkUpdate()
+      if (found.status === 'available') {
+        this.update = found
+        this.updateDismissed = false
+      } else if (manual) {
+        this.update = null
+        this.note(t('update.up_to_date', { version: found.currentVersion }))
+      }
+    } catch (failure) {
+      if (manual) this.updateError = message(failure)
+    }
+  }
+
+  dismissUpdate(): void {
+    this.updateDismissed = true
+    this.updateError = ''
+  }
+
+  async installUpdate(): Promise<void> {
+    if (!this.update?.canAutoUpdate) {
+      await this.openUpdateSite()
+      return
+    }
+    this.updateError = ''
+    try {
+      const done = await this.watch(await api.downloadUpdate())
+      if (done.state !== 'done') return
+      await api.restartForUpdate()
+    } catch (failure) {
+      this.updateError = message(failure)
+      this.job = null
+    }
+  }
+
+  async openUpdateSite(): Promise<void> {
+    try {
+      await api.openUpdateSite()
+    } catch (failure) {
+      this.updateError = message(failure)
+    }
   }
 
   async refresh(): Promise<void> {

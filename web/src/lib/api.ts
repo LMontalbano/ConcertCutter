@@ -88,6 +88,15 @@ export interface Job {
   project?: string
 }
 
+export interface UpdateInfo {
+  status: 'idle' | 'upToDate' | 'available' | 'failed'
+  currentVersion: string
+  latestVersion?: string
+  size?: number
+  canAutoUpdate: boolean
+  error?: string
+}
+
 export class ApiError extends Error {
   /** Ce que le serveur refuse porte sa phrase : on la montre telle quelle. */
   constructor(
@@ -138,6 +147,13 @@ async function binary(
 export const api = {
   preferences: () => call<Preferences>('/api/preferences'),
   setLanguage: (language: LanguageChoice) => call<Preferences>('/api/preferences', { language }),
+  setPreferences: (language: LanguageChoice, checkUpdates: boolean) =>
+    call<Preferences>('/api/preferences', { language, checkUpdates }),
+  updateStatus: () => call<UpdateInfo>('/api/update?online=0'),
+  checkUpdate: () => call<UpdateInfo>('/api/update'),
+  downloadUpdate: () => post<Job>('/api/update/download'),
+  restartForUpdate: () => post<{ restarting: boolean }>('/api/update/restart'),
+  openUpdateSite: () => post<{ opened: boolean }>('/api/update/site'),
   token: TOKEN,
   state: () => call<State>('/api/state'),
   open: (path?: string, kind?: string, source?: string) =>

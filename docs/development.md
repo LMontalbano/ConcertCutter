@@ -135,14 +135,16 @@ Update and review the version numbers and release notes before creating the
 tag. Once the main branch has passed its checks:
 
 ```powershell
-git tag v3.2
-git push origin v3.2
+git tag v3.3
+git push origin v3.3
 ```
 
-The workflow rebuilds the application on Windows, checks that the executable
-has a plausible size, attaches it to the release and generates notes from
-GitHub. The attachment remains named `ConcertCutter.exe`, which keeps the
-`releases/latest/download/ConcertCutter.exe` link used by the README stable.
+The workflow verifies that the normalized tag exactly matches the Python and
+web versions, rebuilds the application on Windows, and checks that the
+executable has a plausible size. It attaches both `ConcertCutter.exe` and
+`SHA256SUMS.txt` to the release, then generates notes from GitHub. The stable
+executable name keeps the `releases/latest/download/ConcertCutter.exe` link
+used by the README valid.
 
 Local scripts do not create the tag automatically: publishing remains an
 explicit decision.
