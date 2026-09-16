@@ -195,8 +195,9 @@ vignette a le focus.
 
 Deux comportements sont possibles :
 
-- par défaut, les images défilent dans l'ordre, une toutes les huit secondes,
-  puis le cycle recommence ;
+- par défaut, les images défilent dans l'ordre : chacune reste pleinement
+  affichée huit secondes, puis le fondu choisi l'amène à la suivante, et le
+  cycle recommence ;
 - avec **Une seule image par morceau**, la première image est associée au
   premier morceau sélectionné, la deuxième au suivant, etc. S'il manque des
   images, le cycle recommence ; s'il y en a trop, les dernières sont ignorées.

@@ -95,7 +95,7 @@
   "ui.concert_photos_cover_art_poster": "Photos du concert, pochette, affiche.",
   "ui.track_1_gets_the_first_image_track_2": "Le morceau 1 reçoit la première image, le 2 la deuxième, et ainsi de suite ; le cycle recommence s'il y a moins d'images que de morceaux. Dans la vidéo du concert entier, le fond change donc au morceau ; dans les vidéos de morceaux, chacune garde la sienne. Décochée, les images défilent au chronomètre, ici comme là.",
   "ui.duration_of_the_transition_between_images_with_one": "Durée du fondu entre deux images. Avec une image par morceau, il joue aux frontières de morceaux, dans la vidéo du concert entier ; une vidéo de morceau n'a qu'une image, donc rien à fondre.",
-  "ui.images_play_in_the_order_above_changing_every": "Les images se relaient dans l'ordre ci-dessus, une toutes les huit secondes, et le cycle recommence aussi longtemps que dure le son. Chacune garde ses proportions et se centre sur du noir.",
+  "ui.images_play_in_the_order_above_changing_every": "Les images se relaient dans l'ordre ci-dessus. Chacune reste pleinement affichée huit secondes, puis le fondu choisi l'amène à la suivante. Le cycle recommence aussi longtemps que dure le son. Chaque image garde ses proportions et se centre sur du noir.",
   "ui.concert_photos_cover_art_or_a_poster_the": "Photos du concert, pochette, affiche. Le titre du morceau est incrusté par-dessus.",
   "ui.history": "Historique",
   "ui.undo_ctrl_z": "Annuler (Ctrl+Z)",

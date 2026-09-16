@@ -35,6 +35,16 @@ class AlbumTimingTests(unittest.TestCase):
 
 @unittest.skipUnless(video.find_ffmpeg(), "ffmpeg absent")
 class ImageTimingTests(unittest.TestCase):
+    def test_slideshow_honours_a_fade_longer_than_its_hold(self) -> None:
+        levels = self.render_slideshow_frames(hold=2, fade=3)
+        # Deux secondes pleinement blanc, trois secondes de fondu vers noir,
+        # deux secondes noires, puis trois secondes pour revenir au blanc.
+        for time, expected in ((1.5, 1), (2.75, .75), (3.5, .5), (4.25, .25),
+                               (6, 0), (7.75, .25), (8.5, .5), (9.25, .75)):
+            with self.subTest(time=time):
+                self.assertAlmostEqual(levels[round(time * 10)], expected, delta=.08)
+        self.assertAlmostEqual(len(levels) / 10, 10, delta=.1)
+
     def test_two_second_fades_start_with_audio_at_every_chapter(self) -> None:
         durations = _album_durations([{"duration": 6}] * 3, 2)
         levels = self.render_frames(durations, fade=2)
@@ -59,22 +69,39 @@ class ImageTimingTests(unittest.TestCase):
 
     def render_frames(self, durations: list[float], fade: float) -> np.ndarray:
         with tempfile.TemporaryDirectory() as root:
-            stills = []
-            for name, colour in (("white", 255), ("black", 0)):
-                path = Path(root) / f"{name}.ppm"
-                path.write_bytes(b"P6\n32 18\n255\n" + bytes([colour]) * 32 * 18 * 3)
-                stills.append(str(path))
+            stills = self.stills(Path(root))
             captions = video.captions_from_durations([""] * len(durations), durations)
             params = video.VideoParams(image=stills[0], images=tuple(stills),
                                        per_caption=True, slide_fade_s=fade,
                                        width=32, height=18, fps=10)
             path = video._chapters(captions, params)
-            result = subprocess.run([
-                video.find_ffmpeg(), "-v", "error", "-i", str(path),
-                "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
-            ], capture_output=True, check=True)
-            frames = np.frombuffer(result.stdout, np.uint8).reshape(-1, 18, 32, 3)
-            return frames.mean(axis=(1, 2, 3)) / 255
+            return self.levels(path)
+
+    def render_slideshow_frames(self, hold: float, fade: float) -> np.ndarray:
+        with tempfile.TemporaryDirectory() as root:
+            stills = self.stills(Path(root))
+            params = video.VideoParams(image=stills[0], images=tuple(stills),
+                                       slide_s=hold, slide_fade_s=fade,
+                                       width=32, height=18, fps=10)
+            return self.levels(video._slideshow(params))
+
+    @staticmethod
+    def stills(root: Path) -> list[str]:
+        stills = []
+        for name, colour in (("white", 255), ("black", 0)):
+            path = root / f"{name}.ppm"
+            path.write_bytes(b"P6\n32 18\n255\n" + bytes([colour]) * 32 * 18 * 3)
+            stills.append(str(path))
+        return stills
+
+    @staticmethod
+    def levels(path: Path) -> np.ndarray:
+        result = subprocess.run([
+            video.find_ffmpeg(), "-v", "error", "-i", str(path),
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ], capture_output=True, check=True)
+        frames = np.frombuffer(result.stdout, np.uint8).reshape(-1, 18, 32, 3)
+        return frames.mean(axis=(1, 2, 3)) / 255
 
 
 if __name__ == "__main__":

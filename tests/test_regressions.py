@@ -219,6 +219,10 @@ class ValidationTests(unittest.TestCase):
             {"crossfade": 2.0, "video_crossfade": 0})
         self.assertEqual((silent.crossfade_s, silent.video_crossfade_s), (2.0, 0.0))
 
+    def test_a_zero_image_fade_is_not_replaced_by_the_default(self) -> None:
+        params = self.session.render_params({"slide_fade": 0})
+        self.assertEqual(params.video_slide_fade_s, 0.0)
+
     def test_unknown_selection_is_rejected(self) -> None:
         with self.assertRaises(SessionError):
             self.session.render_params({"selection": [99]}, self.session.analysis)
