@@ -171,8 +171,9 @@ MP4 output requires at least one image. The picker supports JPEG, PNG, BMP and
 WebP. Reorder images by dragging or with the left and right arrow keys while a
 thumbnail has keyboard focus.
 
-By default, images advance in order every eight seconds and repeat. With
-**One image per track**, the first image goes to the first selected track, the
+By default, images advance in order: each remains fully visible for eight
+seconds, then the selected fade leads into the next one, and the cycle repeats.
+With **One image per track**, the first image goes to the first selected track, the
 second to the next, and so on. If there are too few images, they repeat; if there
 are too many, the extras are ignored. The dialog warns about mismatched counts
 before exporting.

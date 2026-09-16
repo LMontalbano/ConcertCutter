@@ -95,7 +95,7 @@
   "ui.concert_photos_cover_art_poster": "Concert photos, cover art, poster.",
   "ui.track_1_gets_the_first_image_track_2": "Track 1 gets the first image, track 2 the second, and so on; the cycle repeats if there are fewer images than tracks. In the full-concert video, the background changes with each track; individual track videos keep a single image. When unchecked, images advance on a timer in both outputs.",
   "ui.duration_of_the_transition_between_images_with_one": "Duration of the transition between images. With one image per track, transitions occur at track boundaries in the full-concert video. Individual track videos have just one image, so there is no transition.",
-  "ui.images_play_in_the_order_above_changing_every": "Images play in the order above, changing every eight seconds and repeating for as long as the audio lasts. Each image keeps its aspect ratio and is centered on black.",
+  "ui.images_play_in_the_order_above_changing_every": "Images play in the order above. Each stays fully visible for eight seconds, then the selected fade leads into the next one. The cycle repeats for as long as the audio lasts. Each image keeps its aspect ratio and is centered on black.",
   "ui.concert_photos_cover_art_or_a_poster_the": "Concert photos, cover art or a poster. The track title is overlaid on top.",
   "ui.history": "History",
   "ui.undo_ctrl_z": "Undo (Ctrl+Z)",

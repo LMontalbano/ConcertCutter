@@ -371,7 +371,8 @@ class Session:
             video_image=(choice.get("image") or None),
             video_images=_images(choice.get("images")),
             video_slide_fade_s=_bounded(
-                choice.get("slide_fade") or video.SLIDE_FADE_S,
+                (video.SLIDE_FADE_S if choice.get("slide_fade") is None
+                 else choice["slide_fade"]),
                 Message('server.image_transition'), 0.0, 60.0),
             video_one_per_track=_flag(choice, "one_per_track"),
             selection=selection,

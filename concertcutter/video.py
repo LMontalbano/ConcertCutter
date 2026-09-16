@@ -62,9 +62,9 @@ FPS = 10
 KEYFRAME_S = 5      # une image-clé toutes les 5 s : déplacement fluide
 AUDIO_BITRATE = "192k"
 
-# Diaporama : durée d'affichage d'une image, et durée du fondu vers la
-# suivante. Huit secondes est le temps qu'on regarde une photo sans s'ennuyer
-# ni avoir le sentiment qu'elle défile.
+# Diaporama : durée pendant laquelle une image reste pleinement affichée,
+# avant le fondu vers la suivante. Huit secondes est le temps qu'on regarde
+# une photo sans s'ennuyer ni avoir le sentiment qu'elle défile.
 #
 # Une constante, et non un réglage : le rythme d'un diaporama n'a pas à se
 # calculer. Il a un temps été déduit de la durée à couvrir — les images se
@@ -472,7 +472,11 @@ def _slideshow(params: VideoParams,
     global _cycle_dir
     stills = params.stills()
     hold = max(1.0, params.slide_s)
-    fade = max(0.0, min(params.slide_fade_s, hold / 2))
+    # Le champ promet une durée de fondu, jusqu'à 60 s. La borner à la
+    # moitié des huit secondes d'affichage faisait donc toujours quatre
+    # secondes pour toute valeur plus grande, sans que l'interface le dise.
+    # `hold` est le plateau pleinement visible ; le fondu s'ajoute après lui.
+    fade = max(0.0, params.slide_fade_s)
     signature = (tuple(stills), hold, fade, params.width, params.height,
                  params.fps, params.crf)
 
@@ -486,9 +490,19 @@ def _slideshow(params: VideoParams,
         ordered = stills + ([stills[0]] if fade else [])
         inputs: list[str] = []
         for index, still in enumerate(ordered):
-            # La reprise de queue ne dure que le fondu : c'est tout ce qu'on
-            # lui demande, et une seconde de plus rallongerait le cycle d'autant.
-            span = fade if fade and index == len(ordered) - 1 else hold
+            # Une image intermédiaire sert d'abord au fondu entrant, reste
+            # seule pendant `hold`, puis sert au fondu sortant. La première
+            # n'a pas de fondu entrant dans ce cycle ; sa reprise de queue n'a
+            # que celui-là. Ces durées rendent la valeur choisie exacte, même
+            # lorsqu'elle dépasse les huit secondes du plateau.
+            if not fade:
+                span = hold
+            elif index == 0:
+                span = hold + fade
+            elif index == len(ordered) - 1:
+                span = fade
+            else:
+                span = 2 * fade + hold
             inputs += ["-loop", "1", "-t", f"{span:.3f}",
                        "-framerate", str(params.fps), "-i", still]
 
@@ -498,9 +512,13 @@ def _slideshow(params: VideoParams,
             previous = "[s0]"
             for index in range(1, len(ordered)):
                 label = f"[x{index}]"
+                # Chaque transition commence après le plateau de l'image
+                # courante. Les fondus précédents font partie du temps déjà
+                # assemblé, d'où `(index - 1) * fade`.
+                offset = index * hold + (index - 1) * fade
                 chain.append(f"{previous}[s{index}]xfade=transition=fade"
                              f":duration={fade:.3f}"
-                             f":offset={index * (hold - fade):.3f}{label}")
+                             f":offset={offset:.3f}{label}")
                 previous = label
             last = previous
         else:
@@ -510,7 +528,7 @@ def _slideshow(params: VideoParams,
 
         # Le dernier fondu compris : le cycle se termine sur la première image
         # pleinement revenue, exactement là où le tour suivant la reprend.
-        cycle = len(stills) * (hold - fade) + fade if fade else len(stills) * hold
+        cycle = len(stills) * (hold + fade) if fade else len(stills) * hold
         out_path = Path(_cycle_dir.name) / f"diaporama{len(_cycles)}.mp4"
         _run([
             find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
