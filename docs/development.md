@@ -135,8 +135,8 @@ Update and review the version numbers and release notes before creating the
 tag. Once the main branch has passed its checks:
 
 ```powershell
-git tag v3.3
-git push origin v3.3
+git tag v3.4
+git push origin v3.4
 ```
 
 The workflow verifies that the normalized tag exactly matches the Python and
