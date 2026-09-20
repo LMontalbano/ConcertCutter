@@ -14,11 +14,15 @@
   import Empty from './components/Empty.svelte'
   import Busy from './components/Busy.svelte'
   import Options from './components/Options.svelte'
+  import ExportChoiceModal from './components/ExportChoiceModal.svelte'
   import ExportDialog from './components/ExportDialog.svelte'
+  import VideoMontageModal from './components/VideoMontageModal.svelte'
   import UpdateBanner from './components/UpdateBanner.svelte'
 
   let audio: HTMLAudioElement
-  let exportOpen = $state(false)
+  let exportChoiceOpen = $state(false)
+  let exportAudioOpen = $state(false)
+  let exportVideoOpen = $state(false)
   let extra = $state<Job | null>(null)
 
   $effect(() => {
@@ -39,8 +43,21 @@
   }
 
   async function onKey(event: KeyboardEvent): Promise<void> {
-    if (typing() || session.job || exportOpen || session.screen === 'options') {
-      if (event.key === 'Escape' && exportOpen) exportOpen = false
+    if (
+      typing() ||
+      session.job ||
+      exportChoiceOpen ||
+      exportAudioOpen ||
+      exportVideoOpen ||
+      session.screen === 'options'
+    ) {
+      if (event.key === 'Escape') {
+        if (exportChoiceOpen) exportChoiceOpen = false
+        else if (exportAudioOpen) exportAudioOpen = false
+        // Pas de `exportVideoOpen = false` ici : l'écran de montage met son
+        // travail à l'abri avant de se fermer, et il gère son propre Échap.
+        // Fermer par-dessus lui sauterait cette mise à l'abri.
+      }
       return
     }
     const control = event.ctrlKey || event.metaKey
@@ -116,7 +133,7 @@
     <Empty />
   {:else}
     <Header
-      onExport={() => (exportOpen = true)}
+      onExport={() => (exportChoiceOpen = true)}
       onOptions={() => (session.screen = 'options')}
     />
     <Ribbon />
@@ -186,9 +203,33 @@
   <Busy job={extra} />
 {/if}
 
-{#if exportOpen}
+{#if exportChoiceOpen}
+  <ExportChoiceModal
+    onChooseAudio={() => {
+      exportChoiceOpen = false
+      exportAudioOpen = true
+    }}
+    onChooseVideo={() => {
+      exportChoiceOpen = false
+      exportVideoOpen = true
+    }}
+    onClose={() => (exportChoiceOpen = false)}
+  />
+{/if}
+
+{#if exportAudioOpen}
   <ExportDialog
-    onClose={() => (exportOpen = false)}
+    onClose={() => (exportAudioOpen = false)}
+    onBusy={(job) => (extra = job)}
+  />
+{/if}
+
+{#if exportVideoOpen}
+  <VideoMontageModal
+    initialConfig={session.montageDraft?.config ?? session.state?.export.video_montage ?? null}
+    initialDir={session.montageDraft?.dir ?? session.state?.export.dir ?? ''}
+    onClose={() => (exportVideoOpen = false)}
+    onSave={(config, dir) => (session.montageDraft = { config, dir })}
     onBusy={(job) => (extra = job)}
   />
 {/if}
