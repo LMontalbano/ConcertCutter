@@ -11,6 +11,7 @@ import { t } from './i18n.svelte'
 
 import {
   api, follow, ApiError, type Job, type Segment, type State, type UpdateInfo,
+  type VideoMontageConfig,
 } from './api'
 
 export const MIN_VIEW_S = 4
@@ -45,6 +46,19 @@ class Session {
       fenêtre de soixante secondes du démarrage. Le premier morceau s'y
       trouvait coupé, et il fallait dézoomer pour le voir en entier. */
   private framed = false
+
+  /** Le montage vidéo en cours de composition, et son dossier de sortie.
+
+      Exception assumée à la règle du fichier : c'est du travail, et pourtant
+      il vit ici. Le serveur ne retient un export qu'au moment où il le lance
+      — il n'existe aucune route pour lui confier un montage qu'on n'a pas
+      encore exporté. Sans ce brouillon, fermer la fenêtre de montage, ou
+      seulement s'appuyer sur Échap, jetait tout le placement.
+
+      Il est hors de `state` pour survivre à `refresh()`, qui remplace en bloc
+      ce que dit le serveur. Il ne survit pas à un rechargement de la page,
+      et c'est la limite : ce qu'on protège, c'est la séance en cours. */
+  montageDraft = $state<{ config: VideoMontageConfig; dir: string } | null>(null)
 
   screen = $state<'empty' | 'main' | 'options'>('empty')
   theme = $state<'dark' | 'light'>('dark')
@@ -257,6 +271,9 @@ class Session {
       this.selected = 0
       this.playhead = 0
       this.framed = false
+      // Un montage se compose pour *un* concert : ses plans désignent des
+      // morceaux par numéro, qui ne veulent plus rien dire dans le suivant.
+      this.montageDraft = null
       await this.refresh()
       this.note(t('ui.opened_value', { p0: this.state?.name ?? '' }))
     })

@@ -37,6 +37,38 @@ export interface Settings {
   fade_ms: number
 }
 
+export interface TimelineClip {
+  id: string
+  image: string
+  start: number
+  end: number
+}
+
+export interface TimelineAudioClip {
+  id: string
+  trackNumber: number
+  /** Position du clip dans le montage. */
+  start: number
+  end: number
+  /** Portion lue dans l'enregistrement source. */
+  sourceStart: number
+  sourceEnd: number
+}
+
+export interface VideoMontageConfig {
+  enabled: boolean
+  clips: TimelineClip[]
+  audioClips?: TimelineAudioClip[]
+  library: string[]
+  selectedTracks?: number[]
+  titleOverlay: boolean
+  titlePosition: 'bottom' | 'top' | 'center'
+  transitionFade: number
+  trackTrims?: Record<number, { trimStart: number; trimEnd: number }>
+  full?: boolean
+  tracks?: boolean
+}
+
 export interface ExportChoice {
   dir: string
   image: string
@@ -51,6 +83,7 @@ export interface ExportChoice {
   tracks: boolean
   video_full: boolean
   video_tracks: boolean
+  video_montage?: VideoMontageConfig | null
 }
 
 export interface State {

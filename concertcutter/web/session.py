@@ -79,6 +79,7 @@ DEFAULT_EXPORT = {
     "slide_fade": video.SLIDE_FADE_S, "selection": None,
     "full": False, "tracks": False, "video_full": False, "video_tracks": False,
     "one_per_track": False,
+    "video_montage": None,
 }
 
 # Les quatre sorties ne se retiennent pas d'un travail à l'autre : elles
@@ -356,6 +357,44 @@ class Session:
 
     def render_params(self, choice: dict, analysis: Analysis | None = None) -> RenderParams:
         selection = self._selection(choice.get("selection"), analysis)
+        montage = choice.get("video_montage")
+        has_montage = isinstance(montage, dict) and bool(montage.get("enabled", True))
+
+        video_full = _flag(choice, "video_full")
+        video_tracks = _flag(choice, "video_tracks")
+        if has_montage:
+            if "full" in montage:
+                video_full = bool(montage.get("full"))
+            if "tracks" in montage:
+                video_tracks = bool(montage.get("tracks"))
+            video_clips = tuple(montage.get("clips") or ())
+            audio_clips = tuple(montage.get("audioClips") or ())
+            video_title_overlay = bool(montage.get("titleOverlay", True))
+            video_title_position = str(montage.get("titlePosition", "bottom"))
+            transition_fade = float(montage.get("transitionFade", choice.get("slide_fade", video.SLIDE_FADE_S)))
+            images = list(montage.get("library") or [])
+            if not images and video_clips:
+                images = list(dict.fromkeys(c["image"] for c in video_clips if c.get("image")))
+            track_trims = {}
+            if isinstance(montage.get("trackTrims"), dict):
+                for k, v in montage["trackTrims"].items():
+                    try:
+                        num = int(k)
+                        ts = float(v.get("trimStart", 0.0))
+                        te = float(v.get("trimEnd", 0.0))
+                        track_trims[num] = (max(0.0, ts), max(0.0, te))
+                    except (ValueError, TypeError):
+                        pass
+        else:
+            video_clips = ()
+            audio_clips = ()
+            video_title_overlay = True
+            video_title_position = "bottom"
+            transition_fade = (video.SLIDE_FADE_S if choice.get("slide_fade") is None
+                               else choice["slide_fade"])
+            images = choice.get("images")
+            track_trims = {}
+
         return RenderParams(
             fade_ms=_bounded(self.settings["fade_ms"], Message('settings.fades'), 0.0, 10_000.0),
             pad_start_s=_bounded(self.settings["pad_start"], Message('settings.lead_in'), 0.0, 60.0),
@@ -366,16 +405,18 @@ class Session:
                                        Message('server.video_crossfade'), 0.0, 60.0),
             write_full=_flag(choice, "full"),
             write_tracks=_flag(choice, "tracks"),
-            video_full=_flag(choice, "video_full"),
-            video_tracks=_flag(choice, "video_tracks"),
-            video_image=(choice.get("image") or None),
-            video_images=_images(choice.get("images")),
-            video_slide_fade_s=_bounded(
-                (video.SLIDE_FADE_S if choice.get("slide_fade") is None
-                 else choice["slide_fade"]),
-                Message('server.image_transition'), 0.0, 60.0),
+            video_full=video_full,
+            video_tracks=video_tracks,
+            video_image=(choice.get("image") or (images[0] if images else None)),
+            video_images=_images(images),
+            video_slide_fade_s=_bounded(transition_fade, Message('server.image_transition'), 0.0, 60.0),
             video_one_per_track=_flag(choice, "one_per_track"),
+            video_clips=video_clips,
+            audio_clips=audio_clips,
+            video_title_overlay=video_title_overlay,
+            video_title_position=video_title_position,
             selection=selection,
+            track_trims=track_trims,
         )
 
     def _selection(self, selection, analysis: Analysis | None) -> tuple[int, ...] | None:
@@ -573,7 +614,11 @@ class Session:
             self.export["video_crossfade"] = saved["crossfade"]
         # Un travail repris rapporte ses fonds : ils doivent redevenir
         # affichables, sinon la fenêtre d'export les listerait sans vignette.
-        self.allow_image(self.export.get("images") or [])
+        images = list(self.export.get("images") or [])
+        montage = self.export.get("video_montage")
+        if isinstance(montage, dict) and montage.get("library"):
+            images.extend(montage["library"])
+        self.allow_image(images)
 
     def update_settings(self, wanted: dict) -> dict:
         clean: dict[str, float | int] = {}

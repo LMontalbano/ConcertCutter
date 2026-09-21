@@ -141,6 +141,9 @@ class VideoParams:
     slide_s: float = SLIDE_S        # durée d'affichage d'une image
     slide_fade_s: float = 0.0       # fondu vers la suivante ; 0 = coupe franche
     per_caption: bool = False       # une image par morceau, au lieu de l'horloge
+    clips: tuple[dict, ...] = ()
+    title_overlay: bool = True
+    title_position: str = "bottom"  # "bottom" | "top" | "center"
     width: int = WIDTH
     height: int = HEIGHT
     fps: int = FPS
@@ -151,6 +154,8 @@ class VideoParams:
     def stills(self) -> list[str]:
         """Les images du fond, dans l'ordre. Toujours au moins une."""
         found = [str(path) for path in (self.images or ()) if str(path).strip()]
+        if not found and self.clips:
+            found = list(dict.fromkeys(str(c["image"]) for c in self.clips if c.get("image")))
         return found or ([str(self.image)] if self.image else [])
 
 
@@ -314,7 +319,10 @@ def write_video(audio: str | Path, captions: str | list[Caption],
         # Windows lâche bien avant, vers la centième.
         chapters = (_chapters(captions, params, should_stop)
                     if params.per_caption else None)
-        if chapters is not None:
+        if params.clips:
+            timeline_bg = _timeline_video(audio, params, should_stop)
+            background = ["-i", str(timeline_bg)]
+        elif chapters is not None:
             # Le fond suit les morceaux : il dure ce que dure le concert, et
             # ne boucle donc pas.
             background = ["-i", str(chapters)]
@@ -363,6 +371,113 @@ def _seconds(audio: str | Path) -> float:
         return float(sf.info(str(audio)).duration)
     except (RuntimeError, OSError):
         return 0.0
+
+
+_BLACK_PPM_DATA = b"P6\n2 2\n255\n" + b"\x00" * 12
+
+
+def _get_black_image(folder: Path) -> Path:
+    black_img = folder / "black.ppm"
+    if not black_img.exists():
+        black_img.write_bytes(_BLACK_PPM_DATA)
+    return black_img
+
+
+def _timeline_video(audio: str | Path, params: VideoParams,
+                    should_stop: ShouldStop | None = None) -> Path:
+    """Fond composé des blocs de la timeline avec fond noir pour les vides."""
+    global _cycle_dir
+    duration = _seconds(audio)
+    if duration <= 0:
+        duration = max((float(c.get("end", 0.0)) for c in params.clips), default=1.0)
+    duration = max(0.5, duration)
+
+    if _cycle_dir is None:
+        _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
+    black_path = str(_get_black_image(Path(_cycle_dir.name)))
+
+    sorted_clips = sorted(params.clips, key=lambda c: float(c.get("start", 0.0)))
+    segments: list[tuple[str, float]] = []
+    cursor = 0.0
+    for clip in sorted_clips:
+        c_start = max(0.0, float(clip.get("start", 0.0)))
+        c_end = min(duration, float(clip.get("end", 0.0)))
+        if c_end <= c_start:
+            continue
+        if c_start > cursor + 0.05:
+            segments.append((black_path, c_start - cursor))
+        img = str(clip.get("image", ""))
+        if not img or not Path(img).exists():
+            img = black_path
+        segments.append((img, c_end - max(cursor, c_start)))
+        cursor = max(cursor, c_end)
+
+    if cursor < duration - 0.05:
+        segments.append((black_path, duration - cursor))
+
+    if not segments:
+        segments.append((black_path, duration))
+
+    # Cas segment unique :
+    if len(segments) == 1:
+        img, length = segments[0]
+        out_path = Path(_cycle_dir.name) / f"timeline_{len(_cycles)}.mp4"
+        _run([
+            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            "-loop", "1", "-t", f"{length:.3f}", "-framerate", str(params.fps),
+            "-i", img,
+            "-filter_complex", _framed("[0:v]", "[v]", params),
+            "-map", "[v]",
+            "-t", f"{length:.3f}",
+            "-c:v", _video_encoder(), "-crf", str(params.crf),
+            "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
+            str(out_path),
+        ], should_stop=should_stop)
+        return out_path
+
+    lengths = [max(0.2, length) for _, length in segments]
+    chosen = [img for img, _ in segments]
+    fade = max(0.0, params.slide_fade_s)
+    fades = [min(fade, lengths[i], lengths[i + 1]) if fade > 0 else 0.0
+             for i in range(len(lengths) - 1)]
+
+    inputs: list[str] = []
+    for still, length, outgoing in zip(chosen, lengths, fades + [0.0]):
+        inputs += ["-loop", "1", "-t", f"{length + outgoing:.3f}",
+                   "-framerate", str(params.fps), "-i", still]
+
+    chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
+             for index in range(len(chosen))]
+    if any(fades):
+        previous = "[s0]"
+        elapsed = 0.0
+        for index in range(1, len(chosen)):
+            elapsed += lengths[index - 1]
+            label = f"[x{index}]"
+            chain.append(f"{previous}[s{index}]xfade=transition=fade"
+                         f":duration={fades[index - 1]:.3f}"
+                         f":offset={elapsed:.3f}{label}")
+            previous = label
+        last = previous
+    else:
+        joined = "".join(f"[s{index}]" for index in range(len(chosen)))
+        chain.append(f"{joined}concat=n={len(chosen)}:v=1:a=0[x]")
+        last = "[x]"
+
+    out_path = Path(_cycle_dir.name) / f"timeline_{len(_cycles)}.mp4"
+    _run([
+        find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+        *inputs,
+        "-filter_complex", ";".join(chain),
+        "-map", last,
+        "-t", f"{sum(lengths):.3f}",
+        "-c:v", _video_encoder(), "-crf", str(params.crf),
+        "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
+        str(out_path),
+    ], should_stop=should_stop)
+    return out_path
 
 
 def _chapters(captions: list[Caption], params: VideoParams,
@@ -559,7 +674,7 @@ def _framed(source: str, label: str, params: VideoParams) -> str:
 
 
 def _filter(captions: list[Caption], texts: Path, params: VideoParams) -> str:
-    """Chaîne de filtres : cadrer le fond, puis écrire les titres en bas.
+    """Chaîne de filtres : cadrer le fond, puis écrire les titres.
 
     Les titres s'empilent en autant de `drawtext`, chacun borné à son passage.
     Ils se recouvriraient si les bornes se chevauchaient — elles viennent du
@@ -570,16 +685,24 @@ def _filter(captions: list[Caption], texts: Path, params: VideoParams) -> str:
     coûte rien lorsqu'il n'y a rien à changer.
     """
     chain = [_framed("[0:v]", "", params)]
-    for index, caption in enumerate(captions):
-        text_file = texts / f"{index:04d}.txt"
-        text_file.write_text(caption.text, encoding="utf-8")
-        chain.append(_drawtext(caption, text_file, params))
+    if params.title_overlay:
+        for index, caption in enumerate(captions):
+            text_file = texts / f"{index:04d}.txt"
+            text_file.write_text(caption.text, encoding="utf-8")
+            chain.append(_drawtext(caption, text_file, params))
     return ",".join(chain) + "[v]"
 
 
 def _drawtext(caption: Caption, text_file: Path, params: VideoParams) -> str:
     font_size = _font_size(caption.text, params)
     margin = int(params.height * params.margin_ratio)
+    if params.title_position == "top":
+        y_pos = f"y={margin}"
+    elif params.title_position == "center":
+        y_pos = "y=(h-text_h)/2"
+    else:
+        y_pos = f"y=h-text_h-{margin}"
+
     parts = [
         f"drawtext=fontfile={_escape(find_font())}",
         f"textfile={_escape(text_file)}",
@@ -591,7 +714,7 @@ def _drawtext(caption: Caption, text_file: Path, params: VideoParams) -> str:
         # dessous — un texte blanc sur un ciel clair disparaît.
         "box=1", "boxcolor=black@0.5", f"boxborderw={max(12, font_size // 3)}",
         "shadowcolor=black@0.6", "shadowx=2", "shadowy=2",
-        "x=(w-text_w)/2", f"y=h-text_h-{margin}",
+        "x=(w-text_w)/2", y_pos,
     ]
     if caption.start is not None or caption.end is not None:
         start = caption.start or 0.0

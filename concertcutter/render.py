@@ -25,7 +25,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -136,12 +136,19 @@ class RenderParams:
     # dans l'ordre de la liste, et le cycle recommence s'il y en a moins que de
     # morceaux. Décochée, c'est le diaporama qui tourne — partout.
     video_one_per_track: bool = False
+    video_clips: tuple[dict, ...] = ()
+    # Clips audio posés librement dans le montage vidéo. Les positions sont
+    # celles de la timeline ; sourceStart/sourceEnd désignent l'enregistrement.
+    audio_clips: tuple[dict, ...] = ()
+    video_title_overlay: bool = True
+    video_title_position: str = "bottom"
     # Numéros des morceaux à écrire ; None les prend tous. Un concert n'a pas
     # toujours à sortir en entier — trois titres pour une maquette, le rappel
     # seul pour l'envoyer à quelqu'un. Décocher les autres dans le tableau
     # aurait marché, mais au prix de la numérotation et du montage de l'album
     # continu, qu'on ne voulait pas toucher pour autant.
     selection: tuple[int, ...] | None = None
+    track_trims: dict[int, tuple[float, float]] = field(default_factory=dict)
 
     @property
     def write_video(self) -> bool:
@@ -293,7 +300,9 @@ def _render_into(
     # le même fichier — c'est le cas courant, et un album de deux heures n'a
     # pas à s'écrire deux fois pour rien.
     video_apart = params.video_full and (
-        not params.write_full or params.video_crossfade_s != params.crossfade_s
+        bool(params.audio_clips)
+        or not params.write_full
+        or params.video_crossfade_s != params.crossfade_s
     )
 
     # Un dossier de travail dès qu'une vidéo doit partir d'un audio qu'on ne
@@ -307,17 +316,23 @@ def _render_into(
                    if params.write_full else None)
     video_album = None
     if params.video_full:
-        video_album = (
-            _Album(Path(scratch.name) / params.full_name, info,
-                   params.video_crossfade_s)
-            if video_apart else audio_album
-        )
+        if params.audio_clips:
+            montage_path = Path(scratch.name) / params.full_name
+            _timeline_audio(analysis, params.audio_clips, montage_path, info,
+                            params.video_slide_fade_s)
+            video_album = _ReadyAlbum(montage_path)
+        else:
+            video_album = (
+                _Album(Path(scratch.name) / params.full_name, info,
+                       params.video_crossfade_s)
+                if video_apart else audio_album
+            )
     # Les albums *distincts* : le plus souvent `video_album` est `audio_album`
     # lui-même, et le nourrir deux fois écrirait chaque morceau en double.
     albums: list[_Album] = []
     if audio_album is not None:
         albums.append(audio_album)
-    if video_album is not None and video_album is not audio_album:
+    if isinstance(video_album, _Album) and video_album is not audio_album:
         albums.append(video_album)
 
     # L'encodage vidéo dure bien plus longtemps que l'écriture du WAV : compté
@@ -334,10 +349,10 @@ def _render_into(
     jobs = []
 
     def encode(track_path: Path, label: str, target: str, temporary: bool,
-               rank: int) -> None:
+               rank: int, track_span: tuple[float, float]) -> None:
         check(should_stop)
         video.write_video(track_path, label, out_dir / target,
-                          _video_params(params, rank), should_stop)
+                          _video_params(params, rank, track_span), should_stop)
         if temporary:
             track_path.unlink(missing_ok=True)
         step(target)
@@ -389,9 +404,10 @@ def _render_into(
                              subtype=info.subtype)
                 videos.append(video_name)
                 written[-1]["video"] = video_name
+                track_span = (start / info.samplerate, stop / info.samplerate)
                 jobs.append(pool.submit(encode, track_path,
                                         _track_label(number, title),
-                                        video_name, temporary, rank))
+                                        video_name, temporary, rank, track_span))
 
         # Les vidéos des pistes finissent ici : la vidéo du concert entier a
         # besoin de l'album continu refermé, et une exception d'un fil doit
@@ -405,10 +421,29 @@ def _render_into(
         if params.video_full:
             # Les bornes viennent des durées rendues, pas du concert d'origine :
             # les blancs retirés ont décalé tout ce qui suit.
-            captions = video.captions_from_durations(
-                [_track_label(item["index"], item["title"]) for item in written],
-                _album_durations(written, params.video_crossfade_s),
-            )
+            if params.audio_clips:
+                by_number = {
+                    (track.number or index + 1): track
+                    for index, track in enumerate(tracks)
+                }
+                captions = [
+                    video.Caption(
+                        _track_label(
+                            int(clip["trackNumber"]),
+                            by_number.get(int(clip["trackNumber"])).title
+                            if by_number.get(int(clip["trackNumber"])) else None,
+                        ),
+                        float(clip["start"]),
+                        float(clip["end"]),
+                    )
+                    for clip in sorted(params.audio_clips,
+                                       key=lambda item: float(item["start"]))
+                ]
+            else:
+                captions = video.captions_from_durations(
+                    [_track_label(item["index"], item["title"]) for item in written],
+                    _album_durations(written, params.video_crossfade_s),
+                )
             if on_progress:
                 on_progress(counter["done"], steps, params.video_name)
             video.write_video(video_album.path, captions,
@@ -521,24 +556,42 @@ def _check_video(params: RenderParams) -> None:
 
 
 def _video_params(params: RenderParams,
-                  rank: int | None = None) -> video.VideoParams:
-    """Traduit les réglages d'export en réglages de rendu vidéo.
-
-    `rank` est le rang du morceau, quand la vidéo n'en couvre qu'un — sans lui,
-    c'est la vidéo du concert entier. C'est cette distinction qui donne à
-    « une image par morceau » ses deux mises en œuvre : le morceau de rang `n`
-    reçoit la `n`-ième image et la garde, tandis que le concert entier les
-    reçoit toutes et change de fond au morceau.
-    """
+                  rank: int | None = None,
+                  track_span: tuple[float, float] | None = None) -> video.VideoParams:
+    """Traduit les réglages d'export en réglages de rendu vidéo."""
     stills = tuple(str(path) for path in params.video_images)
     one = params.video_one_per_track and bool(stills)
     if one and rank is not None:
         stills = (stills[rank % len(stills)],)
+
+    clips = ()
+    if params.video_clips:
+        if rank is None or track_span is None:
+            clips = params.video_clips
+        else:
+            t_start, t_end = track_span
+            track_clips = []
+            for c in params.video_clips:
+                c_start = float(c.get("start", 0.0))
+                c_end = float(c.get("end", 0.0))
+                overlap_start = max(t_start, c_start)
+                overlap_end = min(t_end, c_end)
+                if overlap_end > overlap_start:
+                    track_clips.append({
+                        "image": c.get("image", ""),
+                        "start": round(overlap_start - t_start, 3),
+                        "end": round(overlap_end - t_start, 3),
+                    })
+            clips = tuple(track_clips)
+
     return video.VideoParams(
-        image=str(params.video_image or ""),
+        image=str(params.video_image or (clips[0]["image"] if clips else "")),
         images=stills,
+        clips=clips,
         slide_fade_s=params.video_slide_fade_s,
         per_caption=one and rank is None,
+        title_overlay=params.video_title_overlay,
+        title_position=params.video_title_position,
     )
 
 
@@ -746,8 +799,12 @@ def _padded_spans(
         prev_end = tracks[index - 1].end if index > 0 else 0.0
         next_start = tracks[index + 1].start if index + 1 < len(tracks) else analysis.duration
 
-        start = max(prev_end, track.start - pad_start, 0.0)
-        end = min(next_start, track.end + pad_end, analysis.duration)
+        trim_start, trim_end = (params.track_trims.get(number) or (0.0, 0.0)) if params.track_trims else (0.0, 0.0)
+        track_start = min(track.end, track.start + trim_start)
+        track_end = max(track_start, track.end - trim_end)
+
+        start = max(prev_end, track_start - pad_start, 0.0)
+        end = min(next_start, track_end + pad_end, analysis.duration)
 
         start_frame = max(0, int(round(start * samplerate)))
         end_frame = min(total_frames, int(round(end * samplerate)))
@@ -785,6 +842,92 @@ def _on_album(written: list[dict], crossfade_s: float) -> list[dict]:
     return [dict(item, duration=duration)
             for item, duration in zip(written,
                                       _album_durations(written, crossfade_s))]
+
+
+@dataclass
+class _ReadyAlbum:
+    """Audio déjà monté, exposé comme un album au code d'encodage vidéo."""
+
+    path: Path
+
+
+def _timeline_audio(analysis: Analysis, clips: tuple[dict, ...], path: Path,
+                    info=None, fade_s: float = 0.0) -> Path:
+    """Écrit l'audio de la timeline, en conservant les espaces entre clips.
+
+    La piste audio de l'interface est volontairement monophonique au sens du
+    montage : deux clips ne peuvent pas se recouvrir. Ce contrôle est refait
+    ici, car un projet ancien ou modifié à la main ne doit pas produire un
+    résultat ambigu.
+    """
+    info = info or probe(analysis.source)
+    ordered = sorted(clips, key=lambda item: float(item.get("start", 0.0)))
+    if not ordered:
+        raise ValueError(Message('server.the_selection_contains_no_exportable_tracks'))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cursor = 0
+    silence_block = max(info.samplerate, 1)
+    with sf.SoundFile(str(path), mode="w", samplerate=info.samplerate,
+                      channels=info.channels, subtype=info.subtype,
+                      format="WAV") as target:
+        for index, clip in enumerate(ordered):
+            start = float(clip.get("start", 0.0))
+            end = float(clip.get("end", 0.0))
+            source_start = float(clip.get("sourceStart", 0.0))
+            source_end = float(clip.get("sourceEnd", 0.0))
+            values = (start, end, source_start, source_end)
+            if not all(math.isfinite(value) for value in values) \
+                    or start < 0 or end <= start \
+                    or source_start < 0 or source_end <= source_start \
+                    or source_end > info.duration + 0.01:
+                raise ValueError(Message('server.the_track_selection_is_invalid'))
+
+            start_frame = int(round(start * info.samplerate))
+            wanted_frames = int(round((end - start) * info.samplerate))
+            if start_frame < cursor:
+                raise ValueError(Message('server.the_track_selection_is_invalid'))
+            gap = start_frame - cursor
+            while gap:
+                count = min(gap, silence_block)
+                target.write(np.zeros((count, info.channels), dtype=np.float32))
+                gap -= count
+
+            source = read_span(
+                analysis.source,
+                int(round(source_start * info.samplerate)),
+                int(round(source_end * info.samplerate)),
+            )
+            source = source[:wanted_frames]
+            # Deux clips exactement bord à bord reçoivent chacun une moitié
+            # du fondu demandé. La durée et les positions de la timeline ne
+            # bougent pas : images, titres et audio restent synchronisés.
+            previous = ordered[index - 1] if index else None
+            following = ordered[index + 1] if index + 1 < len(ordered) else None
+            joins_previous = previous is not None and abs(
+                float(previous.get("end", 0.0)) - start) <= 0.02
+            joins_following = following is not None and abs(
+                end - float(following.get("start", 0.0))) <= 0.02
+            fade_frames = min(
+                max(0, int(round(fade_s * info.samplerate / 2))),
+                len(source) // 2,
+            )
+            if fade_frames and (joins_previous or joins_following):
+                source = source.copy()
+                phase = np.linspace(0.0, np.pi / 2, fade_frames,
+                                    dtype=np.float32)[:, None]
+                if joins_previous:
+                    source[:fade_frames] *= np.sin(phase)
+                if joins_following:
+                    source[-fade_frames:] *= np.cos(phase)
+            target.write(source)
+            missing = wanted_frames - len(source)
+            while missing:
+                count = min(missing, silence_block)
+                target.write(np.zeros((count, info.channels), dtype=np.float32))
+                missing -= count
+            cursor = start_frame + wanted_frames
+    return path
 
 
 class _Album:
