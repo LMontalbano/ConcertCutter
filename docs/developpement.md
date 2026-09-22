@@ -137,8 +137,8 @@ La mise à jour des numéros de version et des notes de release doit être faite
 relue avant le tag. Une fois la branche principale vérifiée :
 
 ```powershell
-git tag v4.0.0
-git push origin v4.0.0
+git tag v4.0.1
+git push origin v4.0.1
 ```
 
 Le workflow vérifie que le tag normalisé correspond exactement aux versions
