@@ -899,7 +899,7 @@
 
       Le serveur ne retient un export qu'au moment où il le lance : tant qu'on
       n'a pas exporté, ce placement n'existe nulle part ailleurs. Toutes les
-      sorties passent donc par ici — la croix, Échap, « Fermer », le voile. */
+      sorties passent donc par ici — la croix, Échap et « Fermer ». */
   function dismiss(): void {
     onSave?.(currentConfig(), dir)
     onClose()
@@ -958,8 +958,7 @@
 <audio bind:this={audioEl} preload="metadata"
   src={session.open ? api.audioUrl() : undefined}></audio>
 
-<div class="veil" role="presentation"
-  onclick={(event) => event.target === event.currentTarget && dismiss()}>
+<div class="veil" role="presentation">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="montage-title"
     tabindex="-1" use:modal={{ onClose: dismiss, autofocus: '.play' }}>
 
@@ -1015,12 +1014,12 @@
               <div class="image-tile" draggable="true" role="listitem"
                 ondragstart={(event) => startSourceDrag(event, { kind: 'image', image })}
                 ondragend={clearSourceDrag}>
-                <img src={api.imageUrl(image)} alt={image.split(/[\\/]/).pop()} draggable="false" />
-                <span title={image}>{image.split(/[\\/]/).pop()}</span>
-                <div class="tile-actions">
-                  <button onclick={() => addImage(image)} aria-label={t('montage.add_to_timeline')}>+</button>
-                  <button onclick={() => removeLibraryImage(index)} aria-label={t('ui.remove')}>&#x00D7;</button>
+                <div class="image-thumbnail">
+                  <img src={api.imageUrl(image)} alt={image.split(/[\\/]/).pop()} draggable="false" />
                 </div>
+                <span title={image}>{image.split(/[\\/]/).pop()}</span>
+                <button class="remove-source" onclick={() => removeLibraryImage(index)}
+                  aria-label={t('ui.remove_this_image')} title={t('ui.remove_this_image')}>&#x00D7;</button>
               </div>
             {:else}
               <button class="empty-library" onclick={addImages}>+ {t('montage.add_images')}</button>
@@ -1172,7 +1171,7 @@
                   onpointerdown={(event) => beginDrag('image', clip, 'move', event)}>
                   <button class="handle left" aria-label={t('montage.trim_start')}
                     onpointerdown={(event) => beginDrag('image', clip, 'start', event)}></button>
-                  <img src={api.imageUrl(clip.image)} alt="" draggable="false" />
+                  <img class="clip-thumbnail" src={api.imageUrl(clip.image)} alt="" draggable="false" />
                   <span>{clip.image.split(/[\\/]/).pop()}</span>
                   <small class="mono">{spell(clip.end - clip.start)}</small>
                   <button class="handle right" aria-label={t('montage.trim_end')}
@@ -1490,12 +1489,14 @@
     overflow: auto;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: max-content;
     gap: 8px;
     align-content: start;
   }
 
   .image-tile {
     position: relative;
+    min-width: 0;
     overflow: hidden;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -1507,11 +1508,20 @@
     border-color: var(--accent);
   }
 
-  .image-tile img {
+  .image-thumbnail {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    height: 72px;
+    display: grid;
+    place-items: center;
+  }
+
+  .image-thumbnail img {
     display: block;
-    object-fit: cover;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 72px;
+    object-fit: contain;
     pointer-events: none;
   }
 
@@ -1525,28 +1535,31 @@
     white-space: nowrap;
   }
 
-  .tile-actions {
+  .remove-source {
     position: absolute;
     top: 4px;
     right: 4px;
-    display: flex;
-    gap: 3px;
-  }
-
-  .tile-actions button {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     padding: 0;
-    color: var(--ink);
+    color: var(--ink-2);
     background: var(--glass);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.5;
+    transition: opacity 0.12s ease;
   }
 
-  .tile-actions button:hover {
-    color: var(--on-accent);
-    background: var(--accent);
-    border-color: var(--accent);
+  .image-tile:hover .remove-source,
+  .remove-source:focus-visible {
+    opacity: 1;
+  }
+
+  .remove-source:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
 
   .empty-library {
@@ -2140,10 +2153,21 @@
     transition: box-shadow 180ms ease, opacity 180ms ease;
   }
 
-  .image-clip img {
-    width: 68px;
-    height: 100%;
-    object-fit: cover;
+  /* Les poignées couvrent 12 px à chaque bord du clip. Le contenu commence
+     après elles pour que la vignette entière reste visible. */
+  .image-clip {
+    padding-inline: 13px;
+  }
+
+  .clip-thumbnail {
+    display: block;
+    flex: 0 1 auto;
+    min-width: 0;
+    width: auto;
+    height: auto;
+    max-width: min(112px, 100%);
+    max-height: 72px;
+    object-fit: contain;
     pointer-events: none;
   }
 

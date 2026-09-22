@@ -15,6 +15,7 @@ un champ de saisie de chemin.
 from __future__ import annotations
 
 from pathlib import Path
+from .. import project
 from ..i18n import Message
 
 WAV_TYPES = ("Fichiers WAV", "*.wav *.WAV")
@@ -32,7 +33,7 @@ class Dialogs:
     place de l'écrire — c'est déjà ce que fait le message de relocalisation.
     """
 
-    def open_file(self, types) -> str | None:
+    def open_file(self, types, start: str = "") -> str | None:
         raise NotImplementedError
 
     def open_files(self, types) -> list[str]:
@@ -50,7 +51,7 @@ class NoDialogs(Dialogs):
     saisie plutôt que de faire semblant.
     """
 
-    def open_file(self, types) -> str | None:
+    def open_file(self, types, start: str = "") -> str | None:
         return None
 
     def open_files(self, types) -> list[str]:
@@ -72,18 +73,19 @@ class WebviewDialogs(Dialogs):
         return [f"{label} ({';'.join(patterns.split())})"
                 for label, patterns in types]
 
-    def open_file(self, types) -> str | None:
-        found = self._pick(types, multiple=False)
+    def open_file(self, types, start: str = "") -> str | None:
+        found = self._pick(types, multiple=False, start=start)
         return found[0] if found else None
 
     def open_files(self, types) -> list[str]:
         return self._pick(types, multiple=True)
 
-    def _pick(self, types, multiple: bool) -> list[str]:
+    def _pick(self, types, multiple: bool, start: str = "") -> list[str]:
         import webview
 
         found = self._window.create_file_dialog(
-            webview.OPEN_DIALOG, allow_multiple=multiple,
+            webview.FileDialog.OPEN, allow_multiple=multiple,
+            directory=start,
             file_types=tuple(self._filters(types)))
         return [str(path) for path in (found or [])]
 
@@ -91,7 +93,7 @@ class WebviewDialogs(Dialogs):
         import webview
 
         found = self._window.create_file_dialog(
-            webview.FOLDER_DIALOG, directory=start or "")
+            webview.FileDialog.FOLDER, directory=start or "")
         return str(found[0]) if found else None
 
 
@@ -109,7 +111,16 @@ def ask_wav(language: str = "fr") -> str | None:
 
 
 def ask_project(language: str = "fr") -> str | None:
-    return HOST.open_file([(Message('dialog.project').translate(language), PROJECT_TYPES[1])])
+    # Le dialogue natif n'utilise le dossier initial que s'il existe déjà.
+    folder = project.store()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        start = str(folder)
+    except OSError:
+        start = ""
+    return HOST.open_file(
+        [(Message('dialog.project').translate(language), PROJECT_TYPES[1])],
+        start=start)
 
 
 def ask_source(language: str = "fr") -> str | None:

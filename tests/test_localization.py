@@ -118,6 +118,17 @@ class CatalogTests(unittest.TestCase):
             dialogs.ask_project('fr')
             self.assertEqual(host.open_file.call_args.args[0][0][0], 'Travaux ConcertCutter')
 
+    def test_project_dialog_starts_in_the_resume_folder(self):
+        host = Mock()
+        with tempfile.TemporaryDirectory() as root, \
+                patch.dict(os.environ, {'LOCALAPPDATA': root}), \
+                patch.object(dialogs, 'HOST', host):
+            dialogs.ask_project('fr')
+
+            expected = Path(root) / 'ConcertCutter' / 'projets'
+            self.assertTrue(expected.is_dir())
+            self.assertEqual(host.open_file.call_args.kwargs['start'], str(expected))
+
 
 class PreferencesApiTests(unittest.TestCase):
     def setUp(self):
