@@ -323,7 +323,7 @@ def _render_into(
         if params.audio_clips:
             montage_path = Path(scratch.name) / params.full_name
             _timeline_audio(analysis, params.audio_clips, montage_path, info,
-                            params.video_slide_fade_s, params.fade_ms)
+                            params.fade_ms)
             video_album = _ReadyAlbum(montage_path)
         else:
             video_album = (
@@ -439,11 +439,9 @@ def _render_into(
                             if by_number.get(int(clip["trackNumber"])) else None,
                             params.language,
                         ),
-                        float(clip["start"]),
-                        float(clip["end"]),
+                        start, end,
                     )
-                    for clip in sorted(params.audio_clips,
-                                       key=lambda item: float(item["start"]))
+                    for clip, (start, end) in _caption_spans(params.audio_clips)
                 ]
             else:
                 captions = video.captions_from_durations(
@@ -861,21 +859,24 @@ class _ReadyAlbum:
 
 
 def _timeline_audio(analysis: Analysis, clips: tuple[dict, ...], path: Path,
-                    info=None, fade_s: float = 0.0, edge_ms: float = 0.0) -> Path:
+                    info=None, edge_ms: float = 0.0) -> Path:
     """Écrit l'audio de la timeline, en conservant les espaces entre clips.
 
-    La piste audio de l'interface est volontairement monophonique au sens du
-    montage : deux clips ne peuvent pas se recouvrir. Ce contrôle est refait
-    ici, car un projet ancien ou modifié à la main ne doit pas produire un
-    résultat ambigu.
+    Deux clips qui se chevauchent s'enchaînent en fondu : sur toute la durée
+    du recouvrement, le premier s'éteint pendant que le second monte, à
+    puissance constante — les deux musiques se mêlent, comme dans l'album
+    continu. C'est l'éditeur qui pose ce recouvrement, de la durée du fondu
+    choisi, dès que deux clips se touchent : ce qu'on entend est donc ce que
+    la timeline montre, et les images et titres restent calés dessus.
 
-    Deux clips bord à bord reçoivent chacun une moitié du fondu demandé : le
-    premier s'éteint, le second monte. La durée et les positions de la
-    timeline ne bougent pas : images, titres et audio restent synchronisés.
+    Trois clips ne se recouvrent jamais à la fois, et un clip n'en contient
+    pas un autre : ce contrôle est refait ici, car un projet ancien ou modifié
+    à la main ne doit pas produire un résultat ambigu.
 
-    Un bord libre — début ou fin de montage, ou clip suivi d'un espace — reçoit
-    le court fondu anti-clic `edge_ms` du réglage « Fondus » : un clip coupé en
-    pleine musique claquait sinon à l'entrée comme à la sortie.
+    Un bord qui ne se fond dans aucun autre — début ou fin de montage, clip
+    suivi d'un espace ou simplement collé au suivant — reçoit le court fondu
+    anti-clic `edge_ms` du réglage « Fondus » : un clip coupé en pleine
+    musique claquait sinon à l'entrée comme à la sortie.
     """
     info = info or probe(analysis.source)
     ordered = sorted(clips, key=lambda item: float(item.get("start", 0.0)))
@@ -883,53 +884,81 @@ def _timeline_audio(analysis: Analysis, clips: tuple[dict, ...], path: Path,
         raise ValueError(Message('server.the_selection_contains_no_exportable_tracks'))
 
     rate = info.samplerate
+    # [premier échantillon dans le montage, longueur, lecture dans la source]
+    placed: list[tuple[int, int, int, int]] = []
+    for clip in ordered:
+        start = float(clip.get("start", 0.0))
+        end = float(clip.get("end", 0.0))
+        source_start = float(clip.get("sourceStart", 0.0))
+        source_end = float(clip.get("sourceEnd", 0.0))
+        values = (start, end, source_start, source_end)
+        if not all(math.isfinite(value) for value in values)                 or start < 0 or end <= start                 or source_start < 0 or source_end <= source_start                 or source_end > info.duration + 0.01:
+            raise ValueError(Message('server.the_track_selection_is_invalid'))
+        placed.append((int(round(start * rate)), int(round((end - start) * rate)),
+                       int(round(source_start * rate)), int(round(source_end * rate))))
+
+    # Recouvrement de chaque clip avec le suivant, en échantillons.
+    overlaps = []
+    for index in range(len(placed) - 1):
+        (start, frames, _, _), (following, next_frames, _, _) =             placed[index], placed[index + 1]
+        overlap = max(0, start + frames - following)
+        earlier_end = (placed[index - 1][0] + placed[index - 1][1]) if index else 0
+        if overlap > min(frames, next_frames) or following < earlier_end                 or following + next_frames <= start + frames:
+            raise ValueError(Message('server.the_track_selection_is_invalid'))
+        overlaps.append(overlap)
+
     edge = max(0, int(round(edge_ms / 1000.0 * rate)))
     path.parent.mkdir(parents=True, exist_ok=True)
     cursor = 0
+    held: np.ndarray | None = None   # queue du clip précédent, en attente du suivant
     with sf.SoundFile(str(path), mode="w", samplerate=rate,
                       channels=info.channels, subtype=info.subtype,
                       format="WAV") as target:
-        for index, clip in enumerate(ordered):
-            start = float(clip.get("start", 0.0))
-            end = float(clip.get("end", 0.0))
-            source_start = float(clip.get("sourceStart", 0.0))
-            source_end = float(clip.get("sourceEnd", 0.0))
-            values = (start, end, source_start, source_end)
-            if not all(math.isfinite(value) for value in values)                     or start < 0 or end <= start                     or source_start < 0 or source_end <= source_start                     or source_end > info.duration + 0.01:
-                raise ValueError(Message('server.the_track_selection_is_invalid'))
+        for index, (start, frames, first, last) in enumerate(placed):
+            head = overlaps[index - 1] if index else 0
+            tail = overlaps[index] if index < len(overlaps) else 0
+            audio = _padded(read_span(analysis.source, first, last),
+                            frames, info.channels).copy()
 
-            start_frame = int(round(start * rate))
-            wanted_frames = int(round((end - start) * rate))
-            if start_frame < cursor:
-                raise ValueError(Message('server.the_track_selection_is_invalid'))
-            _write_silence(target, start_frame - cursor, info.channels)
-
-            source = _padded(read_span(analysis.source,
-                                       int(round(source_start * rate)),
-                                       int(round(source_end * rate))),
-                             wanted_frames, info.channels).copy()
-            previous = ordered[index - 1] if index else None
-            following = ordered[index + 1] if index + 1 < len(ordered) else None
-            joins_previous = previous is not None and abs(
-                float(previous.get("end", 0.0)) - start) <= 0.02
-            joins_following = following is not None and abs(
-                end - float(following.get("start", 0.0))) <= 0.02
-
-            fade_frames = min(max(0, int(round(fade_s * rate / 2))), len(source) // 2)
-            curve = np.linspace(0.0, np.pi / 2, fade_frames, dtype=np.float32)[:, None]
-            clicks = min(edge, len(source) // 2)
+            clicks = min(edge, frames // 2)
             ramp = np.linspace(0.0, 1.0, clicks, dtype=np.float32)[:, None]
-            if joins_previous and fade_frames:
-                source[:fade_frames] *= np.sin(curve)
+            if head:
+                audio[:head] *= np.sin(np.linspace(
+                    0.0, np.pi / 2, head, dtype=np.float32))[:, None]
             elif clicks:
-                source[:clicks] *= ramp
-            if joins_following and fade_frames:
-                source[len(source) - fade_frames:] *= np.cos(curve)
+                audio[:clicks] *= ramp
+            if tail:
+                audio[frames - tail:] *= np.cos(np.linspace(
+                    0.0, np.pi / 2, tail, dtype=np.float32))[:, None]
             elif clicks:
-                source[len(source) - clicks:] *= ramp[::-1]
-            target.write(source)
-            cursor = start_frame + wanted_frames
+                audio[frames - clicks:] *= ramp[::-1]
+
+            if head:
+                audio[:head] += held
+            else:
+                _write_silence(target, start - cursor, info.channels)
+            target.write(audio[:frames - tail])
+            held = audio[frames - tail:] if tail else None
+            cursor = start + frames - tail
     return path
+
+
+def _caption_spans(clips) -> list[tuple[dict, tuple[float, float]]]:
+    """Chaque clip audio et le passage où son titre s'affiche.
+
+    Deux clips qui se fondent l'un dans l'autre passent le relais au milieu
+    du fondu : deux titres incrustés au même endroit se superposeraient.
+    """
+    ordered = sorted(clips, key=lambda item: float(item["start"]))
+    spans = []
+    for index, clip in enumerate(ordered):
+        start, end = float(clip["start"]), float(clip["end"])
+        if index and float(ordered[index - 1]["end"]) > start:
+            start = (start + float(ordered[index - 1]["end"])) / 2
+        if index + 1 < len(ordered) and float(ordered[index + 1]["start"]) < end:
+            end = (end + float(ordered[index + 1]["start"])) / 2
+        spans.append((clip, (start, end)))
+    return spans
 
 
 def _padded(audio: np.ndarray, frames: int, channels: int) -> np.ndarray:

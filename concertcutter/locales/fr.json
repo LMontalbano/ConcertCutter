@@ -366,7 +366,7 @@
   "montage.drop_tracks_here": "Déposez les morceaux ici",
   "montage.empty_timeline": "Timeline vide : glissez des images depuis la bibliothèque sur la piste vidéo.",
   "montage.export_video": "Exporter la vidéo",
-  "montage.fade_hint": "Entre images ou morceaux contigus",
+  "montage.fade_hint": "Entre images contiguës, et fondu enchaîné entre morceaux qui se touchent : ils se chevauchent de cette durée",
   "montage.fit": "Tout afficher",
   "montage.image_sources": "Sources visuelles",
   "montage.images_hint": "Glissez les images vers la piste vidéo",
