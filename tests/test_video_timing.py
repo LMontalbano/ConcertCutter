@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import soundfile as sf
@@ -110,6 +111,29 @@ class AlbumTimingTests(unittest.TestCase):
             self.assertLess(rendered[1999, 0], 0.01)
             self.assertLess(rendered[2000, 0], 0.01)
             self.assertGreater(rendered[2500, 0], 0.99)
+
+    def test_free_clip_edges_get_the_anti_click_fade(self) -> None:
+        from concertcutter.segment import Analysis, Segment, MUSIC
+
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source.wav"
+            sf.write(source, np.ones((4000, 1), dtype=np.float32), 1000,
+                     subtype="FLOAT")
+            analysis = Analysis(
+                source=str(source), samplerate=1000, channels=1, duration=4,
+                segments=[Segment(start=0, end=4, kind=MUSIC, number=1)],
+            )
+            output = Path(root) / "montage.wav"
+            _timeline_audio(analysis, ({
+                "trackNumber": 1, "start": 1.0, "end": 3.0,
+                "sourceStart": 1.0, "sourceEnd": 3.0,
+            },), output, edge_ms=100.0)
+            rendered, _ = sf.read(output, always_2d=True)
+            self.assertEqual(len(rendered), 3000)
+            self.assertLess(rendered[1000, 0], 0.01)
+            self.assertAlmostEqual(rendered[1050, 0], 0.5, delta=0.02)
+            self.assertAlmostEqual(rendered[2000, 0], 1.0, places=4)
+            self.assertLess(rendered[2999, 0], 0.01)
 
 
 @unittest.skipUnless(video.find_ffmpeg(), "ffmpeg absent")
@@ -221,6 +245,45 @@ class ImageTimingTests(unittest.TestCase):
             self.assertGreater(float(early[:, 0, 0].mean()), 160)
             self.assertLess(float(late[:, 0, 0].mean()), 64)
             self.assertGreater(float(late[:, 16].mean()), 32)
+
+    def test_a_long_timeline_is_encoded_in_invisible_slices(self) -> None:
+        """Beaucoup de plans : même image à l'arrivée, par tranches raboutées."""
+        with tempfile.TemporaryDirectory() as root:
+            stills = self.stills(Path(root))
+            audio_path = Path(root) / "test.wav"
+            sf.write(str(audio_path), np.zeros((20 * 8000, 2), dtype=np.float32), 8000)
+            params = video.VideoParams(
+                image=stills[0],
+                clips=tuple({"image": stills[index % 2], "start": index * 2.0,
+                             "end": index * 2.0 + 2.0} for index in range(10)),
+                slide_fade_s=1.0, width=32, height=18, fps=10,
+            )
+            whole = self.levels(video._timeline_video(audio_path, params))
+            calls = []
+            original = video._run
+            with mock.patch.object(video, "SEQUENCE_BATCH", 3), \
+                    mock.patch.object(video, "_run",
+                                      side_effect=lambda *a, **k: (calls.append(a[0]),
+                                                                   original(*a, **k))[1]):
+                sliced = self.levels(video._timeline_video(audio_path, params))
+            # Trois tranches de quatre entrées au plus, puis le raboutage.
+            self.assertEqual(len(calls), 4)
+            self.assertTrue(all(call.count("-i") <= 4 for call in calls[:-1]))
+            self.assertEqual(len(sliced), len(whole))
+            self.assertLess(float(np.abs(sliced - whole).max()), 0.05)
+
+    def test_each_timeline_background_gets_its_own_file(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            stills = self.stills(Path(root))
+            audio_path = Path(root) / "test.wav"
+            sf.write(str(audio_path), np.zeros((2 * 8000, 2), dtype=np.float32), 8000)
+            params = video.VideoParams(
+                image=stills[0], clips=({"image": stills[0], "start": 0.0, "end": 2.0},),
+                width=32, height=18, fps=10)
+            first = video._timeline_video(audio_path, params)
+            second = video._timeline_video(audio_path, params)
+            self.assertNotEqual(first, second)
+            self.assertTrue(first.exists() and second.exists())
 
     def render_frames(self, durations: list[float], fade: float) -> np.ndarray:
         with tempfile.TemporaryDirectory() as root:

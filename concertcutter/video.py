@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,8 +101,20 @@ _probe_cache: dict[str, object] = {}
 # et ne laissent rien derrière eux à la fermeture. Ouvert au premier diaporama
 # seulement — qui n'exporte jamais de vidéo ne laisse rien dans %TEMP%.
 _cycle_dir: tempfile.TemporaryDirectory | None = None
-_cycle_lock = threading.Lock()
+# Réentrant : `_chapters` encode en le tenant, et l'encodage passe par
+# `_workfile`, qui le reprend pour ouvrir le dossier au besoin.
+_cycle_lock = threading.RLock()
 _cycles: dict[tuple, Path] = {}
+
+# Plans encodés par appel à ffmpeg quand un fond en enchaîne beaucoup.
+#
+# Chaque plan est une entrée de plus sur la ligne de commande, et un filtre de
+# plus dans le graphe : la ligne de commande de Windows lâche vers la centième
+# entrée, et ffmpeg garde toutes ses entrées ouvertes à la fois. Au-delà de ce
+# nombre, le fond s'encode donc par tranches, raboutées ensuite sans
+# réencodage. Chaque jointure tombe au milieu d'un plan, hors de tout fondu :
+# les deux côtés montrent la même image, et elle ne se voit pas.
+SEQUENCE_BATCH = 24
 
 
 @dataclass
@@ -319,6 +332,7 @@ def write_video(audio: str | Path, captions: str | list[Caption],
         # Windows lâche bien avant, vers la centième.
         chapters = (_chapters(captions, params, should_stop)
                     if params.per_caption else None)
+        timeline_bg = None
         if params.clips:
             timeline_bg = _timeline_video(audio, params, should_stop)
             background = ["-i", str(timeline_bg)]
@@ -332,31 +346,38 @@ def write_video(audio: str | Path, captions: str | list[Caption],
         else:
             background = ["-loop", "1", "-framerate", str(params.fps),
                           "-i", stills[0]]
-        _run([
-            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            *background,
-            "-i", str(audio),
-            "-filter_complex", _filter(captions, Path(texts), params),
-            "-map", "[v]", "-map", "1:a",
-            *codec,
-            "-r", str(params.fps),
-            "-g", str(params.fps * KEYFRAME_S),
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", params.audio_bitrate,
-            # L'image bouclerait sans fin : la piste audio fixe la durée.
-            #
-            # `-shortest` seul n'y suffit pas. Mesuré : une piste de 14 s
-            # donnait une vidéo de 18 s, quatre secondes d'image fixe sur du
-            # silence à la fin de chaque morceau exporté. ffmpeg arrête bien
-            # l'entrée bouclée, mais seulement au bloc suivant. La durée exacte
-            # se lit dans le WAV qu'on vient d'écrire — autant la lui donner.
-            *(["-t", f"{_seconds(audio):.3f}"] if _seconds(audio) else []),
-            "-shortest",
-            # L'index en tête du fichier : la lecture démarre sans avoir à
-            # télécharger la fin, ce qu'attendent les plateformes vidéo.
-            "-movflags", "+faststart",
-            str(out_path),
-        ], should_stop=should_stop)
+        try:
+            _run([
+                find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                *background,
+                "-i", str(audio),
+                "-filter_complex", _filter(captions, Path(texts), params),
+                "-map", "[v]", "-map", "1:a",
+                *codec,
+                "-r", str(params.fps),
+                "-g", str(params.fps * KEYFRAME_S),
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", params.audio_bitrate,
+                # L'image bouclerait sans fin : la piste audio fixe la durée.
+                #
+                # `-shortest` seul n'y suffit pas. Mesuré : une piste de 14 s
+                # donnait une vidéo de 18 s, quatre secondes d'image fixe sur
+                # du silence à la fin de chaque morceau exporté. ffmpeg arrête
+                # bien l'entrée bouclée, mais seulement au bloc suivant. La
+                # durée exacte se lit dans le WAV qu'on vient d'écrire —
+                # autant la lui donner.
+                *(["-t", f"{_seconds(audio):.3f}"] if _seconds(audio) else []),
+                "-shortest",
+                # L'index en tête du fichier : la lecture démarre sans avoir à
+                # télécharger la fin, ce qu'attendent les plateformes vidéo.
+                "-movflags", "+faststart",
+                str(out_path),
+            ], should_stop=should_stop)
+        finally:
+            # Le fond d'un montage ne sert qu'à cette vidéo : contrairement
+            # aux cycles de diaporama, rien ne le réutilise.
+            if timeline_bg is not None:
+                timeline_bg.unlink(missing_ok=True)
 
     return out_path
 
@@ -385,16 +406,18 @@ def _get_black_image(folder: Path) -> Path:
 
 def _timeline_video(audio: str | Path, params: VideoParams,
                     should_stop: ShouldStop | None = None) -> Path:
-    """Fond composé des blocs de la timeline avec fond noir pour les vides."""
-    global _cycle_dir
+    """Fond composé des blocs de la timeline avec fond noir pour les vides.
+
+    Un fichier neuf à chaque appel, au nom unique : deux vidéos encodées en
+    parallèle ne doivent pas écrire le même fond. L'appelant l'efface une fois
+    la vidéo faite.
+    """
     duration = _seconds(audio)
     if duration <= 0:
         duration = max((float(c.get("end", 0.0)) for c in params.clips), default=1.0)
     duration = max(0.5, duration)
 
-    if _cycle_dir is None:
-        _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
-    black_path = str(_get_black_image(Path(_cycle_dir.name)))
+    black_path = str(_get_black_image(_workdir()))
 
     sorted_clips = sorted(params.clips, key=lambda c: float(c.get("start", 0.0)))
     segments: list[tuple[str, float]] = []
@@ -418,30 +441,143 @@ def _timeline_video(audio: str | Path, params: VideoParams,
     if not segments:
         segments.append((black_path, duration))
 
-    # Cas segment unique :
-    if len(segments) == 1:
-        img, length = segments[0]
-        out_path = Path(_cycle_dir.name) / f"timeline_{len(_cycles)}.mp4"
-        _run([
-            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            "-loop", "1", "-t", f"{length:.3f}", "-framerate", str(params.fps),
-            "-i", img,
-            "-filter_complex", _framed("[0:v]", "[v]", params),
-            "-map", "[v]",
-            "-t", f"{length:.3f}",
-            "-c:v", _video_encoder(), "-crf", str(params.crf),
-            "-preset", "veryfast", "-pix_fmt", "yuv420p",
-            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
-            str(out_path),
-        ], should_stop=should_stop)
-        return out_path
-
     lengths = [max(0.2, length) for _, length in segments]
     chosen = [img for img, _ in segments]
     fade = max(0.0, params.slide_fade_s)
     fades = [min(fade, lengths[i], lengths[i + 1]) if fade > 0 else 0.0
              for i in range(len(lengths) - 1)]
+    return _sequence(chosen, lengths, fades, params, _workfile("timeline"),
+                     should_stop)
 
+
+def _chapters(captions: list[Caption], params: VideoParams,
+              should_stop: ShouldStop | None = None) -> Path | None:
+    """Fond dont l'image change au morceau, encodé pour la durée du concert.
+
+    C'est l'autre règle possible pour un fond : au lieu de tourner sur une
+    horloge — une image toutes les huit secondes, sans rapport avec ce qu'on
+    entend —, chaque morceau reçoit la sienne. Sur un concert dont on a pris
+    une photo par morceau, c'est la seule qui ait un sens.
+
+    Le cycle recommence s'il y a moins d'images que de morceaux : mieux vaut
+    revoir la troisième photo au vingt-sixième morceau que ne rien afficher.
+
+    Rend None quand la question ne se pose pas : un seul morceau, une seule
+    image, ou des titres sans bornes — auquel cas l'appelant retombe sur le
+    diaporama ou sur l'image fixe.
+    """
+    stills = params.stills()
+    spans = [(caption.start or 0.0, caption.end) for caption in captions]
+    if len(stills) < 2 or len(captions) < 2 or any(end is None for _, end in spans):
+        return None
+
+    lengths = [max(0.2, float(end) - start) for start, end in spans]
+    # Le début d'un chapitre est le début du recouvrement audio. L'image
+    # entrante doit commencer à apparaître là, et non avoir déjà fini son fondu.
+    # Seul un chapitre trop court limite sa propre transition, pas tout le film.
+    fades = [min(max(0.0, params.slide_fade_s), length) for length in lengths[1:]]
+    chosen = [stills[rank % len(stills)] for rank in range(len(lengths))]
+    signature = (tuple(chosen), tuple(round(value, 3) for value in lengths), tuple(fades),
+                 params.width, params.height, params.fps, params.crf)
+
+    with _cycle_lock:
+        known = _cycles.get(signature)
+        if known is not None and known.exists():
+            return known
+        out_path = _sequence(chosen, lengths, fades, params,
+                             _workfile("morceaux"), should_stop)
+        _cycles[signature] = out_path
+        return out_path
+
+
+def _sequence(chosen: list[str], lengths: list[float], fades: list[float],
+              params: VideoParams, out_path: Path,
+              should_stop: ShouldStop | None = None) -> Path:
+    """Enchaîne des images fixes, chacune tenue `lengths[i]` secondes.
+
+    `fades[i]` est le fondu de l'image `i` vers la suivante : il commence au
+    début du plan `i + 1` et dure au plus ce plan. L'image sortante reste donc
+    disponible pendant ce fondu, et la dernière tient jusqu'au bout.
+
+    Au-delà de `SEQUENCE_BATCH` plans, l'encodage se fait par tranches. Une
+    tranche s'arrête au milieu du plan pleinement affiché qui la termine —
+    après son fondu entrant, avant le sortant —, calé sur une image entière
+    pour que les durées raboutées ne dérivent pas. La tranche suivante
+    reprend ce même plan au même instant : la jointure ne se voit pas.
+    """
+    if len(chosen) <= SEQUENCE_BATCH:
+        _encode_sequence(chosen, lengths, fades, params, out_path, should_stop)
+        return out_path
+
+    begins = _begins(lengths)
+    parts: list[Path] = []
+    try:
+        for (first, begin), (last, finish) in _sequence_slices(lengths, fades, params.fps):
+            if first == last:
+                local_lengths = [finish - begin]
+            else:
+                local_lengths = lengths[first:last + 1]
+                local_lengths[0] = begins[first] + lengths[first] - begin
+                local_lengths[-1] = finish - begins[last]
+            part = _workfile("tranche")
+            parts.append(part)
+            _encode_sequence(chosen[first:last + 1], local_lengths, fades[first:last],
+                             params, part, should_stop)
+
+        listing = _workfile("tranches", ".txt")
+        listing.write_text("".join(
+            "file '" + str(part).replace("\\", "/").replace("'", "'\\''") + "'\n"
+            for part in parts), encoding="utf-8")
+        parts.append(listing)
+        _run([
+            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            "-f", "concat", "-safe", "0", "-i", str(listing),
+            "-c", "copy", str(out_path),
+        ], should_stop=should_stop)
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
+    return out_path
+
+
+def _begins(lengths: list[float]) -> list[float]:
+    """Instant où commence chaque plan."""
+    begins = [0.0]
+    for length in lengths[:-1]:
+        begins.append(begins[-1] + length)
+    return begins
+
+
+def _sequence_slices(lengths: list[float], fades: list[float],
+                     fps: int) -> list[tuple[tuple[int, float], tuple[int, float]]]:
+    """Les tranches d'un long enchaînement : ((premier plan, début), (dernier, fin)).
+
+    Une jointure tous les `SEQUENCE_BATCH` plans, au milieu de la partie
+    pleinement affichée du plan qui la porte, arrondie à l'image près.
+    """
+    begins = _begins(lengths)
+    total = begins[-1] + lengths[-1]
+    frame = 1.0 / fps
+    bounds: list[tuple[int, float]] = [(0, 0.0)]
+    for index in range(SEQUENCE_BATCH, len(lengths) - 1, SEQUENCE_BATCH):
+        low = begins[index] + fades[index - 1]
+        high = begins[index] + lengths[index]
+        if high - low < frame:
+            # Aucun instant pleinement affiché dans ce plan : la jointure
+            # attend la tranche suivante plutôt que de couper un fondu.
+            continue
+        moment = round((low + high) / 2 / frame) * frame
+        if moment < low:
+            moment += frame
+        bounds.append((index, min(moment, high)))
+    bounds.append((len(lengths) - 1, total))
+    return list(zip(bounds, bounds[1:]))
+
+
+def _encode_sequence(chosen: list[str], lengths: list[float], fades: list[float],
+                     params: VideoParams, out_path: Path,
+                     should_stop: ShouldStop | None = None) -> None:
+    """Un appel ffmpeg : une entrée par plan, des fondus ou une concaténation."""
     inputs: list[str] = []
     for still, length, outgoing in zip(chosen, lengths, fades + [0.0]):
         inputs += ["-loop", "1", "-t", f"{length + outgoing:.3f}",
@@ -465,101 +601,43 @@ def _timeline_video(audio: str | Path, params: VideoParams,
         chain.append(f"{joined}concat=n={len(chosen)}:v=1:a=0[x]")
         last = "[x]"
 
-    out_path = Path(_cycle_dir.name) / f"timeline_{len(_cycles)}.mp4"
     _run([
         find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
         *inputs,
         "-filter_complex", ";".join(chain),
         "-map", last,
         "-t", f"{sum(lengths):.3f}",
-        "-c:v", _video_encoder(), "-crf", str(params.crf),
-        "-preset", "veryfast", "-pix_fmt", "yuv420p",
+        *_still_codec(params),
+        "-pix_fmt", "yuv420p",
         "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
         str(out_path),
     ], should_stop=should_stop)
-    return out_path
 
 
-def _chapters(captions: list[Caption], params: VideoParams,
-              should_stop: ShouldStop | None = None) -> Path | None:
-    """Fond dont l'image change au morceau, encodé pour la durée du concert.
-
-    C'est l'autre règle possible pour un fond : au lieu de tourner sur une
-    horloge — une image toutes les huit secondes, sans rapport avec ce qu'on
-    entend —, chaque morceau reçoit la sienne. Sur un concert dont on a pris
-    une photo par morceau, c'est la seule qui ait un sens.
-
-    Le cycle recommence s'il y a moins d'images que de morceaux : mieux vaut
-    revoir la troisième photo au vingt-sixième morceau que ne rien afficher.
-
-    Rend None quand la question ne se pose pas : un seul morceau, une seule
-    image, ou des titres sans bornes — auquel cas l'appelant retombe sur le
-    diaporama ou sur l'image fixe.
-
-    Une entrée ffmpeg par morceau, soit vingt-cinq : c'est le diaporama déroulé
-    qui était impraticable, avec ses neuf cents entrées pour deux heures.
-    """
+def _workdir() -> Path:
+    """Le dossier des fonds encodés, ouvert au premier besoin."""
     global _cycle_dir
-    stills = params.stills()
-    spans = [(caption.start or 0.0, caption.end) for caption in captions]
-    if len(stills) < 2 or len(captions) < 2 or any(end is None for _, end in spans):
-        return None
-
-    lengths = [max(0.2, float(end) - start) for start, end in spans]
-    # Le début d'un chapitre est le début du recouvrement audio. L'image
-    # entrante doit commencer à apparaître là, et non avoir déjà fini son fondu.
-    # Seul un chapitre trop court limite sa propre transition, pas tout le film.
-    fades = [min(max(0.0, params.slide_fade_s), length) for length in lengths[1:]]
-    chosen = [stills[rank % len(stills)] for rank in range(len(lengths))]
-    signature = (tuple(chosen), tuple(round(value, 3) for value in lengths), tuple(fades),
-                 params.width, params.height, params.fps, params.crf)
-
     with _cycle_lock:
-        known = _cycles.get(signature)
-        if known is not None and known.exists():
-            return known
         if _cycle_dir is None:
             _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
+        return Path(_cycle_dir.name)
 
-        # L'image sortante reste disponible pendant le fondu qui commence
-        # au chapitre suivant. La dernière tient jusqu'à la fin de l'audio.
-        inputs: list[str] = []
-        for still, length, outgoing in zip(chosen, lengths, fades + [0.0]):
-            inputs += ["-loop", "1", "-t", f"{length + outgoing:.3f}",
-                       "-framerate", str(params.fps), "-i", still]
 
-        chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
-                 for index in range(len(chosen))]
-        if any(fades):
-            previous = "[s0]"
-            elapsed = 0.0
-            for index in range(1, len(chosen)):
-                elapsed += lengths[index - 1]
-                label = f"[x{index}]"
-                chain.append(f"{previous}[s{index}]xfade=transition=fade"
-                             f":duration={fades[index - 1]:.3f}"
-                             f":offset={elapsed:.3f}{label}")
-                previous = label
-            last = previous
-        else:
-            joined = "".join(f"[s{index}]" for index in range(len(chosen)))
-            chain.append(f"{joined}concat=n={len(chosen)}:v=1:a=0[x]")
-            last = "[x]"
+def _workfile(stem: str, suffix: str = ".mp4") -> Path:
+    """Un nom neuf dans ce dossier : deux encodages ne s'y marchent pas dessus."""
+    return _workdir() / f"{stem}-{uuid.uuid4().hex[:12]}{suffix}"
 
-        out_path = Path(_cycle_dir.name) / f"morceaux{len(_cycles)}.mp4"
-        _run([
-            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            *inputs,
-            "-filter_complex", ";".join(chain),
-            "-map", last,
-            "-t", f"{sum(lengths):.3f}",
-            "-c:v", _video_encoder(), "-crf", str(params.crf),
-            "-preset", "veryfast", "-pix_fmt", "yuv420p",
-            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
-            str(out_path),
-        ], should_stop=should_stop)
-        _cycles[signature] = out_path
-        return out_path
+
+def _still_codec(params: VideoParams) -> list[str]:
+    """Réglages d'encodage d'un fond, selon l'encodeur disponible.
+
+    `-crf` et `-preset` n'existent que pour libx264 : passés à mpeg4, ils
+    étaient ignorés et sa qualité restait celle par défaut.
+    """
+    encoder = _video_encoder()
+    if encoder == "libx264":
+        return ["-c:v", encoder, "-preset", "veryfast", "-crf", str(params.crf)]
+    return ["-c:v", encoder, "-q:v", "4"]
 
 
 def _slideshow(params: VideoParams,
@@ -584,7 +662,6 @@ def _slideshow(params: VideoParams,
     Sans ce rattrapage, chaque tour se signalerait par une coupe franche au
     milieu d'une vidéo qui n'en a aucune autre.
     """
-    global _cycle_dir
     stills = params.stills()
     hold = max(1.0, params.slide_s)
     # Le champ promet une durée de fondu, jusqu'à 60 s. La borner à la
@@ -599,65 +676,22 @@ def _slideshow(params: VideoParams,
         known = _cycles.get(signature)
         if known is not None and known.exists():
             return known
-        if _cycle_dir is None:
-            _cycle_dir = tempfile.TemporaryDirectory(prefix="cc-diaporama-")
 
         ordered = stills + ([stills[0]] if fade else [])
-        inputs: list[str] = []
-        for index, still in enumerate(ordered):
-            # Une image intermédiaire sert d'abord au fondu entrant, reste
-            # seule pendant `hold`, puis sert au fondu sortant. La première
-            # n'a pas de fondu entrant dans ce cycle ; sa reprise de queue n'a
-            # que celui-là. Ces durées rendent la valeur choisie exacte, même
-            # lorsqu'elle dépasse les huit secondes du plateau.
-            if not fade:
-                span = hold
-            elif index == 0:
-                span = hold + fade
-            elif index == len(ordered) - 1:
-                span = fade
-            else:
-                span = 2 * fade + hold
-            inputs += ["-loop", "1", "-t", f"{span:.3f}",
-                       "-framerate", str(params.fps), "-i", still]
-
-        chain = [_framed(f"[{index}:v]", f"[s{index}]", params)
-                 for index in range(len(ordered))]
+        # Chaque fondu commence au début du plan suivant et empiète sur lui :
+        # une image intermédiaire occupe donc son fondu entrant puis son
+        # plateau, la première son seul plateau, et la reprise de queue son
+        # seul fondu. Ces durées rendent la valeur choisie exacte, même
+        # lorsqu'elle dépasse les huit secondes du plateau. Le dernier fondu
+        # compris, le cycle se termine sur la première image pleinement
+        # revenue, exactement là où le tour suivant la reprend.
         if fade:
-            previous = "[s0]"
-            for index in range(1, len(ordered)):
-                label = f"[x{index}]"
-                # Chaque transition commence après le plateau de l'image
-                # courante. Les fondus précédents font partie du temps déjà
-                # assemblé, d'où `(index - 1) * fade`.
-                offset = index * hold + (index - 1) * fade
-                chain.append(f"{previous}[s{index}]xfade=transition=fade"
-                             f":duration={fade:.3f}"
-                             f":offset={offset:.3f}{label}")
-                previous = label
-            last = previous
+            lengths = [hold] + [fade + hold] * (len(stills) - 1) + [fade]
         else:
-            joined = "".join(f"[s{index}]" for index in range(len(ordered)))
-            chain.append(f"{joined}concat=n={len(ordered)}:v=1:a=0[x]")
-            last = "[x]"
-
-        # Le dernier fondu compris : le cycle se termine sur la première image
-        # pleinement revenue, exactement là où le tour suivant la reprend.
-        cycle = len(stills) * (hold + fade) if fade else len(stills) * hold
-        out_path = Path(_cycle_dir.name) / f"diaporama{len(_cycles)}.mp4"
-        _run([
-            find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-            *inputs,
-            "-filter_complex", ";".join(chain),
-            "-map", last,
-            "-t", f"{cycle:.3f}",
-            # Une image-clé régulière : la boucle repart proprement, et sans
-            # elles ffmpeg réinterpole depuis le début du cycle à chaque tour.
-            "-c:v", _video_encoder(), "-crf", str(params.crf),
-            "-preset", "veryfast", "-pix_fmt", "yuv420p",
-            "-r", str(params.fps), "-g", str(params.fps * KEYFRAME_S),
-            str(out_path),
-        ], should_stop=should_stop)
+            lengths = [hold] * len(stills)
+        fades = [fade] * (len(ordered) - 1)
+        out_path = _sequence(ordered, lengths, fades, params,
+                             _workfile("diaporama"), should_stop)
         _cycles[signature] = out_path
         return out_path
 

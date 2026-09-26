@@ -9,7 +9,7 @@
   import { duration as spell, hms, tenths, parseTime, trackLabel } from '../lib/format'
   import { modal } from '../lib/modal'
   import { palette, slice } from '../lib/wave'
-  import { reorderAt } from '../lib/timeline'
+  import { reconcileMontage, reorderAt } from '../lib/timeline'
   import NumberInput from './NumberInput.svelte'
   import ExportConflictModal from './ExportConflictModal.svelte'
   import Hint from './Hint.svelte'
@@ -42,13 +42,20 @@
       const start = cursor
       cursor += sourceEnd - sourceStart
       return [{ id: makeId(`audio-${track.number}`), trackNumber: track.number,
-        start, end: cursor, sourceStart, sourceEnd }]
+        start, end: cursor, sourceStart, sourceEnd, trackStart: track.start, trackEnd: track.end }]
     })
   }
 
-  let audioClips = $state<TimelineAudioClip[]>(legacyAudioClips())
+  /* Le montage est recalé sur les coupes actuelles avant d'être montré.
+
+     Il a pu être composé avant qu'on déplace une frontière, qu'on fusionne
+     deux morceaux ou qu'on relance l'analyse : ses plans désignaient alors
+     l'ancien découpage, et l'export le sortait tel quel. Ce qui a bougé est
+     dit dans l'en-tête, pour qu'on le revoie avant d'exporter. */
   // svelte-ignore state_referenced_locally
-  let clips = $state<TimelineClip[]>(initialConfig?.clips?.map((clip) => ({ ...clip })) ?? [])
+  const realigned = reconcileMontage(legacyAudioClips(), initialConfig?.clips ?? [], tracks)
+  let audioClips = $state<TimelineAudioClip[]>(realigned.audio)
+  let clips = $state<TimelineClip[]>(realigned.images)
   // svelte-ignore state_referenced_locally
   let library = $state<string[]>([...(initialConfig?.library ?? [])])
   // svelte-ignore state_referenced_locally
@@ -370,7 +377,8 @@
     const duration = Math.max(0.5, track.end - track.start)
     if (!audioClips.length) targetTime = 0
     const clip: TimelineAudioClip = { id: makeId(`audio-${track.number}`), trackNumber: track.number,
-      start: 0, end: duration, sourceStart: track.start, sourceEnd: track.end }
+      start: 0, end: duration, sourceStart: track.start, sourceEnd: track.end,
+      trackStart: track.start, trackEnd: track.end }
     const wanted = snapPlacement(Math.max(0, targetTime), Math.max(0, targetTime) + duration,
       { kind: 'audio', id: clip.id }).start
     audioClips = insertAt([...audioClips, clip], clip, wanted)
@@ -391,7 +399,8 @@
       if (selectedTrackNumbers.has(track.number)) continue
       const duration = Math.max(0.5, track.end - track.start)
       additions.push({ id: makeId(`audio-${track.number}`), trackNumber: track.number,
-        start: cursor, end: cursor + duration, sourceStart: track.start, sourceEnd: track.end })
+        start: cursor, end: cursor + duration, sourceStart: track.start, sourceEnd: track.end,
+        trackStart: track.start, trackEnd: track.end })
       cursor += duration
     }
     audioClips = [...audioClips, ...additions]
@@ -970,6 +979,10 @@
           <span class="badge">{audioClips.length} {t('montage.audio_clips')}</span>
           <span class="badge">{t('count.images', { count: clips.length })}</span>
         </p>
+        {#if realigned.adjusted || realigned.removed}
+          <p class="realigned" role="status">{t('montage.realigned',
+            { adjusted: realigned.adjusted, removed: realigned.removed })}</p>
+        {/if}
       </div>
       <button class="btn quiet icon" onclick={dismiss} aria-label={t('ui.close')}>&#x2715;</button>
     </header>
@@ -2394,6 +2407,12 @@
     color: var(--gap);
     font-size: 11px;
     line-height: 1.4;
+  }
+
+  .realigned {
+    margin: 6px 0 0;
+    color: var(--gap);
+    font-size: 11.5px;
   }
 
   .refuse {

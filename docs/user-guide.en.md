@@ -257,6 +257,9 @@ official website is offered as the manual update path.
   you know the count, then listen to each boundary.
 - **A transition is still undetected:** the advanced `segues` command can produce
   a list of moments to listen to without modifying the project by default.
+- **Reporting a problem:** attach the log file
+  `%LOCALAPPDATA%\ConcertCutter\logs\concertcutter.log`. It keeps the technical
+  details of errors that the window does not show.
 
 For this command and batch processing, see the
 [command-line reference](command-line.md).

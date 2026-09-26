@@ -53,6 +53,10 @@ export interface TimelineAudioClip {
   /** Portion lue dans l'enregistrement source. */
   sourceStart: number
   sourceEnd: number
+  /** Bornes du morceau au moment où le plan y a été taillé : c'est ce qui
+      permet de recaler le plan quand la coupe bouge ensuite. */
+  trackStart?: number
+  trackEnd?: number
 }
 
 export interface VideoMontageConfig {
