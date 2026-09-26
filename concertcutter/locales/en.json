@@ -366,7 +366,7 @@
   "montage.drop_tracks_here": "Drop tracks here",
   "montage.empty_timeline": "Empty timeline: drag images from the library onto the video track.",
   "montage.export_video": "Export video",
-  "montage.fade_hint": "Between adjoining images or tracks",
+  "montage.fade_hint": "Between adjoining images, and a crossfade between touching tracks: they overlap by this length",
   "montage.fit": "Show all",
   "montage.image_sources": "Visual sources",
   "montage.images_hint": "Drag images onto the video lane",

@@ -87,30 +87,59 @@ class AlbumTimingTests(unittest.TestCase):
             self.assertTrue(np.allclose(rendered[:2000], 0))
             self.assertAlmostEqual(rendered[2000, 0], samples[4000, 0], places=4)
 
-    def test_timeline_audio_fades_only_joined_clips(self) -> None:
+    def test_overlapping_clips_crossfade_their_music(self) -> None:
+        """Le recouvrement mêle les deux musiques : A s'éteint pendant que B monte."""
         from concertcutter.segment import Analysis, Segment, MUSIC
 
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / "source.wav"
-            sf.write(source, np.ones((4000, 1), dtype=np.float32), 1000,
-                     subtype="FLOAT")
+            samples = np.zeros((4000, 2), dtype=np.float32)
+            samples[:2000, 0] = 1.0     # le morceau A, sur le canal 0
+            samples[2000:, 1] = 1.0     # le morceau B, sur le canal 1
+            sf.write(source, samples, 1000, subtype="FLOAT")
+            analysis = Analysis(
+                source=str(source), samplerate=1000, channels=2, duration=4,
+                segments=[Segment(start=0, end=4, kind=MUSIC, number=1)],
+            )
+            output = Path(root) / "montage.wav"
+            _timeline_audio(analysis, (
+                {"trackNumber": 1, "start": 0.0, "end": 2.0,
+                 "sourceStart": 0.0, "sourceEnd": 2.0},
+                {"trackNumber": 1, "start": 1.5, "end": 3.5,
+                 "sourceStart": 2.0, "sourceEnd": 4.0},
+            ), output)
+            rendered, _ = sf.read(output, always_2d=True)
+            self.assertEqual(len(rendered), 3500)
+            np.testing.assert_allclose(rendered[1000], [1.0, 0.0], atol=0.01)
+            np.testing.assert_allclose(rendered[1500], [1.0, 0.0], atol=0.01)
+            np.testing.assert_allclose(rendered[1750], [0.707, 0.707], atol=0.01)
+            np.testing.assert_allclose(rendered[1999], [0.0, 1.0], atol=0.01)
+            np.testing.assert_allclose(rendered[2500], [0.0, 1.0], atol=0.01)
+
+    def test_titles_hand_over_in_the_middle_of_a_crossfade(self) -> None:
+        from concertcutter.render import _caption_spans
+
+        spans = [span for _clip, span in _caption_spans((
+            {"start": 0.0, "end": 10.0}, {"start": 8.0, "end": 20.0},
+            {"start": 25.0, "end": 30.0}))]
+        self.assertEqual(spans, [(0.0, 9.0), (9.0, 20.0), (25.0, 30.0)])
+
+    def test_three_clips_never_overlap_at_once(self) -> None:
+        from concertcutter.segment import Analysis, Segment, MUSIC
+
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source.wav"
+            sf.write(source, np.ones((4000, 1), dtype=np.float32), 1000, subtype="FLOAT")
             analysis = Analysis(
                 source=str(source), samplerate=1000, channels=1, duration=4,
                 segments=[Segment(start=0, end=4, kind=MUSIC, number=1)],
             )
-            output = Path(root) / "montage.wav"
-            clips = (
-                {"trackNumber": 1, "start": 0.0, "end": 2.0,
-                 "sourceStart": 0.0, "sourceEnd": 2.0},
-                {"trackNumber": 1, "start": 2.0, "end": 4.0,
-                 "sourceStart": 2.0, "sourceEnd": 4.0},
-            )
-            _timeline_audio(analysis, clips, output, fade_s=1.0)
-            rendered, _ = sf.read(output, always_2d=True)
-            self.assertGreater(rendered[1500, 0], 0.99)
-            self.assertLess(rendered[1999, 0], 0.01)
-            self.assertLess(rendered[2000, 0], 0.01)
-            self.assertGreater(rendered[2500, 0], 0.99)
+            clip = lambda start, end: {"trackNumber": 1, "start": start, "end": end,
+                                       "sourceStart": 0.0, "sourceEnd": end - start}
+            for clips in ((clip(0, 2), clip(1, 3), clip(1.5, 3.5)),   # trois à la fois
+                          (clip(0, 3), clip(1, 2))):                  # l'un dans l'autre
+                with self.subTest(clips=clips), self.assertRaises(ValueError):
+                    _timeline_audio(analysis, clips, Path(root) / "m.wav")
 
     def test_free_clip_edges_get_the_anti_click_fade(self) -> None:
         from concertcutter.segment import Analysis, Segment, MUSIC

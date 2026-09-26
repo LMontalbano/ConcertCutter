@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { t } from '../lib/i18n.svelte'
   import {
     api, follow, type TimelineAudioClip, type TimelineClip,
@@ -9,7 +9,9 @@
   import { duration as spell, hms, tenths, parseTime, trackLabel } from '../lib/format'
   import { modal } from '../lib/modal'
   import { palette, slice } from '../lib/wave'
-  import { reconcileMontage, reorderAt } from '../lib/timeline'
+  import {
+    audibleAt, crossfadeLane, crossfades, reconcileMontage, reorderAt, titledAt,
+  } from '../lib/timeline'
   import NumberInput from './NumberInput.svelte'
   import ExportConflictModal from './ExportConflictModal.svelte'
   import Hint from './Hint.svelte'
@@ -54,8 +56,14 @@
      dit dans l'en-tête, pour qu'on le revoie avant d'exporter. */
   // svelte-ignore state_referenced_locally
   const realigned = reconcileMontage(legacyAudioClips(), initialConfig?.clips ?? [], tracks)
-  let audioClips = $state<TimelineAudioClip[]>(realigned.audio)
-  let clips = $state<TimelineClip[]>(realigned.images)
+  /* Puis les jointures reçoivent leur fondu enchaîné, y compris celles d'un
+     montage composé avant qu'il existe : deux plans qui se touchent se
+     recouvrent de la durée du fondu. */
+  // svelte-ignore state_referenced_locally
+  const settledAtOpening = crossfadeLane(realigned.audio, realigned.images,
+    initialConfig?.transitionFade ?? 2)
+  let audioClips = $state<TimelineAudioClip[]>(settledAtOpening.audio)
+  let clips = $state<TimelineClip[]>(settledAtOpening.images)
   // svelte-ignore state_referenced_locally
   let library = $state<string[]>([...(initialConfig?.library ?? [])])
   // svelte-ignore state_referenced_locally
@@ -77,7 +85,7 @@
   let containerWidth = $state(900)
   let timelineContainer = $state<HTMLElement | null>(null)
   let previewCanvas = $state<HTMLCanvasElement | null>(null)
-  let audioEl: HTMLAudioElement | null = null
+  const players: (HTMLAudioElement | null)[] = [null, null]
   let selected = $state<{ kind: 'image' | 'audio'; id: string } | null>(null)
   let activeSnapTime = $state<number | null>(null)
   let dragOverLane = $state<'image' | 'audio' | null>(null)
@@ -157,7 +165,9 @@
   const scaleDuration = $derived(Math.max(30, fittedDuration))
   const rulerDuration = $derived(Math.max(scaleDuration, contentDuration))
   const minimumZoom = $derived(Math.min(1, scaleDuration / rulerDuration))
-  const activeAudioClip = $derived(audioClips.find((clip) => clip.start <= playhead && playhead < clip.end) ?? null)
+  // Le titre passe le relais au milieu d'un fondu enchaîné, comme à l'export.
+  const activeAudioClip = $derived(titledAt(audioClips, playhead))
+  const fadeZones = $derived(crossfades(audioClips))
   const activeTrack = $derived(activeAudioClip
     ? tracks.find((track) => track.number === activeAudioClip.trackNumber) ?? null : null)
   const activeClip = $derived(clips.find((clip) => clip.start <= playhead && playhead < clip.end) ?? null)
@@ -355,6 +365,30 @@
     return [...kept, placed].sort((a, b) => a.start - b.start)
   }
 
+  /* Pose le fondu enchaîné à chaque jointure de la piste audio.
+
+     Appelé après tout geste qui touche à l'audio : deux plans qui se
+     touchent — ou se recouvrent déjà — se recouvrent alors exactement de la
+     durée du fondu, et ce qui suit se décale d'autant, images comprises. Un
+     plan séparé du précédent par un espace n'est pas concerné. */
+  function settleAudio(): void {
+    const settled = crossfadeLane(audioClips, clips, transitionFade)
+    audioClips = settled.audio
+    clips = settled.images
+  }
+
+  // Changer la durée du fondu change le recouvrement de toutes les jointures.
+  $effect(() => {
+    const fade = transitionFade
+    untrack(() => {
+      const settled = crossfadeLane(audioClips, clips, fade)
+      if (JSON.stringify(settled.audio) === JSON.stringify(audioClips)) return
+      audioClips = settled.audio
+      clips = settled.images
+      clampImagesToAudio()
+    })
+  })
+
   function clampImagesToAudio(): void {
     if (!timelineDuration) return
     clips = clips.map((clip) => ({ ...clip, end: Math.min(clip.end, timelineDuration) }))
@@ -382,6 +416,7 @@
     const wanted = snapPlacement(Math.max(0, targetTime), Math.max(0, targetTime) + duration,
       { kind: 'audio', id: clip.id }).start
     audioClips = insertAt([...audioClips, clip], clip, wanted)
+    settleAudio()
     const posed = audioClips.find((item) => item.id === clip.id)!
     if (audioClips.length === 1) { fittedDuration = Math.max(30, posed.end); zoomLevel = 1 }
     selected = { kind: 'audio', id: clip.id }
@@ -404,7 +439,8 @@
       cursor += duration
     }
     audioClips = [...audioClips, ...additions]
-    if (wasEmpty && additions.length) { fittedDuration = Math.max(30, cursor); zoomLevel = 1 }
+    settleAudio()
+    if (wasEmpty && additions.length) { fittedDuration = Math.max(30, laneEnd(audioClips)); zoomLevel = 1 }
     if (additions.length) selected = { kind: 'audio', id: additions[0].id }
     recordChange(before)
   }
@@ -535,14 +571,16 @@
       if (dragging.action === 'start') start = Math.min(end - minimum, edge.value)
       else end = Math.max(start + minimum, edge.value)
       const others = lane.filter((clip) => clip.id !== dragging!.id)
+      // Un bord déjà pris dans un fondu enchaîné peut reculer, pas s'avancer
+      // davantage sur son voisin : le recouvrement est l'affaire du fondu.
       if (dragging.action === 'start') {
         const previousEnd = others.filter((clip) => clip.end <= dragging!.end)
           .reduce((largest, clip) => Math.max(largest, clip.end), 0)
-        start = Math.max(previousEnd, start)
+        start = Math.max(Math.min(previousEnd, dragging.start), start)
       } else {
         const nextStart = others.filter((clip) => clip.start >= dragging!.start)
           .reduce((smallest, clip) => Math.min(smallest, clip.start), Number.POSITIVE_INFINITY)
-        end = Math.min(end, nextStart)
+        end = Math.min(end, Math.max(nextStart, dragging.end))
         if (dragging.kind === 'image' && timelineDuration) end = Math.min(end, timelineDuration)
       }
       if (dragging.kind === 'audio') {
@@ -575,9 +613,11 @@
 
   function endDrag(): void {
     const before = dragging?.historyBefore
+    const movedAudio = dragging?.kind === 'audio'
     dragging = null; activeSnapTime = null
     audioClips = [...audioClips].sort((a, b) => a.start - b.start)
     clips = [...clips].sort((a, b) => a.start - b.start)
+    if (movedAudio) settleAudio()
     clampImagesToAudio()
     window.removeEventListener('pointermove', moveDrag)
     window.removeEventListener('pointerup', endDrag)
@@ -607,15 +647,15 @@
     let { start, end } = clip
 
     if (edge === 'start') {
-      const floor = others.filter((other) => other.end <= clip.end)
-        .reduce((largest, other) => Math.max(largest, other.end), 0)
+      const floor = Math.min(clip.start, others.filter((other) => other.end <= clip.end)
+        .reduce((largest, other) => Math.max(largest, other.end), 0))
       start = Math.max(floor, Math.min(end - minimum, Math.max(0, wanted)))
       if (track && 'sourceStart' in clip) {
         start = Math.max(start, clip.start - (clip.sourceStart - track.start))
       }
     } else {
-      const ceiling = others.filter((other) => other.start >= clip.start)
-        .reduce((smallest, other) => Math.min(smallest, other.start), Number.POSITIVE_INFINITY)
+      const ceiling = Math.max(clip.end, others.filter((other) => other.start >= clip.start)
+        .reduce((smallest, other) => Math.min(smallest, other.start), Number.POSITIVE_INFINITY))
       end = Math.min(ceiling, Math.max(start + minimum, wanted))
       if (kind === 'image' && timelineDuration) end = Math.min(end, timelineDuration)
       if (track && 'sourceEnd' in clip) {
@@ -638,6 +678,7 @@
     } else {
       audioClips = audioClips.map((item) => item.id === moved.id ? moved as TimelineAudioClip : item)
         .sort((a, b) => a.start - b.start)
+      settleAudio()
       clampImagesToAudio()
     }
     recordChange(before)
@@ -661,6 +702,7 @@
       clampImagesToAudio()
     } else {
       audioClips = reorderAt(audioClips, clip as TimelineAudioClip, wanted)
+      settleAudio()
     }
     recordChange(before)
   }
@@ -684,7 +726,10 @@
     if (!selected) return
     const before = snapshot()
     if (selected.kind === 'image') clips = clips.filter((clip) => clip.id !== selected!.id)
-    else { audioClips = audioClips.filter((clip) => clip.id !== selected!.id); setTimeout(clampImagesToAudio) }
+    else {
+      audioClips = audioClips.filter((clip) => clip.id !== selected!.id)
+      settleAudio(); setTimeout(clampImagesToAudio)
+    }
     selected = null
     recordChange(before)
   }
@@ -721,27 +766,39 @@
 
   let animationFrame = 0
   let lastFrameAt = 0
-  let syncedAudioId = ''
+  /* Deux lecteurs, pour entendre le fondu enchaîné dans l'aperçu.
+
+     Un seul sautait d'un plan à l'autre, et l'aperçu ne disait rien de la
+     transition : il fallait exporter pour l'entendre. Deux plans qui se
+     recouvrent sont toujours voisins, donc de rang pair et impair : chacun a
+     son lecteur, et leurs volumes suivent les courbes de l'export. */
+  let syncedIds = ['', '']
   function syncAudio(): void {
-    if (!audioEl) return
-    const clip = audioClips.find((candidate) => candidate.start <= playhead && playhead < candidate.end)
-    if (!clip) { audioEl.pause(); syncedAudioId = ''; return }
-    // Tant que les métadonnées ne sont pas arrivées, écrire `currentTime` ne
-    // retient rien et `play()` est refusé : c'est ce qui faisait perdre le
-    // tout premier appui sur Lecture, qu'il fallait redonner. On demande la
-    // lecture quand même, et la boucle d'animation repasse ici à chaque
-    // image — elle posera la position dès que l'enregistrement est prêt.
-    if (audioEl.readyState >= 1) {
-      const wanted = clip.sourceStart + playhead - clip.start
-      if (syncedAudioId !== clip.id || Math.abs(audioEl.currentTime - wanted) > 0.22) {
-        audioEl.currentTime = wanted; syncedAudioId = clip.id
+    const ordered = [...audioClips].sort((a, b) => a.start - b.start)
+    const heard = audibleAt(ordered, playhead)
+    players.forEach((player, slot) => {
+      if (!player) return
+      const voice = heard.find(({ clip }) => ordered.indexOf(clip) % 2 === slot)
+      if (!voice) { player.pause(); syncedIds[slot] = ''; return }
+      player.volume = Math.max(0, Math.min(1, voice.gain))
+      // Tant que les métadonnées ne sont pas arrivées, écrire `currentTime`
+      // ne retient rien et `play()` est refusé : c'est ce qui faisait perdre
+      // le tout premier appui sur Lecture, qu'il fallait redonner. On demande
+      // la lecture quand même, et la boucle d'animation repasse ici à chaque
+      // image — elle posera la position dès que l'enregistrement est prêt.
+      if (player.readyState >= 1) {
+        const wanted = voice.clip.sourceStart + playhead - voice.clip.start
+        if (syncedIds[slot] !== voice.clip.id || Math.abs(player.currentTime - wanted) > 0.22) {
+          player.currentTime = wanted; syncedIds[slot] = voice.clip.id
+        }
+      } else {
+        syncedIds[slot] = ''
       }
-    } else {
-      syncedAudioId = ''
-    }
-    // Un refus passager — une position réécrite pendant que `play()` démarre
-    // — ne doit pas arrêter la lecture : la boucle réessaie à l'image suivante.
-    if (playing && audioEl.paused) void audioEl.play().catch(() => undefined)
+      // Un refus passager — une position réécrite pendant que `play()`
+      // démarre — ne doit pas arrêter la lecture : la boucle réessaie à
+      // l'image suivante.
+      if (playing && player.paused) void player.play().catch(() => undefined)
+    })
   }
   function playbackFrame(now: number): void {
     if (!playing) return
@@ -757,12 +814,13 @@
     animationFrame = requestAnimationFrame(playbackFrame)
   }
   function stopPlayback(keepPosition = true): void {
-    playing = false; audioEl?.pause(); cancelAnimationFrame(animationFrame); animationFrame = 0; lastFrameAt = 0
+    playing = false; for (const player of players) player?.pause()
+    cancelAnimationFrame(animationFrame); animationFrame = 0; lastFrameAt = 0
     if (!keepPosition) playhead = timelineDuration
   }
   function togglePlay(): void { if (playing) stopPlayback(); else startPlayback() }
   function seekTo(value: number): void {
-    playhead = Math.max(0, Math.min(timelineDuration || rulerDuration, value)); syncedAudioId = ''; syncAudio()
+    playhead = Math.max(0, Math.min(timelineDuration || rulerDuration, value)); syncedIds = ['', '']; syncAudio()
     if (playing) lastFrameAt = performance.now()
   }
   function beginPlayheadDrag(event: PointerEvent): void {
@@ -964,8 +1022,10 @@
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
-<audio bind:this={audioEl} preload="metadata"
-  src={session.open ? api.audioUrl() : undefined}></audio>
+{#each players as _, slot}
+  <audio bind:this={players[slot]} preload="metadata"
+    src={session.open ? api.audioUrl() : undefined}></audio>
+{/each}
 
 <div class="veil" role="presentation">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="montage-title"
@@ -1224,6 +1284,10 @@
                   <button class="handle right" aria-label={t('montage.trim_end')}
                     onpointerdown={(event) => beginDrag('audio', clip, 'end', event)}></button>
                 </div>
+              {/each}
+              {#each fadeZones as zone (zone.start)}
+                <span class="crossfade" aria-hidden="true"
+                  style="left: {zone.start * pps}px; width: {(zone.end - zone.start) * pps}px"></span>
               {/each}
             </div>
 
@@ -2210,6 +2274,24 @@
   .audio-clip.selected .audio-name b {
     color: var(--on-ink);
     background: var(--ink);
+  }
+
+  /* Le fondu enchaîné, là où deux plans se recouvrent : les deux diagonales
+     disent qu'un morceau s'éteint pendant que l'autre monte. Au-dessus des
+     plans, mais transparent aux gestes — on saisit toujours les plans. */
+  .crossfade {
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    z-index: 4;
+    pointer-events: none;
+    border-inline: 1px solid var(--accent);
+    background:
+      linear-gradient(to top right, transparent calc(50% - 1px), var(--accent) 50%,
+        transparent calc(50% + 1px)),
+      linear-gradient(to bottom right, transparent calc(50% - 1px), var(--accent) 50%,
+        transparent calc(50% + 1px)),
+      var(--accent-soft);
   }
 
   .audio-clip canvas {
