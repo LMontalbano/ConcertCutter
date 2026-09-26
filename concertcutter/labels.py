@@ -10,23 +10,37 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .i18n import Message
 from .segment import MUSIC, Analysis
 
 
-def write_audacity_labels(analysis: Analysis, path: str | Path) -> None:
+def untitled_track(number: int, language: str = "fr") -> str:
+    """« Piste 03 » ou « Track 03 » : ce qu'un morceau sans titre devient.
+
+    Dans la langue de l'interface, parce que ce libellé finit dans des noms
+    de fichiers, la cue et le titre incrusté — des choses qu'on relit ensuite.
+    Le français reste la valeur par défaut, comme pour la ligne de commande.
+    """
+    return Message("server.untitled_track", p0=f"{number:02d}").translate(language)
+
+
+def write_audacity_labels(analysis: Analysis, path: str | Path,
+                          language: str = "fr") -> None:
     rows = []
     numbers = analysis.track_numbers()
     for segment, number in zip(analysis.segments, numbers):
+        confidence = f"{segment.confidence:.2f}"
         if number is None:
-            label = f"-- blanc (conf {segment.confidence:.2f})"
+            label = Message("server.label_gap", p0=confidence)
         else:
-            label = f"#{number:02d} musique (conf {segment.confidence:.2f})"
-        rows.append(f"{segment.start:.3f}\t{segment.end:.3f}\t{label}")
+            label = Message("server.label_music", p0=f"{number:02d}", p1=confidence)
+        rows.append(f"{segment.start:.3f}\t{segment.end:.3f}\t{label.translate(language)}")
     Path(path).write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
 def write_cue(
-    tracks: list[dict], audio_name: str, path: str | Path, performer: str = ""
+    tracks: list[dict], audio_name: str, path: str | Path, performer: str = "",
+    language: str = "fr",
 ) -> None:
     """Cue sheet pour le fichier complet.
 
@@ -36,6 +50,13 @@ def write_cue(
     rendu, pas de la source : c'est le cumul des durées de piste — telles
     qu'elles occupent l'album, un fondu enchaîné les ayant raccourcies d'autant
     si l'on en a demandé un.
+
+    Les pistes de la cue sont numérotées par rang, 01, 02, 03… et non par le
+    numéro stable du morceau. Celui-ci peut sauter (03, 05 quand on a exporté
+    une sélection) ou arriver dans le désordre (un 26 au milieu du concert
+    après une coupe) : la norme CUE exige une suite sans trou, et les lecteurs
+    ou graveurs stricts refusaient le fichier. Le numéro stable reste visible
+    dans le titre d'un morceau sans nom.
     """
     lines = []
     if performer:
@@ -43,9 +64,9 @@ def write_cue(
     lines.append(f'FILE "{_escape(audio_name)}" WAVE')
 
     position = 0.0
-    for track in tracks:
-        title = track.get("title") or f"Piste {track['index']:02d}"
-        lines.append(f"  TRACK {track['index']:02d} AUDIO")
+    for rank, track in enumerate(tracks, start=1):
+        title = track.get("title") or untitled_track(track["index"], language)
+        lines.append(f"  TRACK {rank:02d} AUDIO")
         lines.append(f'    TITLE "{_escape(title)}"')
         if performer:
             lines.append(f'    PERFORMER "{_escape(performer)}"')

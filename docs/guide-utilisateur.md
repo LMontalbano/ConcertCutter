@@ -294,6 +294,9 @@ l'ancienne version est restaurée et le site officiel est proposé pour une mise
   contrôlez chaque frontière à l'oreille.
 - **Un enchaînement reste invisible** : la commande avancée `segues` peut
   produire une liste d'instants à écouter, sans modifier le projet par défaut.
+- **Signaler un problème** : joignez le journal
+  `%LOCALAPPDATA%\ConcertCutter\logs\concertcutter.log`. Il garde le détail
+  technique des erreurs, que la fenêtre ne montre pas.
 
 Pour cette dernière fonction et les traitements par lot, consultez la
 [référence en ligne de commande](ligne-de-commande.md).

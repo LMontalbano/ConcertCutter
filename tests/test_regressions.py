@@ -5,6 +5,7 @@ import json
 import contextlib
 import os
 import io
+import sys
 import tempfile
 import threading
 import time
@@ -19,10 +20,11 @@ import soundfile as sf
 
 import concertcutter.render as render_module
 from concertcutter import cancel, project
+from concertcutter.labels import write_audacity_labels, write_cue
 from concertcutter.render import RenderParams, render
 from concertcutter.segment import Analysis, Segment
 from concertcutter.spectral import SpectralFeatures, extract
-from concertcutter.web import server
+from concertcutter.web import launch, server
 from concertcutter.web.jobs import Jobs
 from concertcutter.web.session import MissingSource, Session, SessionError
 
@@ -227,6 +229,82 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.session.render_params({"selection": [99]}, self.session.analysis)
 
+    def test_a_stale_montage_is_refused_with_its_cause(self) -> None:
+        """Un plan qui ne tombe plus dans son morceau n'est pas exporté tel quel."""
+        def montage(number: int, start: float, end: float) -> dict:
+            return {"video_montage": {"enabled": True, "audioClips": [{
+                "id": "a", "trackNumber": number, "start": 0.0, "end": end - start,
+                "sourceStart": start, "sourceEnd": end}]}, "selection": [number]}
+
+        # Les deux segments musicaux se suivent : ils forment un seul morceau,
+        # le 1, de 0 à 2 s.
+        self.session.render_params(montage(1, 0.5, 2.0))
+        for stale in (montage(1, 0.0, 2.5), montage(3, 0.0, 1.0)):
+            with self.subTest(stale=stale), self.assertRaises(SessionError) as caught:
+                self.session.render_params(stale)
+            self.assertEqual(caught.exception.args[0].key, "server.montage_out_of_date")
+
+    def test_untitled_tracks_follow_the_interface_language(self) -> None:
+        self.assertEqual(render_module._track_filename(3, "", language="en"),
+                         "03 - Track 03.wav")
+        self.assertEqual(render_module._track_filename(3, None), "03 - Piste 03.wav")
+        params = self.session.render_params({"full": True}, language="en")
+        self.assertEqual(params.language, "en")
+
+
+class LabelTests(unittest.TestCase):
+    def test_cue_tracks_are_numbered_in_sequence(self) -> None:
+        """La norme CUE veut une suite sans trou, quels que soient les numéros."""
+        with tempfile.TemporaryDirectory() as root:
+            cue = Path(root) / "concert.cue"
+            write_cue([{"index": 3, "title": "", "duration": 60.0},
+                       {"index": 26, "title": "Rappel", "duration": 30.0},
+                       {"index": 5, "title": "", "duration": 10.0}],
+                      "concert.wav", cue, language="en")
+            text = cue.read_text(encoding="utf-8")
+        self.assertEqual([line.split()[1] for line in text.splitlines()
+                          if line.strip().startswith("TRACK")], ["01", "02", "03"])
+        self.assertIn('TITLE "Track 03"', text)
+        self.assertIn('TITLE "Rappel"', text)
+        self.assertIn('TITLE "Track 05"', text)
+        self.assertIn("INDEX 01 01:30:00", text)
+
+    def test_audacity_labels_follow_the_language(self) -> None:
+        analysis = Analysis(source="s.wav", samplerate=8000, channels=1, duration=3.0,
+                            segments=[Segment(0.0, 1.0, "music", number=1),
+                                      Segment(1.0, 3.0, "gap")])
+        with tempfile.TemporaryDirectory() as root:
+            labels = Path(root) / "labels.txt"
+            write_audacity_labels(analysis, labels, language="en")
+            english = labels.read_text(encoding="utf-8")
+            write_audacity_labels(analysis, labels)
+            french = labels.read_text(encoding="utf-8")
+        self.assertIn("#01 music", english)
+        self.assertIn("-- gap", english)
+        self.assertIn("#01 musique", french)
+        self.assertIn("-- blanc", french)
+
+
+class LogTests(unittest.TestCase):
+    def test_output_and_errors_reach_the_log_file(self) -> None:
+        """Sans console, `sys.stdout` vaut None : le journal doit tout recevoir."""
+        with tempfile.TemporaryDirectory() as root:
+            saved = sys.stdout, sys.stderr
+            try:
+                sys.stdout, sys.stderr = None, None
+                path = launch._log_to_file(Path(root))
+                print("trace d'export")
+                sys.stderr.write("erreur du serveur\n")
+            finally:
+                handles = [stream for tee in (sys.stdout, sys.stderr)
+                           for stream in getattr(tee, "streams", [])]
+                sys.stdout, sys.stderr = saved
+                for handle in set(handles):
+                    handle.close()
+            text = path.read_text(encoding="utf-8")
+        self.assertIn("trace d'export", text)
+        self.assertIn("erreur du serveur", text)
+
 
 class CacheTests(unittest.TestCase):
     def test_cache_is_tied_to_its_source(self) -> None:
@@ -410,6 +488,17 @@ class HttpTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             self.request("/api/audio", {"Range": "bytes=999999-"})
         self.assertEqual(caught.exception.code, 416)
+
+    def test_a_foreign_host_is_refused_even_for_the_page(self) -> None:
+        """DNS rebinding : un autre nom pointé sur 127.0.0.1 ne lit rien."""
+        for route in ("/", "/api/state", "/api/audio"):
+            with self.subTest(route=route), \
+                    self.assertRaises(urllib.error.HTTPError) as caught:
+                self.request(route, {"Host": "attaquant.example:80"})
+            self.assertEqual(caught.exception.code, 403)
+        port = self.httpd.server_address[1]
+        with self.request("/api/state", {"Host": f"localhost:{port}"}) as answer:
+            self.assertEqual(answer.status, 200)
 
     def test_malformed_peak_query_returns_json_error(self) -> None:
         with self.assertRaises(urllib.error.HTTPError) as caught:

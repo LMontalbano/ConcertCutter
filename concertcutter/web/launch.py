@@ -21,9 +21,11 @@ from __future__ import annotations
 from ..i18n import Message
 
 import argparse
+import os
 import sys
 import threading
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 from .. import __version__
@@ -43,11 +45,16 @@ TITLE = f"ConcertCutter {__version__}"
 WIDTH, HEIGHT = 1920, 1080
 MIN_WIDTH, MIN_HEIGHT = 1040, 680
 
+# Au-delà, le journal passe en `.1.log` et repart de zéro : deux fichiers d'un
+# mégaoctet suffisent à couvrir bien des séances, sans grossir indéfiniment.
+LOG_BYTES = 1024 * 1024
+
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["--apply-update"]:
         return _run_update_helper(arguments[1:])
+    _log_to_file()
 
     parser = argparse.ArgumentParser(
         prog="concertcutter-web",
@@ -78,7 +85,9 @@ def main(argv: list[str] | None = None) -> int:
                                   app.session.state())[1],
             Message('server.importing'))
 
-    page = f"{address}?token={app.token}"
+    # Sans le jeton : la page servie le porte déjà, et une adresse qui le
+    # contiendrait finirait dans l'historique du navigateur.
+    page = address
     try:
         if chosen.headless:
             print(f"ConcertCutter sert sur {page}", flush=True)
@@ -102,6 +111,62 @@ def icon_path() -> Path:
     root = Path(getattr(sys, "_MEIPASS",
                         Path(__file__).resolve().parent.parent.parent))
     return root / "concertcutter" / "assets" / "icon.ico"
+
+
+def logs_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
+    return Path(base or Path.home()) / "ConcertCutter" / "logs"
+
+
+class _Tee:
+    """Écrit à la fois dans la console, s'il y en a une, et dans le journal."""
+
+    def __init__(self, *streams) -> None:
+        self.streams = [stream for stream in streams if stream is not None]
+
+    def write(self, text: str) -> int:
+        for stream in self.streams:
+            try:
+                stream.write(text)
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+        return len(text)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _log_to_file(folder: Path | None = None) -> Path | None:
+    """Recopie la sortie et les erreurs dans un journal, sur disque.
+
+    L'exécutable est construit sans console (`--windowed`) : `sys.stdout` y
+    vaut None, et `print` n'écrit alors nulle part. Les traces d'un export
+    raté partaient donc dans le vide, et un problème signalé par un
+    utilisateur ne laissait aucune piste. Un journal illisible ou impossible
+    à ouvrir ne doit pas, lui, empêcher l'application de démarrer.
+    """
+    folder = folder or logs_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "concertcutter.log"
+        if path.exists() and path.stat().st_size > LOG_BYTES:
+            os.replace(path, folder / "concertcutter.1.log")
+        handle = path.open("a", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
+    handle.write(f"\n=== ConcertCutter {__version__} — "
+                 f"{datetime.now():%Y-%m-%d %H:%M:%S} ===\n")
+    sys.stdout = _Tee(sys.stdout, handle)
+    sys.stderr = _Tee(sys.stderr, handle)
+    return path
 
 
 def _run_update_helper(argv: list[str]) -> int:

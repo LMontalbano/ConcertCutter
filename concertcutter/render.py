@@ -36,7 +36,7 @@ import soundfile as sf
 from . import video
 from .audio import probe, read_span
 from .cancel import ShouldStop, check
-from .labels import write_audacity_labels, write_cue
+from .labels import untitled_track, write_audacity_labels, write_cue
 from .segment import Analysis, Segment
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -149,6 +149,10 @@ class RenderParams:
     # continu, qu'on ne voulait pas toucher pour autant.
     selection: tuple[int, ...] | None = None
     track_trims: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # Langue des libellés écrits dans les fichiers : « Piste 03 » d'un morceau
+    # sans titre, repères Audacity. Français par défaut, comme la ligne de
+    # commande ; l'interface passe la sienne.
+    language: str = "fr"
 
     @property
     def write_video(self) -> bool:
@@ -319,7 +323,7 @@ def _render_into(
         if params.audio_clips:
             montage_path = Path(scratch.name) / params.full_name
             _timeline_audio(analysis, params.audio_clips, montage_path, info,
-                            params.video_slide_fade_s)
+                            params.video_slide_fade_s, params.fade_ms)
             video_album = _ReadyAlbum(montage_path)
         else:
             video_album = (
@@ -369,7 +373,7 @@ def _render_into(
             title = _title_for(titles, rank, tracks)
             # Le nom nu sert au dossier de travail, qui n'a pas de sous-dossier
             # à lui ; le nom rangé désigne le fichier dans l'export.
-            name = _track_filename(number, title)
+            name = _track_filename(number, title, language=params.language)
             stored = f"{AUDIO_DIR}/{name}"
             track_path = out_dir / stored
             if params.write_tracks:
@@ -390,7 +394,8 @@ def _render_into(
                     "duration": round((stop - start) / info.samplerate, 3),
                 }
             )
-            video_name = (f"{VIDEO_DIR}/{_track_filename(number, title, '.mp4')}"
+            video_name = (f"{VIDEO_DIR}/"
+                          f"{_track_filename(number, title, '.mp4', params.language)}"
                           if params.video_tracks else None)
             # Annonce ce que l'étape produit vraiment : sans les WAV, la
             # piste n'est qu'un intermédiaire vers la vidéo.
@@ -406,7 +411,7 @@ def _render_into(
                 written[-1]["video"] = video_name
                 track_span = (start / info.samplerate, stop / info.samplerate)
                 jobs.append(pool.submit(encode, track_path,
-                                        _track_label(number, title),
+                                        _track_label(number, title, params.language),
                                         video_name, temporary, rank, track_span))
 
         # Les vidéos des pistes finissent ici : la vidéo du concert entier a
@@ -432,6 +437,7 @@ def _render_into(
                             int(clip["trackNumber"]),
                             by_number.get(int(clip["trackNumber"])).title
                             if by_number.get(int(clip["trackNumber"])) else None,
+                            params.language,
                         ),
                         float(clip["start"]),
                         float(clip["end"]),
@@ -441,7 +447,8 @@ def _render_into(
                 ]
             else:
                 captions = video.captions_from_durations(
-                    [_track_label(item["index"], item["title"]) for item in written],
+                    [_track_label(item["index"], item["title"], params.language)
+                     for item in written],
                     _album_durations(written, params.video_crossfade_s),
                 )
             if on_progress:
@@ -476,10 +483,11 @@ def _render_into(
         # enchaîné raccourcit le fichier d'autant, et une cue calculée sur les
         # durées d'origine ferait dériver tous les repères après le premier.
         write_cue(_on_album(written, params.crossfade_s),
-                  f"../{params.audio_name}", cue_path)
+                  f"../{params.audio_name}", cue_path, language=params.language)
 
     if params.write_sidecars:
-        write_audacity_labels(analysis, data_dir / "reperes.txt")
+        write_audacity_labels(analysis, data_dir / "reperes.txt",
+                              language=params.language)
         analysis.to_json(data_dir / "segments.json")
 
     _write_manifest(out_dir, analysis, names)
@@ -610,14 +618,15 @@ def _title_for(titles: list[str] | None, rank: int, tracks=None) -> str | None:
     return None
 
 
-def _track_label(index: int, title: str | None) -> str:
+def _track_label(index: int, title: str | None, language: str = "fr") -> str:
     """Le titre du morceau, ou son numéro s'il est resté sans titre.
 
     Un seul repli pour le nom de fichier et pour le texte incrusté sur la
     vidéo : sans lui, une vidéo sans titre saisi resterait muette de tout texte
     et se confondrait avec les autres.
     """
-    return title.strip() if title and title.strip() else f"Piste {index:02d}"
+    return (title.strip() if title and title.strip()
+            else untitled_track(index, language))
 
 
 def concert_dir(parent: str | Path, analysis: Analysis) -> Path:
@@ -645,7 +654,7 @@ def _planned_names(spans, titles, params: RenderParams, tracks=None) -> list[str
     if params.write_tracks:
         names += [
             f"{AUDIO_DIR}/"
-            f"{_track_filename(number, _title_for(titles, rank, tracks))}"
+            f"{_track_filename(number, _title_for(titles, rank, tracks), language=params.language)}"
             for rank, number in numbers
         ]
     if params.video_full:
@@ -653,7 +662,7 @@ def _planned_names(spans, titles, params: RenderParams, tracks=None) -> list[str
     if params.video_tracks:
         names += [
             f"{VIDEO_DIR}/"
-            f"{_track_filename(number, _title_for(titles, rank, tracks), '.mp4')}"
+            f"{_track_filename(number, _title_for(titles, rank, tracks), '.mp4', params.language)}"
             for rank, number in numbers
         ]
     if params.write_full:
@@ -852,23 +861,32 @@ class _ReadyAlbum:
 
 
 def _timeline_audio(analysis: Analysis, clips: tuple[dict, ...], path: Path,
-                    info=None, fade_s: float = 0.0) -> Path:
+                    info=None, fade_s: float = 0.0, edge_ms: float = 0.0) -> Path:
     """Écrit l'audio de la timeline, en conservant les espaces entre clips.
 
     La piste audio de l'interface est volontairement monophonique au sens du
     montage : deux clips ne peuvent pas se recouvrir. Ce contrôle est refait
     ici, car un projet ancien ou modifié à la main ne doit pas produire un
     résultat ambigu.
+
+    Deux clips bord à bord reçoivent chacun une moitié du fondu demandé : le
+    premier s'éteint, le second monte. La durée et les positions de la
+    timeline ne bougent pas : images, titres et audio restent synchronisés.
+
+    Un bord libre — début ou fin de montage, ou clip suivi d'un espace — reçoit
+    le court fondu anti-clic `edge_ms` du réglage « Fondus » : un clip coupé en
+    pleine musique claquait sinon à l'entrée comme à la sortie.
     """
     info = info or probe(analysis.source)
     ordered = sorted(clips, key=lambda item: float(item.get("start", 0.0)))
     if not ordered:
         raise ValueError(Message('server.the_selection_contains_no_exportable_tracks'))
 
+    rate = info.samplerate
+    edge = max(0, int(round(edge_ms / 1000.0 * rate)))
     path.parent.mkdir(parents=True, exist_ok=True)
     cursor = 0
-    silence_block = max(info.samplerate, 1)
-    with sf.SoundFile(str(path), mode="w", samplerate=info.samplerate,
+    with sf.SoundFile(str(path), mode="w", samplerate=rate,
                       channels=info.channels, subtype=info.subtype,
                       format="WAV") as target:
         for index, clip in enumerate(ordered):
@@ -877,57 +895,57 @@ def _timeline_audio(analysis: Analysis, clips: tuple[dict, ...], path: Path,
             source_start = float(clip.get("sourceStart", 0.0))
             source_end = float(clip.get("sourceEnd", 0.0))
             values = (start, end, source_start, source_end)
-            if not all(math.isfinite(value) for value in values) \
-                    or start < 0 or end <= start \
-                    or source_start < 0 or source_end <= source_start \
-                    or source_end > info.duration + 0.01:
+            if not all(math.isfinite(value) for value in values)                     or start < 0 or end <= start                     or source_start < 0 or source_end <= source_start                     or source_end > info.duration + 0.01:
                 raise ValueError(Message('server.the_track_selection_is_invalid'))
 
-            start_frame = int(round(start * info.samplerate))
-            wanted_frames = int(round((end - start) * info.samplerate))
+            start_frame = int(round(start * rate))
+            wanted_frames = int(round((end - start) * rate))
             if start_frame < cursor:
                 raise ValueError(Message('server.the_track_selection_is_invalid'))
-            gap = start_frame - cursor
-            while gap:
-                count = min(gap, silence_block)
-                target.write(np.zeros((count, info.channels), dtype=np.float32))
-                gap -= count
+            _write_silence(target, start_frame - cursor, info.channels)
 
-            source = read_span(
-                analysis.source,
-                int(round(source_start * info.samplerate)),
-                int(round(source_end * info.samplerate)),
-            )
-            source = source[:wanted_frames]
-            # Deux clips exactement bord à bord reçoivent chacun une moitié
-            # du fondu demandé. La durée et les positions de la timeline ne
-            # bougent pas : images, titres et audio restent synchronisés.
+            source = _padded(read_span(analysis.source,
+                                       int(round(source_start * rate)),
+                                       int(round(source_end * rate))),
+                             wanted_frames, info.channels).copy()
             previous = ordered[index - 1] if index else None
             following = ordered[index + 1] if index + 1 < len(ordered) else None
             joins_previous = previous is not None and abs(
                 float(previous.get("end", 0.0)) - start) <= 0.02
             joins_following = following is not None and abs(
                 end - float(following.get("start", 0.0))) <= 0.02
-            fade_frames = min(
-                max(0, int(round(fade_s * info.samplerate / 2))),
-                len(source) // 2,
-            )
-            if fade_frames and (joins_previous or joins_following):
-                source = source.copy()
-                phase = np.linspace(0.0, np.pi / 2, fade_frames,
-                                    dtype=np.float32)[:, None]
-                if joins_previous:
-                    source[:fade_frames] *= np.sin(phase)
-                if joins_following:
-                    source[-fade_frames:] *= np.cos(phase)
+
+            fade_frames = min(max(0, int(round(fade_s * rate / 2))), len(source) // 2)
+            curve = np.linspace(0.0, np.pi / 2, fade_frames, dtype=np.float32)[:, None]
+            clicks = min(edge, len(source) // 2)
+            ramp = np.linspace(0.0, 1.0, clicks, dtype=np.float32)[:, None]
+            if joins_previous and fade_frames:
+                source[:fade_frames] *= np.sin(curve)
+            elif clicks:
+                source[:clicks] *= ramp
+            if joins_following and fade_frames:
+                source[len(source) - fade_frames:] *= np.cos(curve)
+            elif clicks:
+                source[len(source) - clicks:] *= ramp[::-1]
             target.write(source)
-            missing = wanted_frames - len(source)
-            while missing:
-                count = min(missing, silence_block)
-                target.write(np.zeros((count, info.channels), dtype=np.float32))
-                missing -= count
             cursor = start_frame + wanted_frames
     return path
+
+
+def _padded(audio: np.ndarray, frames: int, channels: int) -> np.ndarray:
+    """Exactement `frames` échantillons : tronqué, ou complété de silence."""
+    audio = audio[:max(0, frames)]
+    missing = max(0, frames) - len(audio)
+    if missing:
+        audio = np.concatenate([audio, np.zeros((missing, channels), dtype=np.float32)])
+    return audio
+
+
+def _write_silence(target, frames: int, channels: int, block: int = 65536) -> None:
+    while frames > 0:
+        count = min(frames, block)
+        target.write(np.zeros((count, channels), dtype=np.float32))
+        frames -= count
 
 
 class _Album:
@@ -1013,8 +1031,9 @@ def _apply_fades(audio: np.ndarray, fade_len: int) -> np.ndarray:
     return audio
 
 
-def _track_filename(index: int, title: str | None, ext: str = ".wav") -> str:
-    label = _INVALID_CHARS.sub("_", _track_label(index, title)).strip(" .")
+def _track_filename(index: int, title: str | None, ext: str = ".wav",
+                    language: str = "fr") -> str:
+    label = _INVALID_CHARS.sub("_", _track_label(index, title, language)).strip(" .")
     return f"{index:02d} - {label}{ext}"
 
 

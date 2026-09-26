@@ -355,10 +355,17 @@ class Session:
 
     # -- export ------------------------------------------------------------
 
-    def render_params(self, choice: dict, analysis: Analysis | None = None) -> RenderParams:
-        selection = self._selection(choice.get("selection"), analysis)
+    def render_params(self, choice: dict, analysis: Analysis | None = None,
+                      language: str = "fr") -> RenderParams:
         montage = choice.get("video_montage")
         has_montage = isinstance(montage, dict) and bool(montage.get("enabled", True))
+        # Avant la sélection : celle d'un montage se déduit de ses plans, et un
+        # plan périmé la rendrait fausse elle aussi — le message doit nommer la
+        # cause, pas le symptôme.
+        if has_montage:
+            _check_montage(montage.get("audioClips") or (),
+                           analysis if analysis is not None else self.analysis)
+        selection = self._selection(choice.get("selection"), analysis)
 
         video_full = _flag(choice, "video_full")
         video_tracks = _flag(choice, "video_tracks")
@@ -417,6 +424,7 @@ class Session:
             video_title_position=video_title_position,
             selection=selection,
             track_trims=track_trims,
+            language=language,
         )
 
     def _selection(self, selection, analysis: Analysis | None) -> tuple[int, ...] | None:
@@ -437,7 +445,7 @@ class Session:
             raise SessionError(Message('server.the_selection_contains_an_unknown_track'))
         return tuple(numbers)
 
-    def plan_export(self, choice: dict) -> dict:
+    def plan_export(self, choice: dict, language: str = "fr") -> dict:
         """Prépare l'export sans rien écrire, et dit ce qu'il rencontrerait.
 
         Le contrôle se fait à blanc : un export précédent ne doit pas être
@@ -454,7 +462,7 @@ class Session:
         # désigne un emplacement une fois, sans préparer un dossier vierge à
         # chaque export.
         target = concert_dir(directory, analysis)
-        params = self.render_params(choice, analysis)
+        params = self.render_params(choice, analysis, language)
         titles = [track.title for track in analysis.tracks]
         try:
             check_output(analysis, target, titles, params)
@@ -469,7 +477,7 @@ class Session:
             raise SessionError(error_message(failure)) from failure
         return {"target": str(target), "conflict": False}
 
-    def render(self, choice: dict, job: Job) -> dict:
+    def render(self, choice: dict, job: Job, language: str = "fr") -> dict:
         with self._lock:
             if self.analysis is None:
                 raise SessionError(Message('server.nothing_to_export'))
@@ -480,7 +488,7 @@ class Session:
             self.export.update({key: choice.get(key, self.export.get(key))
                                 for key in DEFAULT_EXPORT
                                 if key not in NOT_REMEMBERED})
-        params = self.render_params(choice, analysis)
+        params = self.render_params(choice, analysis, language)
         titles = [track.title for track in analysis.tracks]
         target = Path(choice.get("target") or concert_dir(choice["dir"], analysis))
         replace = bool(choice.get("replace"))
@@ -720,6 +728,36 @@ def _video_crossfade(choice: dict):
     if choice.get("video_crossfade") is None:
         return choice.get("crossfade") or 0.0
     return choice["video_crossfade"]
+
+
+# Marge admise entre un plan audio et les bornes de son morceau. Le front
+# arrondit au millième ; au-delà de cinq centièmes, ce n'est plus un arrondi
+# mais une coupe qui a bougé depuis que le plan a été posé.
+MONTAGE_TOLERANCE_S = 0.05
+
+
+def _check_montage(audio_clips, analysis: Analysis | None) -> None:
+    """Refuse un montage dont les plans ne tombent plus dans leurs morceaux.
+
+    Un plan audio fige, au moment où on le pose, le numéro de son morceau et
+    la portion lue dans l'enregistrement. Déplacer une coupe, fusionner deux
+    morceaux ou relancer l'analyse ensuite ne le met pas à jour : l'export
+    sortait alors l'ancien découpage sans rien dire, ou échouait sur « morceau
+    inconnu ». L'écran de montage se recale à l'ouverture ; ce contrôle
+    garantit qu'aucun montage périmé ne passe, d'où qu'il vienne.
+    """
+    if not audio_clips or analysis is None:
+        return
+    spans = {track.number: (track.start, track.end) for track in analysis.tracks}
+    for clip in audio_clips:
+        try:
+            span = spans.get(int(clip["trackNumber"]))
+            start, end = float(clip["sourceStart"]), float(clip["sourceEnd"])
+        except (KeyError, TypeError, ValueError):
+            raise SessionError(Message('server.montage_out_of_date')) from None
+        if span is None or start < span[0] - MONTAGE_TOLERANCE_S \
+                or end > span[1] + MONTAGE_TOLERANCE_S:
+            raise SessionError(Message('server.montage_out_of_date'))
 
 
 def _flag(choice: dict, name: str) -> bool:

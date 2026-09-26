@@ -14,7 +14,11 @@ l'utilisateur à travers `/api/audio`. Trois barrières, posées tout de suite :
 - un jeton aléatoire est tiré à chaque lancement, glissé dans la page servie,
   et exigé sur chaque requête d'API ;
 - l'en-tête `Origin` d'une requête venue d'ailleurs est refusé, ce qui coupe
-  aussi le cas d'une page qui aurait deviné le jeton.
+  aussi le cas d'une page qui aurait deviné le jeton ;
+- l'en-tête `Host` doit nommer la boucle locale, page comprise. Sans lui, un
+  site dont le nom se met à pointer sur 127.0.0.1 (« DNS rebinding ») devient
+  de la même origine que nous : il lit la page, donc le jeton qu'elle porte,
+  puis les routes en GET, qui ne portent pas d'`Origin`.
 
 Les travaux longs ne tiennent pas dans une requête : `/api/analyze` et
 `/api/export` rendent un identifiant, et `/api/job` dit où ils en sont.
@@ -94,6 +98,15 @@ class Handler(BaseHTTPRequestHandler):
         Les échecs, eux, passent par `log_error`, qui reste bavard.
         """
 
+    def _host_allowed(self) -> bool:
+        """La requête vise-t-elle bien la boucle locale, sur notre port ?
+
+        Vérifié avant tout, page comprise : c'est elle qui porte le jeton.
+        """
+        port = self.server.server_address[1]
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
     def _allowed(self) -> bool:
         """Le jeton, et la certitude que la requête ne vient pas d'ailleurs."""
         origin = self.headers.get("Origin")
@@ -144,6 +157,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 — nom imposé par http.server
         route = urlparse(self.path).path
+        if not self._host_allowed():
+            self._fail(Message('server.host_not_allowed'), HTTPStatus.FORBIDDEN)
+            return
         if not route.startswith("/api/"):
             self._serve_static(route)
             return
@@ -161,6 +177,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path).path
+        if not self._host_allowed():
+            self._fail(Message('server.host_not_allowed'), HTTPStatus.FORBIDDEN)
+            return
         if not self._allowed():
             self._fail(Message('server.missing_or_invalid_token'), HTTPStatus.FORBIDDEN)
             return
@@ -278,12 +297,15 @@ class Handler(BaseHTTPRequestHandler):
             session.update_settings(body.get("settings") or {})
             self._send(session.state())
         elif route == "/api/export/plan":
-            self._send(session.plan_export(body))
+            self._send(session.plan_export(body, self.app.preferences.effective))
         elif route == "/api/export":
             if jobs.running("export"):
                 self._fail(Message('server.an_export_is_already_running'))
                 return
-            job = jobs.start("export", lambda work: session.render(body, work),
+            # La langue est lue maintenant, pas pendant l'export : les noms
+            # prévus par le plan doivent être ceux qu'on écrit.
+            language = self.app.preferences.effective
+            job = jobs.start("export", lambda work: session.render(body, work, language),
                              Message('server.preparing'))
             self._send(job.payload())
         elif route == "/api/save":
